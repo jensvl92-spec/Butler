@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-bookworm
 
 # Install basic tools and dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y \
 # We perform a targeted install to ensure we have exactly what we need for the Proxy
 RUN pip3 install --break-system-packages \
     mcp \
-    fastembed \
     pyyaml \
     numpy \
     uvicorn \
