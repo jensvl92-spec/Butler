@@ -43,6 +43,9 @@ export class HAWebSocket {
     private maxReconnectAttempts = 5
     private isClosedExplicitly = false
 
+    // Generic Event Subscriptions (ID -> Callback)
+    private eventSubscriptions = new Map<number, (event: any) => void>()
+
     constructor(url: string, token: string, onStateChange: (id: string, state: any) => void, onReady?: () => void) {
         // Normalize URL: http(s) -> ws(s)
         let wsUrl = url.replace(/^http/, 'ws')
@@ -114,8 +117,12 @@ export class HAWebSocket {
                 // Reject all pending requests
                 this.pendingRequests.forEach((p) => p.reject(new Error('WebSocket closed')))
                 this.pendingRequests.clear()
-                // Clear queue? Maybe keep it for next reconnect?
-                // Let's keep queue for resilience if it was just a blip.
+
+                // Clear subscriptions? They are invalid on new connection usually,
+                // but HA might need re-subscribing. 
+                // We should technically re-subscribe all.
+                // For now, let's just clear to avoid leaks/stale ID mappings (IDs reset on new connection).
+                this.eventSubscriptions.clear()
 
                 if (!this.isClosedExplicitly) {
                     this.scheduleReconnect()
@@ -173,22 +180,29 @@ export class HAWebSocket {
             const { resolve: reqResolve, reject: reqReject } = this.pendingRequests.get(message.id)!
 
             if (message.success === false) {
-                // Or typically message.type === 'result' && message.success === false
-                // HA returns success: false for errors
                 reqReject(new Error(message.error?.message || 'Command failed'))
             } else {
                 reqResolve(message)
             }
 
             this.pendingRequests.delete(message.id)
+            // Do NOT return here if it's a subscription result? 
+            // Actually result comes separate from events.
             return
         }
 
         // Events
         if (message.type === 'event' && message.event) {
+
+            // Dispatch to generic subscribers (mapped by ID)
+            if (message.id && this.eventSubscriptions.has(message.id)) {
+                this.eventSubscriptions.get(message.id)!(message.event)
+            }
+
+            // Keep Legacy Hardcoded State Changed for now (redundant if using subscription map but safe)
             if (message.event.event_type === 'state_changed') {
                 const { entity_id, new_state } = message.event.data
-                import('./logger').then(({ logger }) => logger.info(`🔌 Event: ${entity_id} -> ${new_state?.state}`))
+                // import('./logger').then(({ logger }) => logger.info(`🔌 Event: ${entity_id} -> ${new_state?.state}`))
                 this.onStateChange(entity_id, new_state)
             }
         }
@@ -233,7 +247,6 @@ export class HAWebSocket {
             })
 
             // Only send if OPEN and AUTHENTICATED
-            // (Unless it's an auth message, but sendAuth uses ws.send directly)
             if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
                 this.ws.send(message)
             } else {
@@ -241,6 +254,41 @@ export class HAWebSocket {
                 this.messageQueue.push(message)
             }
         })
+    }
+
+    /**
+     * Subscribe to a specific event type.
+     * Returns an unsubscribe function.
+     */
+    public async subscribeEvents(eventType: string, callback: (event: any) => void): Promise<() => void> {
+        try {
+            // Send subscription command
+            const result = await this.sendMessage({
+                type: 'subscribe_events',
+                event_type: eventType
+            });
+
+            // result.id is the subscription ID (same as command ID in HA)
+            const subscriptionId = result.id;
+
+            // Register callback
+            this.eventSubscriptions.set(subscriptionId, callback);
+
+            console.log(`✅ Subscribed to ${eventType} (ID: ${subscriptionId})`);
+
+            // Return unsubscribe function
+            return () => {
+                if (this.eventSubscriptions.has(subscriptionId)) {
+                    this.eventSubscriptions.delete(subscriptionId);
+                    // Optionally send unsubscribe command to HA if supported/needed
+                    // HA doesn't explicitly require unsubscribing for simple clients, 
+                    // but 'unsubscribe_events' command exists taking 'subscription': id
+                }
+            };
+        } catch (e) {
+            console.error(`❌ Failed to subscribe to ${eventType}`, e);
+            throw e;
+        }
     }
 
     public close() {

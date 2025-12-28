@@ -214,3 +214,22 @@ class MemoryService:
                 "distance": results.get("distances", [[]])[0][i] if results.get("distances") else None,
             })
         return clarifications
+
+# Singleton Instance
+_memory_service_instance = None
+
+def get_memory_service() -> MemoryService:
+    """Get the singleton MemoryService instance."""
+    global _memory_service_instance
+    if _memory_service_instance is None:
+        # data/memory is a good persistent path for HA Add-ons
+        # Ensure the directory exists
+        persist_dir = os.getenv("MEMORY_PATH", "/share/butler_memory")
+        # Check if we are running locally (no /share)
+        if not os.path.exists("/share"):
+             # Fallback to local ./data
+            persist_dir = "./data/chroma"
+            
+        print(f"[Memory] Initializing ChromaDB at {persist_dir}")
+        _memory_service_instance = MemoryService(persist_directory=persist_dir)
+    return _memory_service_instance

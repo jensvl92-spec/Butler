@@ -13,7 +13,7 @@ call npx cap sync android
 if %errorlevel% neq 0 pause && exit /b %errorlevel%
 
 echo.
-echo 3. Killing Zombies & Compiling APK...
+echo 3. Killing Zombies and Compiling APK...
 taskkill /F /IM java.exe
 if exist "C:\Users\jensv\.gradle\caches\jars-9\jars-9.lock" del /f /q "C:\Users\jensv\.gradle\caches\jars-9\jars-9.lock"
 
