@@ -240,6 +240,9 @@ async def process_command(request: CommandRequest):
             # Lazy-load the crew on first request
             crew = get_crew()
             
+            print(f"[INFO] Processing command from {request.connection_id}: {request.user_message}")
+            print(f"[INFO] Context: {len(request.devices or [])} devices, Language: {request.language}")
+
             # Build device context
             device_context = ""
             if request.devices:
@@ -268,6 +271,9 @@ async def process_command(request: CommandRequest):
             reset_current_user_id(token)
             
     except Exception as e:
+        print(f"[ERROR] Logic Error processing command: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
