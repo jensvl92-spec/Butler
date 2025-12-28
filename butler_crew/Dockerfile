@@ -2,7 +2,16 @@ ARG BUILD_FROM
 FROM $BUILD_FROM
 
 # Install Python and basic tools
-RUN apk add --no-cache python3 py3-pip git
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    git \
+    build-base \
+    linux-headers \
+    python3-dev \
+    gcc \
+    musl-dev \
+    libffi-dev
 
 # Install dependencies directly
 # We perform a targeted install to ensure we have exactly what we need for the Proxy
