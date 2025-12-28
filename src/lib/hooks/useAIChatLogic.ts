@@ -119,12 +119,14 @@ export function useAIChatLogic() {
             logger.info("📤 Payload Preview:", JSON.stringify(payload).substring(0, 500) + "...");
 
             // Construct Local Butler API URL from HA Connection (Port 8000)
-            let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Fallback
+            // FORCE HTTP: The Python backend (uvicorn) does not speak SSL.
+            let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Default fallback
+
             if (activeConnection.api_url) {
                 try {
                     const haUrl = new URL(activeConnection.api_url);
-                    // Use same protocol and hostname, but switch port to 8000
-                    butlerApiUrl = `${haUrl.protocol}//${haUrl.hostname}:8000/process`;
+                    // Use hostname from settings, but FORCE HTTP and Port 8000
+                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`;
                 } catch (e) {
                     logger.warn("Failed to parse HA URL, using fallback", { url: activeConnection.api_url });
                 }
@@ -132,21 +134,53 @@ export function useAIChatLogic() {
 
             logger.info(`🌐 Sending to Local Butler: ${butlerApiUrl}`);
 
-            const res = await fetch(butlerApiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
+            let aiData: LLMResponse;
 
-            if (!res.ok) {
-                const errText = await res.text();
-                logger.error("Backend Error Response", { status: res.status, body: errText });
-                throw new Error(errText);
+            try {
+                // Set a timeout for the fetch to avoid infinite hanging
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+                const res = await fetch(butlerApiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    logger.error("Backend Error Response", { status: res.status, body: errText });
+                    throw new Error(`Server Error ${res.status}: ${errText}`);
+                }
+
+                aiData = await res.json();
+                logger.info("📥 Received AI Response", aiData);
+
+            } catch (networkError: any) {
+                logger.warn(`⚠️ Primary connection failed: ${networkError.message}. Retrying with fallback...`);
+
+                // FAILOVER: Try http://homeassistant.local:8000 explicitly if the primary failed
+                if (butlerApiUrl.includes('homeassistant.local')) throw networkError; // Already tried fallback
+
+                const fallbackUrl = 'http://homeassistant.local:8000/process';
+                logger.info(`🔄 Retrying with Fallback: ${fallbackUrl}`);
+
+                const res2 = await fetch(fallbackUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res2.ok) throw new Error(`Fallback Error ${res2.status}`);
+                aiData = await res2.json();
+                logger.info("📥 Received AI Response (Fallback)", aiData);
             }
 
-            const aiData: LLMResponse = await res.json();
+
             logger.info("📥 Received AI Response", aiData); // This logs full object to Debug Tile
 
             // Log explicitly if actions are missing (but only if NO scheduled tasks either)
