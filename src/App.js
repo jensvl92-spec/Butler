@@ -6,6 +6,7 @@ import { ConnectionSetup } from './components/ConnectionSetup';
 import { AIChat } from './components/AIChat';
 import { Dashboard } from './components/Dashboard';
 import { ButlerSuggestions } from './components/ButlerSuggestions';
+import { ProxySetupWizard } from './components/ProxySetupWizard';
 import { registerPushNotifications, setActionListener } from './utils/pushNotifications';
 import './App.css';
 // @ts-ignore
@@ -127,6 +128,31 @@ function App() {
                 const cleanApiUrl = getCleanUrl(activeConnection.api_url);
                 await Promise.allSettled(actions.map(async (action) => {
                     try {
+                        // HANDLER: Set Alarm (Native)
+                        if (action.type === 'set_alarm') {
+                            const { hour, minute, message, days } = action.data || {};
+                            if (typeof hour !== 'number' || typeof minute !== 'number') {
+                                logger.error("Invalid alarm data:", action.data);
+                                return;
+                            }
+                            logger.info(`⏰ Setting alarm for ${hour}:${minute.toString().padStart(2, '0')} - ${message || 'Alarm'}`);
+                            try {
+                                const { CapgoAlarm } = await import('@capgo/capacitor-alarm');
+                                await CapgoAlarm.createAlarm({
+                                    hour,
+                                    minute,
+                                    label: message || 'Alarm',
+                                    skipUi: false, // Show alarm UI to user
+                                    vibrate: true,
+                                });
+                                logger.info("✅ Alarm set successfully");
+                            }
+                            catch (alarmError) {
+                                logger.error("Failed to set alarm:", alarmError);
+                                alert(`Failed to set alarm: ${alarmError.message || 'Unknown error'}`);
+                            }
+                            return;
+                        }
                         // HANDLER: Create Native Script (Legacy/Fallback)
                         if (action.type === 'create_script') {
                             const idStr = action.data?.alias ? action.data.alias.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'ai_script';
@@ -204,7 +230,7 @@ function App() {
     if (!user) {
         return _jsx(Auth, { onAuthSuccess: () => { } });
     }
-    return (_jsxs("div", { className: "app-container", style: { flexDirection: 'column' }, children: [_jsxs("header", { className: "app-header", style: {
+    return (_jsxs("div", { className: "app-container", style: { flexDirection: 'column' }, children: [activeConnection && (_jsx(ProxySetupWizard, { activeConnection: activeConnection, onComplete: () => { logger.info("Setup Wizard Complete"); } })), _jsxs("header", { className: "app-header", style: {
                     display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0
                 }, children: [_jsxs("div", { style: { display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }, children: [_jsx("div", { style: { fontSize: '1.8rem' }, children: "\uD83D\uDC64" }), _jsx("h1", { style: { fontSize: '1.5rem', margin: 0 }, children: "Butler" })] }), _jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }, children: [_jsxs("div", { className: "connection-dropdown", style: { position: 'relative' }, children: [_jsxs("button", { onClick: () => setShowConnectionDropdown(!showConnectionDropdown), style: {
                                             padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px',

@@ -208,7 +208,7 @@ async def execute_ha_service(entity_id: str, service: str, **kwargs) -> str:
     return f"Executed '{service}' on '{entity_id}' successfully."
 
 # --- AGENT TOOLS ---
-AGENTS_CONFIG_PATH = Path(__file__).parents[2] / "config" / "agents.yaml"
+AGENTS_CONFIG_PATH = Path(__file__).parents[1] / "config" / "agents.yaml"
 AGENTS_CACHE = {}
 
 def _load_agents():

@@ -6,3 +6,5 @@ venv/
 .gemini/
 .agent/
 butler_addon/
+dist/
+node_modules/

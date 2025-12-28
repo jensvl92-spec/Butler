@@ -5,6 +5,7 @@ import { ConnectionSetup } from './components/ConnectionSetup'
 import { AIChat } from './components/AIChat'
 import { Dashboard, DashboardRef } from './components/Dashboard'
 import { ButlerSuggestions } from './components/ButlerSuggestions'
+import { ProxySetupWizard } from './components/ProxySetupWizard'
 import { signOut } from './utils/auth'
 import { registerPushNotifications, setActionListener } from './utils/pushNotifications'
 import './App.css'
@@ -249,6 +250,13 @@ function App() {
 
   return (
     <div className="app-container" style={{ flexDirection: 'column' }}>
+      {/* Setup Wizard (One-Click Install) */}
+      {activeConnection && (
+        <ProxySetupWizard
+          activeConnection={activeConnection}
+          onComplete={() => { logger.info("Setup Wizard Complete") }}
+        />
+      )}
       {/* Global Header (Restored) */}
       <header className="app-header" style={{
         display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0
