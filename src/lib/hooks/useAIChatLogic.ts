@@ -120,23 +120,23 @@ export function useAIChatLogic() {
 
             let aiData: LLMResponse = {} as LLMResponse;
 
-            // DYNAMIC DISCOVERY: Try to find the true local IP via HA Config
-            // This bypasses NAT Loopback issues with DuckDNS URLs
+            // DYNAMIC DISCOVERY & REMOTE ACCESS STRATEGY
+            // 1. If Local (IP/Local Domain): Use Internal Discovery or Derived Hostname.
+            // 2. If Remote (DuckDNS/Cloud): MUST Use External Hostname + Port 8000 (Forwarded).
+            //    Internal IP (192.168.x.x) is useless from a different continent.
+
             let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Default fallback
+            const isLocalConnection = activeConnection.api_url.includes('192.168') ||
+                activeConnection.api_url.includes('10.') ||
+                activeConnection.api_url.includes('172.') ||
+                activeConnection.api_url.includes('.local');
 
             try {
-                // 1. Try to get Internal URL from HA Config (if we haven't cached it?)
-                // For now, we fetch it every time or reliable fast fetch.
-                // Or better: use the one derived from activeConnection if it IS local, otherwise fetch.
-
-                const isLocalConnection = activeConnection.api_url.includes('192.168') || activeConnection.api_url.includes('.local');
-
                 if (isLocalConnection) {
-                    // If we are already connected via IP, just use that hostname
+                    // LOCAL STRATEGY: Try to find "true" internal IP via config to avoid NAT loopback
                     const haUrl = new URL(activeConnection.api_url);
-                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`;
-                } else {
-                    // We are on external connection (DuckDNS), try to find internal IP
+                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`; // Initial guess
+
                     try {
                         const configRes = await fetch(`${activeConnection.api_url}/api/config`, {
                             headers: { 'Authorization': `Bearer ${activeConnection.api_token}` }
@@ -146,12 +146,19 @@ export function useAIChatLogic() {
                             if (configData.internal_url) {
                                 const internalUrl = new URL(configData.internal_url);
                                 butlerApiUrl = `http://${internalUrl.hostname}:8000/process`;
-                                logger.info(`🔍 Discovered Internal HA IP: ${internalUrl.hostname}`);
+                                logger.info(`🔍 [Local] Discovered Internal HA IP: ${internalUrl.hostname}`);
                             }
                         }
                     } catch (configErr) {
                         logger.warn("Failed to fetch HA Config for Internal URL", configErr);
                     }
+                } else {
+                    // REMOTE STRATEGY: Use the External Hostname directly.
+                    // Assumes Port 8000 is forwarded on the router.
+                    // FORCE HTTP because backend is HTTP only. App enables Cleartext traffic.
+                    const haUrl = new URL(activeConnection.api_url);
+                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`;
+                    logger.info(`🌍 [Remote] Using External Hostname: ${butlerApiUrl}`);
                 }
             } catch (setupErr) {
                 logger.warn("URL Discovery Error", setupErr);
