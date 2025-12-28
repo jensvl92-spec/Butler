@@ -272,7 +272,7 @@ class ButlerCrew:
             agents=self.agents,  # All @agent decorated workers
             tasks=self.tasks,
             process=Process.sequential,  # Sequential for now (simpler)
-            verbose=True,
+            verbose=False,
             memory=True,
         )
     
