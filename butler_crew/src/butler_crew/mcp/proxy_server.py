@@ -27,14 +27,67 @@ INVENTORY: Dict[str, List[Dict[str, Any]]] = {
     "services": []
 }
 
+import uuid
+import time
+import os
+
+# --- MEMORY STORE ---
+class MemoryStore:
+    def __init__(self):
+        # In HA Add-on, /data is persistent. Locally, we use ./data
+        # We check for a typical Add-on environment variable or just existence of /data
+        if os.path.exists("/data"):
+            self.path = Path("/data/memory.json")
+        else:
+            self.path = Path("./data/memory.json")
+            
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.memories: List[Dict[str, Any]] = self._load()
+
+    def _load(self) -> List[Dict[str, Any]]:
+        if self.path.exists():
+            try:
+                with open(self.path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load memory: {e}")
+                return []
+        return []
+
+    def save_fact(self, text: str, metadata: Dict = None) -> Dict[str, Any]:
+        entry = {
+            "id": str(uuid.uuid4()),
+            "text": text,
+            "metadata": metadata or {},
+            "timestamp": time.time()
+        }
+        self.memories.append(entry)
+        self._persist()
+        return entry
+
+    def _persist(self):
+        try:
+            with open(self.path, "w") as f:
+                json.dump(self.memories, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save memory: {e}")
+
+memory_store = MemoryStore()
+
 # --- SEMANTIC SEARCH ENGINE ---
 class SearchEngine:
     def __init__(self):
         self.model = None
         self.is_ready = False
+        
+        # Entity Index
         self.entity_embeddings = None
         self.entity_ids = []
-        self.entity_texts = [] # "Kitchen Light (light.kitchen)"
+        self.entity_texts = [] 
+        
+        # Memory Index
+        self.memory_embeddings = None
+        self.memory_ids = []  # indices correspond to memory_store.memories
 
     def initialize(self):
         if not HAS_FASTEMBED:
@@ -46,6 +99,9 @@ class SearchEngine:
         self.model = TextEmbedding("BAAI/bge-small-en-v1.5")
         self.is_ready = True
         logger.info("FastEmbed Model Ready.")
+        
+        # Initial Memory Indexing
+        self.index_memories()
 
     def index_inventory(self, entities: List[Dict[str, Any]]):
         if not self.is_ready:
@@ -57,8 +113,6 @@ class SearchEngine:
         for e in entities:
             eid = e["entity_id"]
             friendly = e.get("attributes", {}).get("friendly_name", "")
-            # Create a rich descriptive string for embedding
-            # e.g. "Kitchen Main Light light.kitchen_main on"
             text = f"{friendly} {eid} {e.get('state', '')}"
             
             self.entity_texts.append(text)
@@ -66,41 +120,76 @@ class SearchEngine:
             
         if self.entity_texts:
             logger.info(f"Embedding {len(self.entity_texts)} entities...")
-            # embed returns a generator, convert to list
             self.entity_embeddings = list(self.model.embed(self.entity_texts))
-            logger.info("Indexing complete.")
+            logger.info("Entity Indexing complete.")
+
+    def index_memories(self):
+        """Re-indexes all memories from the store."""
+        if not self.is_ready or not memory_store.memories:
+            return
+
+        texts = [m["text"] for m in memory_store.memories]
+        logger.info(f"Embedding {len(texts)} memories...")
+        self.memory_embeddings = list(self.model.embed(texts))
+        self.memory_ids = [m["id"] for m in memory_store.memories]
+        logger.info("Memory Indexing complete.")
 
     def search(self, query: str, top_k: int = 10, threshold: float = 0.4) -> List[Dict[str, Any]]:
+        """Search Entities"""
         if not self.is_ready or not self.entity_embeddings:
-            # Fallback to simple keyword search
             return self._keyword_search(query)
 
-        query_embedding = list(self.model.embed([query]))[0]
-        
-        # Calculate cosine similarity (basic dot product implementation for manual list)
-        # Note: FastEmbed vectors are normalized, so dot product == cosine similarity
+        return self._vector_search(query, self.entity_embeddings, self.entity_ids, INVENTORY["entities"], "entity_id", top_k, threshold)
+
+    def search_memories(self, query: str, top_k: int = 5, threshold: float = 0.4) -> List[Dict[str, Any]]:
+        """Search Memories"""
+        if not self.is_ready or not self.memory_embeddings:
+            # Fallback keyword
+            return [m for m in memory_store.memories if query.lower() in m["text"].lower()]
+
+        # We can't use the generic _vector_search easily because the lookup is different (list vs dict)
+        # So implementing specific logic here or generalizing helper.
         import numpy as np
         
+        query_embedding = list(self.model.embed([query]))[0]
         scores = []
         qt = np.array(query_embedding)
         
-        for idx, emb in enumerate(self.entity_embeddings):
+        for idx, emb in enumerate(self.memory_embeddings):
             et = np.array(emb)
             score = np.dot(qt, et)
             if score > threshold:
-                scores.append((score, self.entity_ids[idx]))
+                scores.append((score, idx)) # Store index
         
-        # Sort by score desc
         scores.sort(key=lambda x: x[0], reverse=True)
         
-        # Retrieve entity objects
-        top_ids = [s[1] for s in scores[:top_k]]
         results = []
-        for eid in top_ids:
-            # Find the entity object in INVENTORY
-            for e in INVENTORY["entities"]:
-                if e["entity_id"] == eid:
-                    results.append(e)
+        for s in scores[:top_k]:
+            results.append(memory_store.memories[s[1]])
+            
+        return results
+
+    def _vector_search(self, query, embeddings, ids, source_list, id_key, top_k, threshold):
+        import numpy as np
+        query_embedding = list(self.model.embed([query]))[0]
+        scores = []
+        qt = np.array(query_embedding)
+        
+        for idx, emb in enumerate(embeddings):
+            et = np.array(emb)
+            score = np.dot(qt, et)
+            if score > threshold:
+                scores.append((score, ids[idx]))
+        
+        scores.sort(key=lambda x: x[0], reverse=True)
+        top_ids = [s[1] for s in scores[:top_k]]
+        
+        results = []
+        for tid in top_ids:
+            # Linear scan fallback (optimized map would be better but list is small < 1000)
+            for item in source_list:
+                if item[id_key] == tid:
+                    results.append(item)
                     break
         return results
 
@@ -131,7 +220,7 @@ MOCK_ENTITIES = [
 async def sync_with_home_assistant() -> str:
     """
     Connects to the Official Home Assistant MCP Server and fetches the complete inventory.
-    Also builds the Local Semantic Search Index.
+    Also builds the Local Semantic Search Index and Memory Index.
     Call this on startup or when 'Sync' is requested.
     """
     logger.info("Syncing with Home Assistant...")
@@ -146,8 +235,48 @@ async def sync_with_home_assistant() -> str:
     # Index the new inventory
     search_engine.index_inventory(INVENTORY["entities"])
     
+    # Ensure memories are ranked
+    search_engine.index_memories()
+    
     count = len(INVENTORY["entities"])
-    return f"Successfully synced {count} entities and built semantic index."
+    mem_count = len(memory_store.memories)
+    return f"Successfully synced {count} entities and {mem_count} memories."
+
+# --- MEMORY TOOLS ---
+
+@mcp.tool()
+async def save_memory(text: str) -> str:
+    """
+    Saves a long-term memory or fact about the user or home.
+    Use this to remember preferences, aliases, or specific instructions.
+    Example: "The guest room is also called the Dungeon."
+    """
+    entry = memory_store.save_fact(text)
+    
+    # Incremental or full re-index? specific append is cheaper but full re-index is safer for now
+    if search_engine.is_ready:
+        # Optimization: In real prod, just embed the new one and append. 
+        # For prototype, re-indexing is fast enough (<100ms for <1000 items)
+        search_engine.index_memories()
+        
+    return f"Memory saved: '{text}' (ID: {entry['id']})"
+
+@mcp.tool()
+async def search_memory(query: str) -> str:
+    """
+    Retrieves stored memories relevant to the query.
+    Call this when you need context about user preferences or aliases.
+    Example: "What is the Dungeon?" -> Returns "The guest room is also called the Dungeon"
+    """
+    results = search_engine.search_memories(query)
+    if not results:
+        return "No relevant memories found."
+    
+    # Format nicely
+    output = []
+    for r in results:
+        output.append(f"- {r['text']}")
+    return "\n".join(output)
 
 # --- DOMAIN REGISTRY TOOLS (The 'Type-First' Accessors) ---
 
