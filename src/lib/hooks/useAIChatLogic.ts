@@ -145,6 +145,13 @@ export function useAIChatLogic() {
                 logger.info(`⏳ AI Scheduled ${aiData.scheduled_tasks} tasks (No immediate actions).`);
             }
 
+            // Ingest Backend Logs
+            if (aiData.logs && aiData.logs.length > 0) {
+                aiData.logs.forEach((logLine: string) => {
+                    logger.info(`[SERVER] ${logLine}`);
+                });
+            }
+
             // 3. UI Update (Replace Optimistic Message)
             const completedMsg: ChatMessage = {
                 ...optimisticMsg,

@@ -83,6 +83,7 @@ export interface LLMResponse {
   language: string;
   confidence: number;
   scheduled_tasks?: number;
+  logs?: string[];
 }
 
 export interface UIState {
