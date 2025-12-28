@@ -1,6 +1,6 @@
 {
     "name": "Butler Smart Home",
-    "url": "https://github.com/jensv/Butler",
+    "url": "https://github.com/jensvl92-spec/Butler",
     "maintainer": "Jens",
     "addons": [
         "butler_crew"

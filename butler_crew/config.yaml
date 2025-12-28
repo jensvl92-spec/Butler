@@ -2,7 +2,7 @@ name: "Butler Crew Proxy"
 version: "1.0.0"
 slug: "butler_crew"
 description: "AI-Powered Proxy Server interacting with Home Assistant via MCP."
-url: "https://github.com/jensv/Butler"
+url: "https://github.com/jensvl92-spec/Butler"
 startup: application
 arch:
   - aarch64
