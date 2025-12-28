@@ -1,17 +1,12 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM python:3.11-slim
 
-# Install Python and basic tools
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
+# Install basic tools and dependencies
+RUN apt-get update && apt-get install -y \
     git \
-    build-base \
-    linux-headers \
-    python3-dev \
-    gcc \
-    musl-dev \
-    libffi-dev
+    build-essential \
+    jq \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies directly
 # We perform a targeted install to ensure we have exactly what we need for the Proxy
