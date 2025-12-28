@@ -135,6 +135,8 @@ class HAMCPClient:
                   # Filter logic if needed, for now return all or let caller filter
                   return states
              return []
+        except Exception:
+             return []
     def get_history(
         self,
         entity_id: str,
