@@ -120,117 +120,48 @@ export function useAIChatLogic() {
 
             let aiData: LLMResponse = {} as LLMResponse;
 
-            // DYNAMIC DISCOVERY & REMOTE ACCESS STRATEGY
-            // 1. If Local (IP/Local Domain): Use Internal Discovery or Derived Hostname.
-            // 2. If Remote (DuckDNS/Cloud): MUST Use External Hostname + Port 8000 (Forwarded).
-            //    Internal IP (192.168.x.x) is useless from a different continent.
-
-            let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Default fallback
-            const isLocalConnection = activeConnection.api_url.includes('192.168') ||
-                activeConnection.api_url.includes('10.') ||
-                activeConnection.api_url.includes('172.') ||
-                activeConnection.api_url.includes('.local');
-
-            try {
-                if (isLocalConnection) {
-                    // LOCAL STRATEGY: Try to find "true" internal IP via config to avoid NAT loopback
-                    const haUrl = new URL(activeConnection.api_url);
-                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`; // Initial guess
-
-                    try {
-                        const configRes = await fetch(`${activeConnection.api_url}/api/config`, {
-                            headers: { 'Authorization': `Bearer ${activeConnection.api_token}` }
-                        });
-                        if (configRes.ok) {
-                            const configData = await configRes.json();
-                            if (configData.internal_url) {
-                                const internalUrl = new URL(configData.internal_url);
-                                butlerApiUrl = `http://${internalUrl.hostname}:8000/process`;
-                                logger.info(`🔍 [Local] Discovered Internal HA IP: ${internalUrl.hostname}`);
-                            }
-                        }
-                    } catch (configErr) {
-                        logger.warn("Failed to fetch HA Config for Internal URL", configErr);
-                    }
-                } else {
-                    // REMOTE STRATEGY: Use the External Hostname directly.
-                    // Assumes Port 8000 is forwarded on the router.
-                    // FORCE HTTP because backend is HTTP only. App enables Cleartext traffic.
-                    const haUrl = new URL(activeConnection.api_url);
-                    butlerApiUrl = `http://${haUrl.hostname}:8000/process`;
-                    logger.info(`🌍 [Remote] Using External Hostname: ${butlerApiUrl}`);
-                }
-            } catch (setupErr) {
-                logger.warn("URL Discovery Error", setupErr);
+            if (!haWebSocket) {
+                // If WS is down, show error immediately
+                throw new Error("WebSocket disconnected. Connection to Home Assistant lost.");
             }
 
-            logger.info(`🌐 Sending to Local Butler: ${butlerApiUrl}`);
+            // EVENT-BASED ARCHITECTURE: Fire Event -> Wait for Response Event
+            // This works Local AND Remote via Home Assistant Event Bus
+            // No opened ports required on user router!
+
+            const responsePromise = new Promise<LLMResponse>((resolve, reject) => {
+                // Subscribe to response event
+                // Note: subscribeEvents typically returns an unsubscribe function.
+                const cleanup = haWebSocket.subscribeEvents('butler_service_response', (evt: any) => {
+                    const data = evt.event_data;
+                    // Check if response matches our connection ID
+                    if (data && data.connection_id === activeConnection.id) {
+                        logger.info("📩 Received Event Response", data);
+                        resolve(data.response);
+                        // TODO: Call cleanup() if available (depends on library version)
+                    }
+                });
+
+                // Timeout 45s (Generative AI is slow)
+                setTimeout(() => {
+                    reject(new Error("Timeout waiting for Butler Response (Event Bus). Is the Add-on running?"));
+                }, 45000);
+            });
+
+            // Fire Request
+            logger.info("🔥 Firing 'butler_service_request' event via WebSocket...");
+            await haWebSocket.sendMessage({
+                type: 'fire_event',
+                event_type: 'butler_service_request',
+                event_data: payload
+            });
 
             try {
-                // Set a timeout for the fetch to avoid infinite hanging
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-                const res = await fetch(butlerApiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-
-                if (!res.ok) {
-                    const errText = await res.text();
-                    logger.error("Backend Error Response", { status: res.status, body: errText });
-                    throw new Error(`Server Error ${res.status}: ${errText}`);
-                }
-
-                aiData = await res.json();
-                logger.info("📥 Received AI Response", aiData);
-
-            } catch (networkError: any) {
-                logger.warn(`⚠️ Primary connection failed: ${networkError.message}. Retrying with fallbacks...`);
-
-                // FAILOVER STRATEGY
-                const fallbacks = [
-                    'http://homeassistant.local:8000/process',
-                    'http://homeassistant:8000/process'
-                ];
-
-                // If we tried one, don't retry it
-                const uniqueFallbacks = fallbacks.filter(f => f !== butlerApiUrl);
-
-                let success = false;
-                for (const fbUrl of uniqueFallbacks) {
-                    if (success) break;
-                    logger.info(`🔄 Retrying with Fallback: ${fbUrl}`);
-                    try {
-                        const cont2 = new AbortController();
-                        const tm2 = setTimeout(() => cont2.abort(), 5000); // 5s timeout
-
-                        const res2 = await fetch(fbUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload),
-                            signal: cont2.signal
-                        });
-                        clearTimeout(tm2);
-
-                        if (res2.ok) {
-                            aiData = await res2.json();
-                            logger.info("📥 Received AI Response (Fallback)", aiData);
-                            success = true;
-                        }
-                    } catch (e) {
-                        logger.warn(`Fallback ${fbUrl} failed.`);
-                    }
-                }
-
-                if (!success) {
-                    // If all local fails, desperate try on External URL (if strictly forwarded)
-                    // But we force HTTP, so external might fail if only HTTPS allowed.
-                    throw new Error("Unable to connect to Butler Crew on any local address.");
-                }
+                aiData = await responsePromise;
+                logger.info("✅ Event Response Processed", aiData);
+            } catch (err: any) {
+                logger.error("Event Bus Error", err);
+                throw err;
             }
 
 
