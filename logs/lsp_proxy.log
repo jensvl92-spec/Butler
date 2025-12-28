@@ -1,0 +1,4 @@
+[12-11 02:24:27] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-11 02:37:03] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-12 23:12:05] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-13 20:23:59] [login.cc:52] GetUserRequest failed with status 16: No session provided 

@@ -1,0 +1,189 @@
+[12-11 02:24:20] [client.cc:330] prettier - .trunk\trunk.yaml
+[12-11 03:28:47] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-12 03:28:47] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-13 00:12:05] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-13 20:29:05] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 20:29:05] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-13 20:29:10] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 20:29:10] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-13 21:23:59] [login.cc:52] GetUserRequest failed with status 16: No session provided 
+[12-13 21:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 21:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-13 21:24:08] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 21:24:08] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-13 22:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 22:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-13 23:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-13 23:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 00:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 00:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 01:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 01:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 02:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 02:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 03:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 03:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 04:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 04:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 05:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 05:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 06:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 06:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 07:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 07:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 08:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 08:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 09:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 09:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 10:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 10:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 11:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 11:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 12:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 12:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 13:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 13:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 14:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 14:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 15:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 15:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"
+[12-14 16:24:03] [client.cc:19] GRPC Failed (error code UNAVAILABLE): failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.
+ -- 10061)
+[12-14 16:24:03] [sentry.cc:364] Trunk Internal Error
+---
+trunk_cli_version: 1.25.0
+title: Internal trunk error occurred. Please report this issue to us @ https://slack.trunk.io
+report:
+  - "failed to connect to all addresses; last error: UNAVAILABLE: ipv4:127.0.0.1:58146: WSAGetOverlappedResult: Connection refused (No connection could be made because the target machine actively refused it.\r\n -- 10061)"

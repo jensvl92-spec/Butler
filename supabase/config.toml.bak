@@ -1,0 +1,3 @@
+[functions.daily-butler]
+verify_jwt = true
+schedule = "0 7,22 * * *"

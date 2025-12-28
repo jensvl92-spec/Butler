@@ -1,0 +1,276 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.7/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+
+> Configure project :app
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+
+> Configure project :capacitor-cordova-android-plugins
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+Warning: SDK processing. This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered. This can happen if you use versions of Android Studio and the command-line tools that were released at different times.
+
+> Task :clean UP-TO-DATE
+> Task :app:clean
+> Task :capacitor-android:clean
+> Task :capacitor-community-speech-recognition:clean
+> Task :capacitor-cordova-android-plugins:clean UP-TO-DATE
+> Task :capacitor-device:clean
+> Task :capacitor-push-notifications:clean UP-TO-DATE
+> Task :capacitor-toast:clean
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :capacitor-android:preBuild UP-TO-DATE
+> Task :capacitor-android:preDebugBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preDebugBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preDebugBuild UP-TO-DATE
+> Task :capacitor-device:preBuild UP-TO-DATE
+> Task :capacitor-device:preDebugBuild UP-TO-DATE
+> Task :capacitor-push-notifications:preBuild UP-TO-DATE
+> Task :capacitor-push-notifications:preDebugBuild UP-TO-DATE
+> Task :capacitor-toast:preBuild UP-TO-DATE
+> Task :capacitor-toast:preDebugBuild UP-TO-DATE
+> Task :app:javaPreCompileDebug
+> Task :capacitor-toast:writeDebugAarMetadata
+> Task :capacitor-cordova-android-plugins:writeDebugAarMetadata
+> Task :capacitor-push-notifications:writeDebugAarMetadata
+> Task :capacitor-android:writeDebugAarMetadata
+> Task :capacitor-device:writeDebugAarMetadata
+> Task :capacitor-community-speech-recognition:writeDebugAarMetadata
+> Task :app:generateDebugResValues
+> Task :capacitor-android:generateDebugResValues
+> Task :capacitor-android:generateDebugResources
+> Task :app:checkDebugAarMetadata
+> Task :capacitor-android:packageDebugResources
+> Task :capacitor-community-speech-recognition:generateDebugResValues
+> Task :capacitor-community-speech-recognition:generateDebugResources
+> Task :capacitor-community-speech-recognition:packageDebugResources
+> Task :capacitor-cordova-android-plugins:generateDebugResValues
+> Task :capacitor-cordova-android-plugins:generateDebugResources
+> Task :capacitor-cordova-android-plugins:packageDebugResources
+> Task :capacitor-device:generateDebugResValues
+> Task :capacitor-device:generateDebugResources
+> Task :capacitor-device:packageDebugResources
+> Task :capacitor-push-notifications:generateDebugResValues
+> Task :capacitor-push-notifications:generateDebugResources
+> Task :capacitor-push-notifications:packageDebugResources
+> Task :capacitor-toast:generateDebugResValues
+> Task :capacitor-toast:generateDebugResources
+> Task :capacitor-toast:packageDebugResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mergeDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :capacitor-android:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :capacitor-community-speech-recognition:extractDeepLinksDebug
+> Task :capacitor-cordova-android-plugins:extractDeepLinksDebug
+> Task :capacitor-device:extractDeepLinksDebug
+> Task :capacitor-push-notifications:extractDeepLinksDebug
+> Task :capacitor-toast:extractDeepLinksDebug
+> Task :capacitor-community-speech-recognition:processDebugManifest
+> Task :capacitor-android:processDebugManifest
+> Task :capacitor-cordova-android-plugins:processDebugManifest
+> Task :capacitor-device:processDebugManifest
+> Task :capacitor-push-notifications:processDebugManifest
+> Task :capacitor-toast:processDebugManifest
+> Task :capacitor-android:compileDebugLibraryResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :capacitor-android:parseDebugLocalResources
+> Task :capacitor-community-speech-recognition:compileDebugLibraryResources
+> Task :capacitor-community-speech-recognition:parseDebugLocalResources
+> Task :capacitor-cordova-android-plugins:compileDebugLibraryResources
+> Task :capacitor-cordova-android-plugins:parseDebugLocalResources
+> Task :capacitor-device:compileDebugLibraryResources
+> Task :capacitor-device:parseDebugLocalResources
+> Task :capacitor-community-speech-recognition:generateDebugRFile
+> Task :capacitor-android:generateDebugRFile
+> Task :capacitor-cordova-android-plugins:generateDebugRFile
+> Task :capacitor-device:generateDebugRFile
+> Task :capacitor-push-notifications:compileDebugLibraryResources
+> Task :capacitor-push-notifications:parseDebugLocalResources
+> Task :capacitor-toast:compileDebugLibraryResources
+> Task :capacitor-push-notifications:generateDebugRFile
+> Task :capacitor-android:javaPreCompileDebug
+> Task :capacitor-toast:parseDebugLocalResources
+> Task :capacitor-community-speech-recognition:javaPreCompileDebug
+> Task :capacitor-toast:generateDebugRFile
+
+> Task :capacitor-android:compileDebugJavaWithJavac
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
+
+> Task :app:processDebugManifestForPackage
+> Task :capacitor-android:bundleLibCompileToJarDebug
+> Task :capacitor-community-speech-recognition:compileDebugJavaWithJavac
+> Task :capacitor-cordova-android-plugins:javaPreCompileDebug
+> Task :capacitor-community-speech-recognition:bundleLibCompileToJarDebug
+> Task :capacitor-device:javaPreCompileDebug
+> Task :capacitor-cordova-android-plugins:compileDebugJavaWithJavac NO-SOURCE
+> Task :capacitor-cordova-android-plugins:bundleLibCompileToJarDebug
+> Task :app:processDebugResources
+> Task :capacitor-device:compileDebugJavaWithJavac
+> Task :capacitor-device:bundleLibCompileToJarDebug
+> Task :capacitor-push-notifications:javaPreCompileDebug
+> Task :capacitor-toast:javaPreCompileDebug
+> Task :capacitor-push-notifications:compileDebugJavaWithJavac
+> Task :capacitor-push-notifications:bundleLibCompileToJarDebug
+> Task :capacitor-toast:compileDebugJavaWithJavac
+> Task :capacitor-toast:bundleLibCompileToJarDebug
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugJavaWithJavac
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :capacitor-android:mergeDebugShaders
+> Task :capacitor-android:compileDebugShaders NO-SOURCE
+> Task :capacitor-android:generateDebugAssets UP-TO-DATE
+> Task :capacitor-android:packageDebugAssets
+> Task :capacitor-community-speech-recognition:mergeDebugShaders
+> Task :capacitor-community-speech-recognition:compileDebugShaders NO-SOURCE
+> Task :capacitor-community-speech-recognition:generateDebugAssets UP-TO-DATE
+> Task :capacitor-community-speech-recognition:packageDebugAssets
+> Task :capacitor-cordova-android-plugins:mergeDebugShaders
+> Task :capacitor-cordova-android-plugins:compileDebugShaders NO-SOURCE
+> Task :capacitor-cordova-android-plugins:generateDebugAssets UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:packageDebugAssets
+> Task :capacitor-device:mergeDebugShaders
+> Task :capacitor-device:compileDebugShaders NO-SOURCE
+> Task :capacitor-device:generateDebugAssets UP-TO-DATE
+> Task :capacitor-device:packageDebugAssets
+> Task :capacitor-push-notifications:mergeDebugShaders
+> Task :capacitor-push-notifications:compileDebugShaders NO-SOURCE
+> Task :capacitor-push-notifications:generateDebugAssets UP-TO-DATE
+> Task :capacitor-push-notifications:packageDebugAssets
+> Task :capacitor-toast:mergeDebugShaders
+> Task :capacitor-toast:compileDebugShaders NO-SOURCE
+> Task :capacitor-toast:generateDebugAssets UP-TO-DATE
+> Task :capacitor-toast:packageDebugAssets
+> Task :app:mergeDebugAssets
+> Task :capacitor-community-speech-recognition:bundleLibRuntimeToJarDebug
+> Task :capacitor-device:bundleLibRuntimeToJarDebug
+> Task :app:compressDebugAssets
+> Task :capacitor-push-notifications:bundleLibRuntimeToJarDebug
+> Task :capacitor-toast:bundleLibRuntimeToJarDebug
+> Task :capacitor-android:bundleLibRuntimeToJarDebug
+> Task :capacitor-cordova-android-plugins:bundleLibRuntimeToJarDebug
+> Task :app:desugarDebugFileDependencies
+> Task :app:dexBuilderDebug
+> Task :app:processDebugJavaRes NO-SOURCE
+> Task :capacitor-android:processDebugJavaRes NO-SOURCE
+> Task :capacitor-community-speech-recognition:processDebugJavaRes NO-SOURCE
+> Task :capacitor-cordova-android-plugins:processDebugJavaRes NO-SOURCE
+> Task :capacitor-device:processDebugJavaRes NO-SOURCE
+> Task :capacitor-push-notifications:processDebugJavaRes NO-SOURCE
+> Task :capacitor-toast:processDebugJavaRes NO-SOURCE
+> Task :app:mergeDebugJniLibFolders
+> Task :capacitor-android:mergeDebugJniLibFolders
+> Task :capacitor-android:mergeDebugNativeLibs NO-SOURCE
+> Task :app:checkDebugDuplicateClasses
+> Task :capacitor-android:copyDebugJniLibsProjectOnly
+> Task :capacitor-community-speech-recognition:mergeDebugJniLibFolders
+> Task :app:mergeDebugJavaResource
+> Task :capacitor-community-speech-recognition:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-community-speech-recognition:copyDebugJniLibsProjectOnly
+> Task :app:mergeDebugGlobalSynthetics
+> Task :capacitor-cordova-android-plugins:mergeDebugJniLibFolders
+> Task :capacitor-cordova-android-plugins:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-cordova-android-plugins:copyDebugJniLibsProjectOnly
+> Task :capacitor-device:mergeDebugJniLibFolders
+> Task :capacitor-device:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-device:copyDebugJniLibsProjectOnly
+> Task :capacitor-push-notifications:mergeDebugJniLibFolders
+> Task :capacitor-push-notifications:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-push-notifications:copyDebugJniLibsProjectOnly
+> Task :capacitor-toast:mergeDebugJniLibFolders
+> Task :capacitor-toast:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-toast:copyDebugJniLibsProjectOnly
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeLibDexDebug
+> Task :app:validateSigningDebug
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :app:writeDebugAppMetadata
+> Task :app:writeDebugSigningConfigVersions
+> Task :capacitor-android:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-android:copyDebugJniLibsProjectAndLocalJars
+> Task :app:mergeExtDexDebug
+> Task :capacitor-android:extractDebugAnnotations
+> Task :capacitor-android:extractDeepLinksForAarDebug
+> Task :capacitor-android:mergeDebugGeneratedProguardFiles
+> Task :capacitor-android:mergeDebugConsumerProguardFiles
+> Task :capacitor-android:prepareDebugArtProfile
+> Task :capacitor-android:prepareLintJarForPublish
+> Task :capacitor-community-speech-recognition:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-community-speech-recognition:copyDebugJniLibsProjectAndLocalJars
+> Task :capacitor-android:mergeDebugJavaResource
+> Task :capacitor-community-speech-recognition:extractDebugAnnotations
+> Task :capacitor-android:syncDebugLibJars
+> Task :capacitor-android:bundleDebugAar
+> Task :capacitor-android:assembleDebug
+> Task :capacitor-community-speech-recognition:extractDeepLinksForAarDebug
+> Task :capacitor-community-speech-recognition:mergeDebugGeneratedProguardFiles
+> Task :capacitor-community-speech-recognition:mergeDebugConsumerProguardFiles
+> Task :capacitor-community-speech-recognition:prepareDebugArtProfile
+> Task :capacitor-community-speech-recognition:prepareLintJarForPublish
+> Task :capacitor-cordova-android-plugins:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-community-speech-recognition:mergeDebugJavaResource
+> Task :capacitor-cordova-android-plugins:copyDebugJniLibsProjectAndLocalJars
+> Task :capacitor-community-speech-recognition:syncDebugLibJars
+> Task :capacitor-community-speech-recognition:bundleDebugAar
+> Task :capacitor-community-speech-recognition:assembleDebug
+> Task :capacitor-cordova-android-plugins:extractDebugAnnotations
+> Task :capacitor-cordova-android-plugins:extractDeepLinksForAarDebug
+> Task :capacitor-cordova-android-plugins:mergeDebugGeneratedProguardFiles
+> Task :capacitor-cordova-android-plugins:mergeDebugConsumerProguardFiles
+> Task :capacitor-cordova-android-plugins:prepareDebugArtProfile
+> Task :capacitor-cordova-android-plugins:prepareLintJarForPublish
+> Task :capacitor-device:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-cordova-android-plugins:mergeDebugJavaResource
+> Task :capacitor-device:copyDebugJniLibsProjectAndLocalJars
+> Task :capacitor-cordova-android-plugins:syncDebugLibJars
+> Task :capacitor-cordova-android-plugins:bundleDebugAar
+> Task :capacitor-cordova-android-plugins:assembleDebug
+> Task :capacitor-device:extractDebugAnnotations
+> Task :capacitor-device:extractDeepLinksForAarDebug
+> Task :capacitor-device:mergeDebugGeneratedProguardFiles
+> Task :capacitor-device:mergeDebugConsumerProguardFiles
+> Task :capacitor-device:prepareDebugArtProfile
+> Task :capacitor-device:prepareLintJarForPublish
+> Task :capacitor-push-notifications:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-device:mergeDebugJavaResource
+> Task :capacitor-push-notifications:copyDebugJniLibsProjectAndLocalJars
+> Task :capacitor-device:syncDebugLibJars
+> Task :capacitor-device:bundleDebugAar
+> Task :capacitor-device:assembleDebug
+> Task :capacitor-push-notifications:extractDebugAnnotations
+> Task :capacitor-push-notifications:extractDeepLinksForAarDebug
+> Task :capacitor-push-notifications:mergeDebugGeneratedProguardFiles
+> Task :capacitor-push-notifications:mergeDebugConsumerProguardFiles
+> Task :capacitor-push-notifications:prepareDebugArtProfile
+> Task :capacitor-push-notifications:prepareLintJarForPublish
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+> Task :capacitor-toast:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-push-notifications:mergeDebugJavaResource
+> Task :capacitor-toast:copyDebugJniLibsProjectAndLocalJars
+> Task :capacitor-push-notifications:syncDebugLibJars
+> Task :capacitor-push-notifications:bundleDebugAar
+> Task :capacitor-push-notifications:assembleDebug
+> Task :capacitor-toast:extractDebugAnnotations
+> Task :capacitor-toast:extractDeepLinksForAarDebug
+> Task :capacitor-toast:mergeDebugGeneratedProguardFiles
+> Task :capacitor-toast:mergeDebugConsumerProguardFiles
+> Task :capacitor-toast:prepareDebugArtProfile
+> Task :capacitor-toast:prepareLintJarForPublish
+> Task :capacitor-toast:mergeDebugJavaResource
+> Task :capacitor-toast:syncDebugLibJars
+> Task :capacitor-toast:bundleDebugAar
+> Task :capacitor-toast:assembleDebug
+
+BUILD SUCCESSFUL in 36s
+194 actionable tasks: 191 executed, 3 up-to-date

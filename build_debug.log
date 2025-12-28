@@ -1,0 +1,111 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.7/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+
+> Configure project :app
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+
+> Configure project :capacitor-cordova-android-plugins
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+Warning: SDK processing. This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered. This can happen if you use versions of Android Studio and the command-line tools that were released at different times.
+
+> Task :clean UP-TO-DATE
+> Task :app:clean
+> Task :capacitor-android:clean
+> Task :capacitor-community-speech-recognition:clean
+> Task :capacitor-cordova-android-plugins:clean
+> Task :capacitor-device:clean
+> Task :capacitor-push-notifications:clean
+> Task :capacitor-toast:clean
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :capacitor-android:preBuild UP-TO-DATE
+> Task :capacitor-android:preDebugBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preDebugBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preDebugBuild UP-TO-DATE
+> Task :capacitor-device:preBuild UP-TO-DATE
+> Task :capacitor-device:preDebugBuild UP-TO-DATE
+> Task :capacitor-push-notifications:preBuild UP-TO-DATE
+> Task :capacitor-push-notifications:preDebugBuild UP-TO-DATE
+> Task :capacitor-toast:preBuild UP-TO-DATE
+> Task :capacitor-toast:preDebugBuild UP-TO-DATE
+> Task :app:javaPreCompileDebug
+> Task :capacitor-push-notifications:writeDebugAarMetadata
+> Task :capacitor-community-speech-recognition:writeDebugAarMetadata
+> Task :capacitor-device:writeDebugAarMetadata
+> Task :capacitor-cordova-android-plugins:writeDebugAarMetadata
+> Task :capacitor-toast:writeDebugAarMetadata
+> Task :capacitor-android:writeDebugAarMetadata
+> Task :app:generateDebugResValues
+> Task :capacitor-android:generateDebugResValues
+> Task :capacitor-android:generateDebugResources
+> Task :app:checkDebugAarMetadata
+> Task :capacitor-android:packageDebugResources
+> Task :capacitor-community-speech-recognition:generateDebugResValues
+> Task :capacitor-community-speech-recognition:generateDebugResources
+> Task :capacitor-community-speech-recognition:packageDebugResources
+> Task :capacitor-cordova-android-plugins:generateDebugResValues
+> Task :capacitor-cordova-android-plugins:generateDebugResources
+> Task :capacitor-cordova-android-plugins:packageDebugResources
+> Task :capacitor-device:generateDebugResValues
+> Task :capacitor-device:generateDebugResources
+> Task :capacitor-device:packageDebugResources
+> Task :capacitor-push-notifications:generateDebugResValues
+> Task :capacitor-push-notifications:generateDebugResources
+> Task :capacitor-push-notifications:packageDebugResources
+> Task :capacitor-toast:generateDebugResValues
+> Task :capacitor-toast:generateDebugResources
+> Task :capacitor-toast:packageDebugResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mergeDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :capacitor-android:extractDeepLinksDebug
+> Task :capacitor-community-speech-recognition:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :capacitor-cordova-android-plugins:extractDeepLinksDebug
+> Task :capacitor-device:extractDeepLinksDebug
+> Task :capacitor-push-notifications:extractDeepLinksDebug
+> Task :capacitor-toast:extractDeepLinksDebug
+> Task :capacitor-cordova-android-plugins:processDebugManifest
+> Task :capacitor-community-speech-recognition:processDebugManifest
+> Task :capacitor-device:processDebugManifest
+> Task :capacitor-toast:processDebugManifest
+> Task :capacitor-push-notifications:processDebugManifest
+> Task :capacitor-android:compileDebugLibraryResources
+> Task :capacitor-android:parseDebugLocalResources
+> Task :capacitor-community-speech-recognition:compileDebugLibraryResources
+> Task :capacitor-android:processDebugManifest
+> Task :capacitor-community-speech-recognition:parseDebugLocalResources
+
+> Task :app:processDebugMainManifest FAILED
+C:\Users\jensv\Documents\GitHub\AIHA test\android\app\src\main\AndroidManifest.xml Error:
+	uses-sdk:minSdkVersion 22 cannot be smaller than version 23 declared in library [com.google.firebase:firebase-messaging:25.0.1] C:\Users\jensv\.gradle\caches\transforms-4\fd0fe060268885ee0a9e0785da071b6d\transformed\firebase-messaging-25.0.1\AndroidManifest.xml as the library might be using APIs not available in 22
+	Suggestion: use a compatible library with a minSdk of at most 22,
+		or increase this project's minSdk version to at least 23,
+		or use tools:overrideLibrary="com.google.firebase.messaging" to force usage (may lead to runtime failures)
+
+See https://developer.android.com/r/studio-ui/build/manifest-merger for more information about the manifest merger.
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:processDebugMainManifest'.
+> Manifest merger failed : uses-sdk:minSdkVersion 22 cannot be smaller than version 23 declared in library [com.google.firebase:firebase-messaging:25.0.1] C:\Users\jensv\.gradle\caches\transforms-4\fd0fe060268885ee0a9e0785da071b6d\transformed\firebase-messaging-25.0.1\AndroidManifest.xml as the library might be using APIs not available in 22
+  	Suggestion: use a compatible library with a minSdk of at most 22,
+  		or increase this project's minSdk version to at least 23,
+  		or use tools:overrideLibrary="com.google.firebase.messaging" to force usage (may lead to runtime failures)
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 12s
+52 actionable tasks: 51 executed, 1 up-to-date

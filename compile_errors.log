@@ -1,0 +1,2 @@
+src/components/AIChat.tsx(2,24): error TS2307: Cannot find module '../AppContext' or its corresponding type declarations.
+src/lib/hooks/useAIChatLogic.ts(4,24): error TS2307: Cannot find module '../../AppContext' or its corresponding type declarations.

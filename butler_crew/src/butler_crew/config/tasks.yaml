@@ -1,0 +1,112 @@
+# Task Configurations for Butler Crew
+# Optimized for structured outputs and clear instructions
+
+validate_intent:
+  description: >
+    # INPUT
+    User message: "{user_message}"
+
+    # TASK
+    1. Analyze the message.
+    2. Classify into: home_assistant, calendar, email, navigation, weather, music, tasks, or OTHER.
+    3. Determine `is_valid` boolean.
+
+    # OUTPUT SCHEMA (JSON)
+    {
+      "is_valid": boolean,
+      "intent_type": "string",
+      "reasoning": "short string",
+      "rejection_message": "string (optional)"
+    }
+  expected_output: >
+    A JSON object classifying the user intent.
+  agent: bouncer
+
+process_command:
+  description: >
+    # INPUT
+    User message: "{user_message}"
+    Device Context: "{device_context}"
+    Language: "{language}"
+
+    # TASK
+    1. **Understand**: usage of HA devices or personal tools.
+    2. **Check**: Verify state if acting on devices.
+    3. **Act**: Call appropriate tools.
+    4. **Respond**: Generate a natural language response in "{language}".
+
+    # OUTPUT
+    Return a JSON with `text` (response) and `actions` (list of service calls).
+  expected_output: >
+    A JSON object with the final response text and executed actions.
+  agent: butler
+
+toggle_automation:
+  description: >
+    # INPUT
+    Entity: "{entity_id}"
+    Action: "{action}" (on/off/trigger)
+
+    # TASK
+    Execute the specific automation service call.
+  expected_output: >
+    Confirmation string of the action taken.
+  agent: automation_handler
+
+create_automation:
+  description: >
+    # INPUT
+    Intent: "{user_intent}"
+    Available Entities: "{available_entities}"
+
+    # TASK
+    Draft a valid Home Assistant automation YAML.
+  expected_output: >
+    The valid automation YAML code block and a confirmation.
+  agent: automation_creator
+
+delete_automation:
+  description: >
+    # INPUT
+    Target: "{entity_id}"
+
+    # TASK
+    Remove the specified automation.
+  expected_output: >
+    Confirmation status of deletion.
+  agent: automation_creator
+
+analyze_patterns:
+  description: >
+    # INPUT
+    History Data: "{history_data}"
+
+    # TASK
+    Identify recurring usage patterns or correlations in the data.
+  expected_output: >
+    List of patterns with confidence scores.
+  agent: analyzer
+
+propose_automation:
+  description: >
+    # INPUT
+    Patterns: "{patterns}"
+    Existing: "{existing_automations}"
+
+    # TASK
+    Draft a NEW automation proposal (title, description, YAML) that optimizes the home.
+  expected_output: >
+    A structured automation proposal.
+  agent: automation_engineer
+
+validate_proposal:
+  description: >
+    # INPUT
+    Proposal Hash: "{proposal_hash}"
+    Summary: "{proposal_summary}"
+
+    # TASK
+    Check against denied proposals memory.
+  expected_output: >
+    Approval (true) or Rejection (false) with reason.
+  agent: proposal_validator

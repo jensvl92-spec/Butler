@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Butler Dashboard 2.0</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: rgba(255, 255, 255, 0.08);
+            --card-border: rgba(255, 255, 255, 0.05);
+            --primary: #3b82f6;
+            --primary-dim: rgba(59, 130, 246, 0.2);
+            --text-main: #ffffff;
+            --text-sub: #a1a1aa;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --warning: #eab308;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header Chips */
+        .chip-container {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 20px;
+            scrollbar-width: none;
+        }
+        .chip-container::-webkit-scrollbar { display: none; }
+
+        .chip {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .chip.active {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .chip-icon { font-size: 1.1rem; }
+
+        /* Main Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); /* Wider cards for "merged" view */
+            gap: 16px;
+        }
+
+        /* Room/Area Card */
+        .room-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            padding: 16px;
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .room-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .room-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .room-sensors {
+            display: flex;
+            gap: 12px;
+            font-size: 0.85rem;
+            color: var(--text-sub);
+        }
+        .sensor-badge {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Device Row (Mushroom Style) */
+        .device-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 16px;
+            transition: background 0.2s;
+        }
+        .device-row:active { background: rgba(0,0,0,0.3); }
+
+        .icon-box {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            background: rgba(255,255,255,0.05);
+            flex-shrink: 0;
+            color: var(--text-sub);
+        }
+        .icon-box.active {
+            background: var(--primary); /* Full color for active state */
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+        .icon-box.warm {
+            background: var(--warning);
+            color: black;
+            box-shadow: 0 4px 12px rgba(234, 179, 8, 0.4);
+        }
+
+        .device-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .device-name {
+            font-weight: 500;
+            font-size: 1rem;
+        }
+        .device-state {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            margin-top: 2px;
+        }
+
+        /* Controls */
+        .toggle-switch {
+            width: 44px;
+            height: 24px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+        }
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+        .toggle-switch.on { background: var(--primary); }
+        .toggle-switch.on::after { transform: translateX(20px); }
+
+        .slider-container {
+            width: 100px;
+            height: 36px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            position: relative;
+            overflow: hidden;
+        }
+        .slider-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            background: var(--primary-dim);
+            width: 50%; /* Example value */
+            z-index: 0;
+        }
+        .slider-value {
+            position: relative;
+            z-index: 1;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin: 0 auto;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Header / Chips -->
+    <div class="chip-container">
+        <div class="chip active"><span class="chip-icon">🏠</span> Home</div>
+        <div class="chip"><span class="chip-icon">💡</span> 5 Lights On</div>
+        <div class="chip"><span class="chip-icon">🛡️</span> Security Armed</div>
+        <div class="chip"><span class="chip-icon">⚡</span> 450W Usage</div>
+    </div>
+
+    <div class="dashboard-grid">
+
+        <!-- MERGED CARD EXAMPLE 1: Living Room -->
+        <div class="room-card">
+            <div class="room-header">
+                <div class="room-title">🛋️ Living Room</div>
+                <div class="room-sensors">
+                    <div class="sensor-badge">🌡️ 22°C</div>
+                    <div class="sensor-badge">💧 45%</div>
+                </div>
+            </div>
+
+            <!-- Light (Merged Brightness Slider) -->
+            <div class="device-row">
+                <div class="icon-box active">💡</div>
+                <div class="device-info">
+                    <div class="device-name">Main Light</div>
+                    <div class="device-state">80% • 12W</div>
+                </div>
+                <div class="slider-container">
+                    <div class="slider-fill" style="width: 80%"></div>
+                    <span class="slider-value">80%</span>
+                </div>
+            </div>
+
+            <!-- Media Player -->
+            <div class="device-row">
+                <div class="icon-box" style="background: #a855f7; color: white;">📺</div>
+                <div class="device-info">
+                    <div class="device-name">Netflix</div>
+                    <div class="device-state">Playing - The Office</div>
+                </div>
+                <div class="toggle-switch on"></div>
+            </div>
+        </div>
+
+        <!-- MERGED CARD EXAMPLE 2: Kitchen -->
+        <div class="room-card">
+            <div class="room-header">
+                <div class="room-title">🍳 Kitchen</div>
+                <div class="room-sensors">
+                    <div class="sensor-badge">🌡️ 21°C</div>
+                    <div class="sensor-badge">👣 Motion</div>
+                </div>
+            </div>
+
+            <!-- Light Group -->
+            <div class="device-row">
+                <div class="icon-box warm">💡</div>
+                <div class="device-info">
+                    <div class="device-name">Counter Spots</div>
+                    <div class="device-state">On • Warm White</div>
+                </div>
+                <div class="toggle-switch on" style="background: var(--warning);"></div>
+            </div>
+
+            <!-- Appliance -->
+            <div class="device-row">
+                <div class="icon-box">☕</div>
+                <div class="device-info">
+                    <div class="device-name">Coffee Machine</div>
+                    <div class="device-state">Ready</div>
+                </div>
+                <div class="toggle-switch"></div>
+            </div>
+        </div>
+
+        <!-- SENSOR CLUSTER EXAMPLE: Office -->
+        <div class="room-card">
+            <div class="room-header">
+                <div class="room-title">💻 Office</div>
+                <div class="room-sensors">
+                    <!-- Expanded sensors in header for sensor-heavy rooms -->
+                    <div class="sensor-badge" style="color: var(--success)">🔋 98%</div>
+                </div>
+            </div>
+
+            <!-- Merged Climate Row -->
+            <div class="device-row">
+                <div class="icon-box" style="background: #f97316; color: white;">🔥</div>
+                <div class="device-info">
+                    <div class="device-name">Thermostat</div>
+                    <div class="device-state">Heating to 24°C</div>
+                </div>
+                <!-- Mini Controls -->
+                <div style="display: flex; gap: 8px;">
+                    <button style="background:none; border: 1px solid rgba(255,255,255,0.2); color:white; border-radius:8px; width: 30px; height: 30px;">-</button>
+                    <span style="line-height: 30px; font-weight: bold;">24°</span>
+                    <button style="background:none; border: 1px solid rgba(255,255,255,0.2); color:white; border-radius:8px; width: 30px; height: 30px;">+</button>
+                </div>
+            </div>
+
+             <!-- Computer Switch -->
+             <div class="device-row">
+                <div class="icon-box active" style="background: #10b981;">🖥️</div>
+                <div class="device-info">
+                    <div class="device-name">Work PC</div>
+                    <div class="device-state">Online • 150W</div>
+                </div>
+                <div class="toggle-switch on" style="background: #10b981;"></div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>

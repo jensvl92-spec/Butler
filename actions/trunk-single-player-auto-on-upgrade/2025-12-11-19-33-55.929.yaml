@@ -1,0 +1,14 @@
+action_id: trunk-single-player-auto-on-upgrade
+date: 2025-12-11 19:33:55
+run: trunk on-upgrade --single-player-only -n --no-progress --allow-daemon-start=false --print-summary --scope=check,plugins,runtimes,tools
+run_from: ""
+trigger: schedule 24h+5m
+result:
+  exit_code: 0
+  out: "\r\n\x1b[1m3 linters were upgraded:\r\n\r\n\x1b[0m  markdownlint \x1b[90m0.46.0\x1b[0m → \x1b[92m0.47.0\x1b[0m\r\n  osv-scanner \x1b[90m2.3.0\x1b[0m → \x1b[92m2.3.1\x1b[0m\r\n  trufflehog \x1b[90m3.92.2\x1b[0m → \x1b[92m3.92.3\x1b[0m\r\n\r\n"
+  err: ""
+timestamp: 1765481635
+full_timestamp:
+  nanos: 929401000
+  seconds: 1765481635
+trunk_version: 1.25.0

@@ -1,0 +1,14 @@
+action_id: trunk-single-player-auto-on-upgrade
+date: 2025-12-10 19:28:50
+run: trunk on-upgrade --single-player-only -n --no-progress --allow-daemon-start=false --print-summary --scope=check,plugins,runtimes,tools
+run_from: ""
+trigger: schedule 24h+5m
+result:
+  exit_code: 0
+  out: "\x1b[1m\x1b[90m\r\n 3 actions were disabled\r\n\r\n\x1b[0m\x1b[90m  trunk-announce \r\n\x1b[0m\x1b[90m  trunk-check-pre-push \r\n\x1b[0m\x1b[90m  trunk-fmt-pre-commit \r\n\x1b[0m\r\n\r\n\x1b[1m2 linters were upgraded:\r\n\r\n\x1b[0m  markdownlint \x1b[90m0.45.0\x1b[0m → \x1b[92m0.46.0\x1b[0m\r\n  prettier \x1b[90m3.6.2\x1b[0m → \x1b[92m3.7.4\x1b[0m\r\n\r\n"
+  err: ""
+timestamp: 1765394930
+full_timestamp:
+  nanos: 458375000
+  seconds: 1765394930
+trunk_version: 1.25.0

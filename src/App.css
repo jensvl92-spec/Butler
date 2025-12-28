@@ -1,0 +1,595 @@
+:root {
+  /* Dark Theme Colors (Default) */
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-card: #1a1a24;
+  --bg-card-hover: #222230;
+  --bg-elevated: #252532;
+
+  /* Accent Colors */
+  --accent: #6366f1;
+  --accent-light: #818cf8;
+  --accent-dark: #4f46e5;
+  --accent-glow: rgba(99, 102, 241, 0.3);
+
+  /* Status Colors */
+  --success: #10b981;
+  --success-glow: rgba(16, 185, 129, 0.3);
+  --error: #ef4444;
+  --error-glow: rgba(239, 68, 68, 0.3);
+  --warning: #f59e0b;
+
+  /* Text Colors */
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  /* Border Colors */
+  --border: #2a2a3a;
+  --border-light: #3a3a4a;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Shadows */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px var(--accent-glow);
+}
+
+/* ==================== Themes ==================== */
+
+/* Modern White */
+.theme-white {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f3f5;
+  --bg-elevated: #f8f9fa;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --border: #e5e7eb;
+  --border-light: #d1d5db;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 15px rgba(99, 102, 241, 0.2);
+}
+
+/* Soft Light */
+.theme-light {
+  --bg-primary: #f3f4f6;
+  --bg-secondary: #e5e7eb;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f9fafb;
+  --bg-elevated: #ffffff;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --border: #e2e8f0;
+  --border-light: #cbd5e1;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Pastel Mint */
+.theme-pastel-mint {
+  --bg-primary: #f0fdf4;
+  /* Very light mint */
+  --bg-secondary: #dcfce7;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f0fdf4;
+  --bg-elevated: #ffffff;
+  --text-primary: #14532d;
+  /* Dark green text */
+  --text-secondary: #4ade80;
+  /* Soft green secondary */
+  --text-muted: #86efac;
+  --accent: #22c55e;
+  --accent-light: #4ade80;
+  --accent-glow: rgba(34, 197, 94, 0.3);
+  --border: #bbf7d0;
+  /* Green 200 */
+  --border-light: #86efac;
+}
+
+/* Pastel Rose */
+.theme-pastel-rose {
+  --bg-primary: #fff1f2;
+  /* Rose 50 */
+  --bg-secondary: #ffe4e6;
+  /* Rose 100 */
+  --bg-card: #ffffff;
+  --bg-card-hover: #fff1f2;
+  --bg-elevated: #ffffff;
+  --text-primary: #881337;
+  /* Rose 900 */
+  --text-secondary: #fb7185;
+  /* Rose 400 */
+  --text-muted: #fda4af;
+  --accent: #f43f5e;
+  /* Rose 500 */
+  --accent-light: #fb7185;
+  --accent-glow: rgba(244, 63, 94, 0.3);
+  --border: #fecdd3;
+  /* Rose 200 */
+  --border-light: #fda4af;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* ==================== Base Elements ==================== */
+input,
+button,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: var(--accent);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-light);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-glow);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ==================== Layout Components ==================== */
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg-primary);
+  overflow: hidden;
+  position: relative;
+}
+
+/* Main Content Area (Row on Desktop, Column on Mobile) */
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Sidebar / Assistant Area (Left) */
+.ai-section {
+  width: 320px;
+  /* Fixed width */
+  min-width: 320px;
+  /* Prevent resizing */
+  padding: var(--spacing-md);
+  /* Reduced from 20px */
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  z-index: 10;
+  box-shadow: var(--shadow-lg);
+  /* Add subtle shadow */
+}
+
+/* Main Dashboard Area (Right) */
+.dashboard {
+  flex: 1;
+  /* Take remaining space */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  /* Header stays, content scrolls */
+  background: var(--bg-primary);
+  position: relative;
+  width: 100%;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+    overflow-y: auto;
+    /* Allow page scrolling */
+    overflow-x: hidden;
+  }
+
+  .main-content {
+    flex-direction: column;
+    overflow: visible;
+    /* Let parent scroll */
+    flex: none;
+    /* Don't use flex sizing */
+  }
+
+  /* Resizable AI Section */
+  .ai-section {
+    width: 100%;
+    min-width: 0;
+    /* Height is controlled by inline style from React state */
+    flex-shrink: 0;
+    border-right: none;
+    padding: var(--spacing-md);
+    /* Add padding to create "Separate Tile" look on background */
+    display: flex;
+    overflow: hidden;
+    /* Remove native resize, we use custom handle */
+    resize: none;
+    background: transparent;
+    /* Transparent so card floats on page bg */
+    min-height: 0;
+    /* Allow shrinking below content size */
+  }
+
+  .dashboard {
+    width: 100%;
+    min-height: 300px;
+    /* Minimum height for dashboard */
+    flex: none;
+    /* Don't use flex sizing */
+  }
+}
+
+/* ==================== AI Chat Styles (Restored) ==================== */
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+.chat-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.chat-messages {
+  flex: 1;
+  /* Grow to fill available space */
+  min-height: 0;
+  /* Critical for scrolling in flex column */
+  overflow-y: auto;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 8px;
+  scrollbar-width: thin;
+}
+
+/* Explicit class for handle visibility */
+.ai-resize-handle {
+  height: 24px;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  transition: background 0.2s;
+}
+
+.ai-resize-handle:hover,
+.ai-resize-handle:active {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.message-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message {
+  max-width: 85%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  position: relative;
+  word-wrap: break-word;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message.ai {
+  align-self: flex-start;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+.actions-taken {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.action-badge {
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 8px;
+}
+
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.resize-handle {
+  /* Styles handled inline in component mostly, but ensuring hover */
+  transition: background 0.2s;
+}
+
+.resize-handle:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Chat Input */
+.chat-input-form {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  /* Match section bg */
+}
+
+.input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-group input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  border-radius: 20px;
+  outline: none;
+  transition: border-color 0.2s;
+  min-width: 0;
+  /* Prevent input from forcing overflow */
+}
+
+.input-group input:focus {
+  border-color: var(--accent);
+}
+
+.voice-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  padding: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
+.voice-btn.listening {
+  background: var(--error);
+  color: white;
+  border-color: var(--error);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.input-group button[type="submit"] {
+  padding: 0 20px;
+  height: 42px;
+  border-radius: 20px;
+  flex-shrink: 0;
+  /* Prevent button from squishing */
+}
+
+/* ==================== Dashboard Layout Restorations ==================== */
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
+  flex-shrink: 0;
+}
+
+.dashboard-header h1 {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+.status-dot.connected {
+  background: var(--success);
+  box-shadow: 0 0 10px var(--success-glow);
+}
+
+/* Fix grid mismatch */
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  padding: var(--spacing-md);
+  padding-bottom: 24px;
+  overflow-y: auto;
+  flex: 1;
+  max-width: 1600px;
+  /* Prevent extreme stretching on ultrawide */
+  margin: 0 auto;
+  /* Center if constrained */
+  width: 100%;
+}
+
+/* Classic Button Styles */
+.import-btn,
+.logout-btn {
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.import-btn {
+  background: var(--accent);
+  color: white;
+}
+
+.logout-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.logout-btn:hover {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+  transform: none;
+}
+
+/* ==================== Modal Styles ==================== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--spacing-md);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  width: 100%;
+  max-width: 480px;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp 0.3s ease;
+  color: var(--text-primary);
+}
+
+.modal-content h2 {
+  margin-bottom: var(--spacing-lg);
+  text-align: center;
+  font-size: 1.5rem;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

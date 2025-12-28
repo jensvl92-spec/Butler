@@ -1,0 +1,12 @@
+commands:
+  - run: trunk config share
+    title: Share trunk config
+full_timestamp:
+  nanos: 458736000
+  seconds: 1765632238
+id: trunk-share-with-everyone
+message: Remove trunk from your local git ignores
+priority: low
+rendered: "\x1b[90mRun \x1b[0m\x1b[96mtrunk config share\x1b[0m\x1b[90m to allow committing your trunk config for your teammates to use\n\x1b[0m"
+timestamp: 1765632238
+title: Share trunk config

@@ -1,0 +1,535 @@
+[2025-12-14 15:36:26.049] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.052] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.052] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.053] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.053] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.054] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.054] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.054] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\ic_launcher_background.xml:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.055] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\strings.xml:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.055] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\styles.xml:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.055] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\xml\file_paths.xml:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.055] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\test\java\com\getcapacitor\myapp\ExampleUnitTest.java:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.056] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.056] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.056] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_10.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.057] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_12.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.057] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_13.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.058] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_15.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.058] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_17.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_18.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_19.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_2.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_20.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_21.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_22.txt:HEAD] already cached, not running linter
+[2025-12-14 15:36:26.722] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:36:26.722] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.248] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:27.295] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:36:27.295] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:36:27.295] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:android\build_log_23.txt... (33 files):HEAD] Linter ran in 1244ms
+[2025-12-14 15:36:27.327] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_40.txt:HEAD] running linter (cache-key:4e2e5c51014068ed203d1272b75e381b)
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.482] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.483] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.483] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.483] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:36:28.537] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:android\build_log_40.txt:HEAD] Linter ran in 1208ms
+[2025-12-14 15:37:17.860] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:17.860] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:17.896] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\settings.gradle:HEAD] running linter (cache-key:f13060afa644fdd15e22cf6aadfb4ee8)
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.282] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:19.378] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:android\settings.gradle:HEAD] Linter ran in 1480ms
+[2025-12-14 15:37:43.374] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:43.374] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:43.461] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\App.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.461] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\AIChat.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.462] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\Auth.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.463] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\ConnectionSetup.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.463] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\ConnectionTester.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.464] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\Dashboard.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.465] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\ManualControls.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.465] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\RoomManager.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.466] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\lib\AppContext.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.467] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\lib\supabase.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.467] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\main.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.468] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\types\index.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.468] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\utils\auth.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.469] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\utils\ha-api.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.469] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\utils\ha-websocket.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:43.470] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\utils\home-assistant.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:45.292] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:45.292] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:45.371] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\index-CasUkMr8.js:HEAD] running linter (cache-key:73ba8046b90c6f3e58e939f3d9002efe)
+[2025-12-14 15:37:45.372] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:dist\assets\index-yRR60nkO.css:HEAD] already cached, not running linter
+[2025-12-14 15:37:45.372] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-Cmeo-1Va.js:HEAD] running linter (cache-key:b071e29b2ce5d97d34e26829792b41c9)
+[2025-12-14 15:37:45.372] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-DT5KNptz.js:HEAD] running linter (cache-key:91d734d48bfdb06d3e6b68553efdf734)
+[2025-12-14 15:37:45.372] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-T1438aXZ.js:HEAD] running linter (cache-key:4f691ed246127f9efaf8b9ccf76814a4)
+[2025-12-14 15:37:45.372] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\index.html:HEAD] running linter (cache-key:a0ceb4702b472b047d317075a06380bb)
+[2025-12-14 15:37:45.373] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:dist\manifest.json:HEAD] already cached, not running linter
+[2025-12-14 15:37:45.374] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:dist\sw.js:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.149] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:46.149] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:46.541] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.gitignore:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.541] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\.gitignore:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.542] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\AndroidProjectSystem.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.542] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\compiler.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.543] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\deploymentTargetSelector.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.543] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\migrations.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.543] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_23.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.544] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\misc.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.544] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_24.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.544] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\.idea\runConfigurations.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.545] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_25.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.545] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\.gitignore:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.545] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_26.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.546] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.546] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_28.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.547] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\capacitor.build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.547] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_29.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.547] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\proguard-rules.pro:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.547] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_3.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.548] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\androidTest\java\com\getcapacitor\myapp\ExampleInstrumentedTest.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.548] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_30.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.548] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\AndroidManifest.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.549] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_31.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.549] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\java\com\aiha\app\MainActivity.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.549] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_33.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.550] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\ic_launcher_background.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.550] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_34.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.550] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.551] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_35.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.551] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-hdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.551] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_36.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.551] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-mdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.552] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_37.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.552] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.552] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_38.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.553] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.553] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_39.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.553] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.554] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_4.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.554] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-hdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.554] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_40.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.555] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-mdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.555] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_41.txt:HEAD] running linter (cache-key:7f9b888c635860b3a18439ddc406f3fc)
+[2025-12-14 15:37:46.555] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.555] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_5.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.556] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.556] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_6.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.557] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.557] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_7.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.557] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-v24\ic_launcher_foreground.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.558] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_8.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.558] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\layout\activity_main.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.558] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_9.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.559] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.559] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\capacitor.settings.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.560] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher_round.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.560] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradle\wrapper\gradle-wrapper.jar:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.560] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.561] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradle\wrapper\gradle-wrapper.properties:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.561] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.561] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradle.properties:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.562] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.562] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradlew:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.562] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.563] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradlew.bat:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.563] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.563] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\settings.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.564] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.564] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\variables.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.564] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.565] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.565] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.565] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.566] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.566] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.567] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.567] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.567] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.568] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\ic_launcher_background.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.568] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\strings.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.569] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\styles.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.569] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\xml\file_paths.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.570] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\test\java\com\getcapacitor\myapp\ExampleUnitTest.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.570] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.571] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.571] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_10.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.572] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_12.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.572] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_13.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.572] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_15.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.573] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_17.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.573] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_18.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.574] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_19.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.574] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_2.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.575] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_20.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.575] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_21.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:46.575] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_22.txt:HEAD] already cached, not running linter
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.026] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:47.109] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:dist\assets\index-CasUkMr8.js... (8 files):HEAD] Linter ran in 1678ms
+[2025-12-14 15:37:47.269] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:47.269] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.287] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:48.402] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:android\build_log_23.txt... (32 files):HEAD] Linter ran in 1836ms
+[2025-12-14 15:37:50.786] [global] [info] [windows_monitor_impl.cc:153] monitor ReadDirectoryChangesW overflowed, recrawling
+[2025-12-14 15:37:53.255] [global] [info] [windows_monitor_impl.cc:153] monitor ReadDirectoryChangesW overflowed, recrawling
+[2025-12-14 15:37:55.914] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:55.914] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:37:56.057] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\.gitignore:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.057] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.057] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\capacitor.build.gradle:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.058] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\proguard-rules.pro:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.058] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\androidTest\java\com\getcapacitor\myapp\ExampleInstrumentedTest.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.058] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\AndroidManifest.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\java\com\aiha\app\MainActivity.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\ic_launcher_background.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.059] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-hdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-mdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.060] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.061] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.061] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-hdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.061] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-mdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.062] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.062] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.063] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxxhdpi\splash.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.063] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-v24\ic_launcher_foreground.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.063] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\layout\activity_main.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.064] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.064] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher_round.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.064] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.065] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.065] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.065] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.066] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.066] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.067] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.067] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.067] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.068] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.068] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.069] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.069] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.070] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_foreground.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.070] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xxxhdpi\ic_launcher_round.png:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.070] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\ic_launcher_background.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.071] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\strings.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.071] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\values\styles.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.072] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\main\res\xml\file_paths.xml:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.072] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\src\test\java\com\getcapacitor\myapp\ExampleUnitTest.java:HEAD] already cached, not running linter
+[2025-12-14 15:37:56.072] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_41.txt:HEAD] running linter (cache-key:feb710fc96922d2e58473c2194ceb9bd)
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.407] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:37:57.471] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:android\app\.gitignore... (44 files):HEAD] Linter ran in 1396ms
+[2025-12-14 15:38:04.026] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:38:04.026] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:02.975] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:02.976] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:04.318] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:04.318] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:05.638] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:49:05.638] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:57:05.745] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:57:05.746] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:57:05.821] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] running linter (cache-key:d4c12b60b0377acbbc8a204f2e46c319)
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.051] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:57:07.118] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] Linter ran in 1295ms
+[2025-12-14 15:58:06.689] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:58:06.690] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:58:06.730] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] running linter (cache-key:ba17454471300b1c3e556f8170962cba)
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.927] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:07.986] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] Linter ran in 1254ms
+[2025-12-14 15:58:45.995] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:58:45.995] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:58:46.034] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] running linter (cache-key:346e7b0e01606c2f3fa6c9ed13cd8b50)
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.231] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:58:47.292] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] Linter ran in 1256ms
+[2025-12-14 15:59:09.234] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:59:09.234] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:59:09.265] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] running linter (cache-key:267b5b41ff29fc53039aba71e25d613b)
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.436] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 15:59:10.500] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:supabase\functions\process-ai-command\index.ts:HEAD] Linter ran in 1233ms
+[2025-12-14 15:59:27.707] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 15:59:27.708] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:01:37.097] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:01:37.098] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:01:37.138] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\AIChat.tsx:HEAD] running linter (cache-key:149bde2dbe407a7b4be5407691c6b408)
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.338] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:01:38.394] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:src\components\AIChat.tsx:HEAD] Linter ran in 1254ms
+[2025-12-14 16:02:37.345] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:37.345] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:37.438] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\App.js:HEAD], removing from cache
+[2025-12-14 16:02:37.439] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\App.js:HEAD] running linter (cache-key:2863f0b15b19fab652c177d8abe2b91a)
+[2025-12-14 16:02:37.439] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\AIChat.js:HEAD] running linter (cache-key:06c145787e5a0719145d62712809a7d5)
+[2025-12-14 16:02:37.440] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\components\Auth.js:HEAD], removing from cache
+[2025-12-14 16:02:37.440] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\Auth.js:HEAD] running linter (cache-key:df6ee8bffc5c993f41646946b6f3620c)
+[2025-12-14 16:02:37.441] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\components\ConnectionSetup.js:HEAD], removing from cache
+[2025-12-14 16:02:37.441] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\ConnectionSetup.js:HEAD] running linter (cache-key:fbb450178ca18b8b08573fa216837ac2)
+[2025-12-14 16:02:37.442] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\components\ConnectionTester.js:HEAD], removing from cache
+[2025-12-14 16:02:37.442] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\ConnectionTester.js:HEAD] running linter (cache-key:f88487e00b9393a3fba49ac897516996)
+[2025-12-14 16:02:37.444] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:src\components\Dashboard.js:HEAD] already cached, not running linter
+[2025-12-14 16:02:37.445] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\components\ManualControls.js:HEAD], removing from cache
+[2025-12-14 16:02:37.445] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\ManualControls.js:HEAD] running linter (cache-key:d307ef770a7e812e3f1b9f5c22cf6fd2)
+[2025-12-14 16:02:37.447] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\components\RoomManager.js:HEAD], removing from cache
+[2025-12-14 16:02:37.447] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\components\RoomManager.js:HEAD] running linter (cache-key:a917a3c13da24fc985fc10ae94ce5f9a)
+[2025-12-14 16:02:37.449] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\lib\AppContext.js:HEAD], removing from cache
+[2025-12-14 16:02:37.450] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\lib\AppContext.js:HEAD] running linter (cache-key:334726b8fb3d4cf65a60b8a66346432d)
+[2025-12-14 16:02:37.450] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\lib\supabase.js:HEAD], removing from cache
+[2025-12-14 16:02:37.450] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\lib\supabase.js:HEAD] running linter (cache-key:916546bad659bf0c8fa4c67734ff8bfa)
+[2025-12-14 16:02:37.451] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\main.js:HEAD], removing from cache
+[2025-12-14 16:02:37.451] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\main.js:HEAD] running linter (cache-key:14cad252e09528b3af1abf128d57ad8c)
+[2025-12-14 16:02:37.452] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\types\index.js:HEAD], removing from cache
+[2025-12-14 16:02:37.452] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\types\index.js:HEAD] running linter (cache-key:42e9f6ca877c4192d09054148293c605)
+[2025-12-14 16:02:37.453] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\utils\auth.js:HEAD], removing from cache
+[2025-12-14 16:02:37.453] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\utils\auth.js:HEAD] running linter (cache-key:a247d45e9353478f0b16f1bda4eed586)
+[2025-12-14 16:02:37.454] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\utils\ha-api.js:HEAD], removing from cache
+[2025-12-14 16:02:37.454] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\utils\ha-api.js:HEAD] running linter (cache-key:690b0c522543a119dad4547a2720cc81)
+[2025-12-14 16:02:37.455] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\utils\ha-websocket.js:HEAD], removing from cache
+[2025-12-14 16:02:37.455] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\utils\ha-websocket.js:HEAD] running linter (cache-key:61af8aff814cd4b6ba7517c39a1063b8)
+[2025-12-14 16:02:37.456] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:src\utils\home-assistant.js:HEAD], removing from cache
+[2025-12-14 16:02:37.456] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:src\utils\home-assistant.js:HEAD] running linter (cache-key:a11e3c8ae3c268269fc70c1b1c24bccd)
+[2025-12-14 16:02:39.029] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:39.030] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:39.123] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\index-CkxfKKdY.js:HEAD] running linter (cache-key:3d65e9bbd5de73ed5eeeb54d7c4890bd)
+[2025-12-14 16:02:39.123] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:dist\assets\index-yRR60nkO.css:HEAD], removing from cache
+[2025-12-14 16:02:39.124] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\index-yRR60nkO.css:HEAD] running linter (cache-key:b2712840717c43a5c3e3f93f034e8543)
+[2025-12-14 16:02:39.124] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-BcHjcMI_.js:HEAD] running linter (cache-key:538b2d393b5eb98280baebb6650fbc48)
+[2025-12-14 16:02:39.124] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-COMqcutZ.js:HEAD] running linter (cache-key:d98ee4dc0184a4af6c24f1686d44a00d)
+[2025-12-14 16:02:39.124] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\assets\web-Cd39MnTs.js:HEAD] running linter (cache-key:80d08584959d307e54c6e9f7b5e8aedb)
+[2025-12-14 16:02:39.124] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\index.html:HEAD] running linter (cache-key:fa0466903875ef0417e13fbfb09b4cbb)
+[2025-12-14 16:02:39.125] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:dist\manifest.json:HEAD], removing from cache
+[2025-12-14 16:02:39.125] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\manifest.json:HEAD] running linter (cache-key:0cb116493eb31439b1e92bb1069739f2)
+[2025-12-14 16:02:39.125] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:dist\sw.js:HEAD], removing from cache
+[2025-12-14 16:02:39.125] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:dist\sw.js:HEAD] running linter (cache-key:2f327c237b15dc91df28a259d7a7af7c)
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.176] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:39.240] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:src\App.js... (16 files):HEAD] Linter ran in 1710ms
+[2025-12-14 16:02:40.542] [global] [info] [git_source_control.cc:517] Computing merge base between 78539538ca4282c1f3cf42d3584b97e73bdedeb7 and 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:40.542] [global] [info] [git_source_control.cc:519] Resolved divergent commit as 78539538ca4282c1f3cf42d3584b97e73bdedeb7
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\trufflehog\3.92.3-1cfbe64db1a40343dc16e8ce20c499f6/Scripts\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.bat // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3 // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.687] [global] [warning] [resolve_binary.cc:46] is_regular_file check failed for for C:\Users\jensv\AppData\Local\trunk\tools\python\3.10.8-2211cb108575de2785d77a26a1f8d070/bin\python3.exe // 3:Het systeem kan het opgegeven pad niet vinden.
+[2025-12-14 16:02:40.834] [global] [info] [cache.cc:1117] [monitor] [trufflehog:lint:dist\assets\index-CkxfKKdY.js... (8 files):HEAD] Linter ran in 1647ms
+[2025-12-14 16:02:41.021] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.gitignore:HEAD], removing from cache
+[2025-12-14 16:02:41.021] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.gitignore:HEAD] running linter (cache-key:7576b7b315ac7245ab8238ba6caf1059)
+[2025-12-14 16:02:41.021] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\.gitignore:HEAD], removing from cache
+[2025-12-14 16:02:41.022] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\.gitignore:HEAD] running linter (cache-key:2bd2399edea0c2e13649ef9708729e3e)
+[2025-12-14 16:02:41.022] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\AndroidProjectSystem.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.022] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\AndroidProjectSystem.xml:HEAD] running linter (cache-key:10c955e70c1c0c10e6e582e66276fd4a)
+[2025-12-14 16:02:41.023] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\compiler.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.023] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\compiler.xml:HEAD] running linter (cache-key:24cd1d67bdda99d8c0a2808e4b760428)
+[2025-12-14 16:02:41.023] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\deploymentTargetSelector.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.024] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_23.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.024] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\deploymentTargetSelector.xml:HEAD] running linter (cache-key:58a14a957c73f8c23a6876c566515e63)
+[2025-12-14 16:02:41.025] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_23.txt:HEAD] running linter (cache-key:8ccdc7fd594193f0e94d07d0e56f5b58)
+[2025-12-14 16:02:41.025] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\migrations.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.026] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_24.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.026] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\migrations.xml:HEAD] running linter (cache-key:4cd749886a3e43e9ee4615103598dbe9)
+[2025-12-14 16:02:41.026] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_24.txt:HEAD] running linter (cache-key:5e948d44facbc2acdbb5f37958e23b86)
+[2025-12-14 16:02:41.026] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\misc.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.027] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_25.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.027] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\misc.xml:HEAD] running linter (cache-key:64557ef7111b94f5a89e07047249c42d)
+[2025-12-14 16:02:41.027] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_25.txt:HEAD] running linter (cache-key:d144f7863daf1e05a6e3b856839c70d4)
+[2025-12-14 16:02:41.028] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\.idea\runConfigurations.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.028] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_26.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.029] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\.idea\runConfigurations.xml:HEAD] running linter (cache-key:5b548bad826fcf5fea5471657b82c361)
+[2025-12-14 16:02:41.029] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_26.txt:HEAD] running linter (cache-key:beeb42761d1acb3dee653f8d1024881e)
+[2025-12-14 16:02:41.029] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\.gitignore:HEAD], removing from cache
+[2025-12-14 16:02:41.030] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_28.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.030] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\.gitignore:HEAD] running linter (cache-key:d0e67efb29b808ebe0dc05d2379db816)
+[2025-12-14 16:02:41.030] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_28.txt:HEAD] running linter (cache-key:56bffba14af92c423266d10a2ebe81c6)
+[2025-12-14 16:02:41.031] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_29.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.031] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\build.gradle:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.032] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_3.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.032] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\app\capacitor.build.gradle:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.032] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_3.txt:HEAD] running linter (cache-key:46af9625ecce9b63bc526cfd4828a17b)
+[2025-12-14 16:02:41.033] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\proguard-rules.pro:HEAD], removing from cache
+[2025-12-14 16:02:41.034] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_30.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.034] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\proguard-rules.pro:HEAD] running linter (cache-key:f164cb1097e02ff7fa9237bc37d7e383)
+[2025-12-14 16:02:41.034] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_31.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.035] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\androidTest\java\com\getcapacitor\myapp\ExampleInstrumentedTest.java:HEAD], removing from cache
+[2025-12-14 16:02:41.035] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_33.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.035] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\androidTest\java\com\getcapacitor\myapp\ExampleInstrumentedTest.java:HEAD] running linter (cache-key:e63380a4ed61e291be1336a87666388c)
+[2025-12-14 16:02:41.036] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_34.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.036] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\AndroidManifest.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.037] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_35.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.037] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\AndroidManifest.xml:HEAD] running linter (cache-key:e532cc8d17b44a35bdebbbb426385047)
+[2025-12-14 16:02:41.038] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_36.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.038] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\java\com\aiha\app\MainActivity.java:HEAD], removing from cache
+[2025-12-14 16:02:41.039] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_37.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.039] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\java\com\aiha\app\MainActivity.java:HEAD] running linter (cache-key:387827012a1bcbfad01f39b740f12728)
+[2025-12-14 16:02:41.039] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_38.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.040] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable\ic_launcher_background.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.040] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_39.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.041] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\ic_launcher_background.xml:HEAD] running linter (cache-key:a6b2546b1e7d2061275201a87f2d84de)
+[2025-12-14 16:02:41.041] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_4.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.042] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.042] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_4.txt:HEAD] running linter (cache-key:d6a9dcd2468081f4bff8e341a9adb698)
+[2025-12-14 16:02:41.042] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable\splash.png:HEAD] running linter (cache-key:1f72b9481101af47ed0e75d0782b7067)
+[2025-12-14 16:02:41.043] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_40.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.043] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-hdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.044] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\build_log_41.txt:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.044] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-hdpi\splash.png:HEAD] running linter (cache-key:1515444cad493c4ff5a8e8ea1c73d754)
+[2025-12-14 16:02:41.044] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_42.txt:HEAD] running linter (cache-key:0b984a137efe61381d80e87f433f00ef)
+[2025-12-14 16:02:41.045] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-mdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.045] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_5.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.045] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-mdpi\splash.png:HEAD] running linter (cache-key:943347402c7ae088b558c65e1a9c4e65)
+[2025-12-14 16:02:41.045] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_5.txt:HEAD] running linter (cache-key:0351032ee5d75ba8495184477a0a4392)
+[2025-12-14 16:02:41.046] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.047] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_6.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.047] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xhdpi\splash.png:HEAD] running linter (cache-key:2c43b8743c0824c37870c7cd6f22ceb7)
+[2025-12-14 16:02:41.047] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_6.txt:HEAD] running linter (cache-key:f2c652e4780cf25e7319a8fceedc0a5f)
+[2025-12-14 16:02:41.047] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.048] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_7.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.048] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxhdpi\splash.png:HEAD] running linter (cache-key:8a70f8665ac8f0d4f62b4c2defd80fb3)
+[2025-12-14 16:02:41.048] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_7.txt:HEAD] running linter (cache-key:c1ea89c70797f7cbbd70587dd8446b07)
+[2025-12-14 16:02:41.049] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxxhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.049] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_8.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.050] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-land-xxxhdpi\splash.png:HEAD] running linter (cache-key:dd6794a578b8f083c112fbb22618b030)
+[2025-12-14 16:02:41.050] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_8.txt:HEAD] running linter (cache-key:8e7351961b52f8b567cdd482bdd5fc72)
+[2025-12-14 16:02:41.051] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-hdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.051] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\build_log_9.txt:HEAD], removing from cache
+[2025-12-14 16:02:41.052] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-hdpi\splash.png:HEAD] running linter (cache-key:3f0d95a5f2f2462bc16f64d0fb619b95)
+[2025-12-14 16:02:41.052] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\build_log_9.txt:HEAD] running linter (cache-key:4ed1c6d0a332846513d46d78a53ae9ce)
+[2025-12-14 16:02:41.052] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-mdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.053] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\capacitor.settings.gradle:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.053] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-mdpi\splash.png:HEAD] running linter (cache-key:f5e3b55da71961969b471dc82ca93899)
+[2025-12-14 16:02:41.054] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\gradle\wrapper\gradle-wrapper.jar:HEAD], removing from cache
+[2025-12-14 16:02:41.054] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.054] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xhdpi\splash.png:HEAD] running linter (cache-key:951066b7fdeab6f7f61ed590f4f01c17)
+[2025-12-14 16:02:41.055] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\gradle\wrapper\gradle-wrapper.jar:HEAD] running linter (cache-key:b21b42cd30bfd199e8b64e8f404f30d5)
+[2025-12-14 16:02:41.055] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.056] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\gradle\wrapper\gradle-wrapper.properties:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.056] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxhdpi\splash.png:HEAD] running linter (cache-key:4a85077d5194f79491f8c782abbf6f98)
+[2025-12-14 16:02:41.057] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\gradle.properties:HEAD], removing from cache
+[2025-12-14 16:02:41.057] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxxhdpi\splash.png:HEAD], removing from cache
+[2025-12-14 16:02:41.057] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\gradle.properties:HEAD] running linter (cache-key:3311dbb2b1e850e558b95c0de5a54004)
+[2025-12-14 16:02:41.058] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-port-xxxhdpi\splash.png:HEAD] running linter (cache-key:8259fbefcd4125f9ccec1f0e6213eb0a)
+[2025-12-14 16:02:41.058] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\gradlew:HEAD], removing from cache
+[2025-12-14 16:02:41.059] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\drawable-v24\ic_launcher_foreground.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.059] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\gradlew:HEAD] running linter (cache-key:4567472092428f61ce240c67c14caed4)
+[2025-12-14 16:02:41.059] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\drawable-v24\ic_launcher_foreground.xml:HEAD] running linter (cache-key:37ff08a55b5448455390c89b4938ee97)
+[2025-12-14 16:02:41.059] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\gradlew.bat:HEAD], removing from cache
+[2025-12-14 16:02:41.060] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\layout\activity_main.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.060] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\gradlew.bat:HEAD] running linter (cache-key:65aaad1090e46c204a9a25c9ad4de7f6)
+[2025-12-14 16:02:41.060] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\layout\activity_main.xml:HEAD] running linter (cache-key:fe802440cdfdfcd7fa4c82e768948632)
+[2025-12-14 16:02:41.061] [global] [info] [cache.cc:934] [monitor] [trufflehog:lint:android\settings.gradle:HEAD] already cached, not running linter
+[2025-12-14 16:02:41.061] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.062] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\variables.gradle:HEAD], removing from cache
+[2025-12-14 16:02:41.062] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher.xml:HEAD] running linter (cache-key:f72fa3f3ef20e8319c5dd8d8ae04f46a)
+[2025-12-14 16:02:41.062] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\variables.gradle:HEAD] running linter (cache-key:c9a846367812113ccf07264ba4df6010)
+[2025-12-14 16:02:41.063] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher_round.xml:HEAD], removing from cache
+[2025-12-14 16:02:41.063] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-anydpi-v26\ic_launcher_round.xml:HEAD] running linter (cache-key:4fb457eca2584213482a5aad53053329)
+[2025-12-14 16:02:41.064] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher.png:HEAD], removing from cache
+[2025-12-14 16:02:41.064] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher.png:HEAD] running linter (cache-key:a62e64871adf3018e5462db7c154e4f7)
+[2025-12-14 16:02:41.064] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_foreground.png:HEAD], removing from cache
+[2025-12-14 16:02:41.064] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_foreground.png:HEAD] running linter (cache-key:94c0522043b4f9c4c0cfc1f875eb145b)
+[2025-12-14 16:02:41.065] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_round.png:HEAD], removing from cache
+[2025-12-14 16:02:41.065] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-hdpi\ic_launcher_round.png:HEAD] running linter (cache-key:3b853dc500ffeea1644c63fd6660b15b)
+[2025-12-14 16:02:41.066] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher.png:HEAD], removing from cache
+[2025-12-14 16:02:41.066] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher.png:HEAD] running linter (cache-key:b7439dda212b3c44b6ea770e7cab0226)
+[2025-12-14 16:02:41.066] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_foreground.png:HEAD], removing from cache
+[2025-12-14 16:02:41.066] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_foreground.png:HEAD] running linter (cache-key:57a5627d12f4317bab1acea760b9373b)
+[2025-12-14 16:02:41.067] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_round.png:HEAD], removing from cache
+[2025-12-14 16:02:41.067] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-mdpi\ic_launcher_round.png:HEAD] running linter (cache-key:e81db37d71422c7cf90df2d5485b2d2a)
+[2025-12-14 16:02:41.068] [global] [info] [cache.cc:939] Unable to deserialize [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher.png:HEAD], removing from cache
+[2025-12-14 16:02:41.068] [global] [info] [cache.cc:974] [monitor] [trufflehog:lint:android\app\src\main\res\mipmap-xhdpi\ic_launcher.png:HEAD] running linter (cache-key:0afa3ed658663ef3c9db2ea15ec81898)

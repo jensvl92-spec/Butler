@@ -1,0 +1,14 @@
+action_id: trunk-upgrade-available
+date: 2025-12-14 05:24:03
+run: trunk upgrade --notify --allow-daemon-start=false
+run_from: ""
+trigger: schedule 1h
+result:
+  exit_code: 2
+  out: "\x1b[1m\x1b[31m✖ Trunk Internal Error: Please report this issue at https://slack.trunk.io (reference id: b9255ac0bcb146870591784de89ec501)\x1b[0m\r\n"
+  err: ""
+timestamp: 1765689843
+full_timestamp:
+  nanos: 221009000
+  seconds: 1765689843
+trunk_version: 1.25.0

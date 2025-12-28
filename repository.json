@@ -1,0 +1,8 @@
+{
+    "name": "Butler Smart Home",
+    "url": "https://github.com/jensv/Butler",
+    "maintainer": "Jens",
+    "addons": [
+        "butler_crew"
+    ]
+}
