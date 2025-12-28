@@ -251,12 +251,7 @@ function App() {
   return (
     <div className="app-container" style={{ flexDirection: 'column' }}>
       {/* Setup Wizard (One-Click Install) */}
-      {activeConnection && (
-        <ProxySetupWizard
-          activeConnection={activeConnection}
-          onComplete={() => { logger.info("Setup Wizard Complete") }}
-        />
-      )}
+
       {/* Global Header (Restored) */}
       <header className="app-header" style={{
         display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0
@@ -373,7 +368,7 @@ function App() {
               onMouseDown={(e) => handleResizeStart(e.clientY)}
               onTouchStart={(e) => handleResizeStart(e.touches[0].clientY)}
             >
-              <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px' }} />
+              <div className="handle-bar" />
             </div>
           </div>
         </div>
@@ -381,6 +376,14 @@ function App() {
 
         {/* Room Tiles Dashboard */}
         <div className="dashboard">
+          {/* Setup Wizard (Relocated to Dashboard for mobile visibility below AI) */}
+          {activeConnection && (
+            <ProxySetupWizard
+              activeConnection={activeConnection}
+              onComplete={() => { logger.info("Setup Wizard Complete") }}
+            />
+          )}
+
           {activeConnection && <Dashboard ref={dashboardRef} />}
 
           {!activeConnection && (

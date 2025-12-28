@@ -8,7 +8,7 @@ interface Props {
     onComplete: () => void;
 }
 
-type SetupStatus = 'checking' | 'missing' | 'stopped' | 'running' | 'installing' | 'configuring' | 'starting' | 'error';
+type SetupStatus = 'checking' | 'missing' | 'stopped' | 'running' | 'installing' | 'configuring' | 'starting' | 'error' | 'permission_denied';
 
 export const ProxySetupWizard: React.FC<Props> = ({ activeConnection, onComplete }) => {
     const [status, setStatus] = useState<SetupStatus>('checking');
@@ -64,8 +64,8 @@ export const ProxySetupWizard: React.FC<Props> = ({ activeConnection, onComplete
                 // Fallback: If 403/401, maybe show manual instructions?
                 // For now, assume Not Found or Error
                 if (e.message.includes('401') || e.message.includes('403')) {
-                    setErrorMsg("Permission Denied. Are you an Admin?");
-                    setStatus('error');
+                    // Non-admin user cannot check status via Supervisor API
+                    setStatus('permission_denied');
                 } else {
                     // It's possible the slug is different or repo not added, assume missing if 404
                     setStatus('missing');
@@ -75,7 +75,14 @@ export const ProxySetupWizard: React.FC<Props> = ({ activeConnection, onComplete
     };
 
     useEffect(() => {
-        checkStatus();
+        // Check if user previously dismissed/installed
+        const installed = localStorage.getItem('butler_proxy_installed');
+        if (installed === 'true') {
+            setStatus('running'); // Pretend it's running to hide logic (or use a new 'hidden' state)
+            onComplete();
+        } else {
+            checkStatus();
+        }
     }, [activeConnection]);
 
     const handleInstall = async () => {
@@ -146,7 +153,7 @@ export const ProxySetupWizard: React.FC<Props> = ({ activeConnection, onComplete
         }
     };
 
-    if (status === 'running' || status === 'checking') return null; // Invisible if good
+    if (status === 'running') return null; // Only hide if running/installed // Invisible if good
 
     return (
         <div style={{
@@ -222,6 +229,78 @@ export const ProxySetupWizard: React.FC<Props> = ({ activeConnection, onComplete
                     <span>⚠️</span>
                     <span>{errorMsg}</span>
                     <button onClick={checkStatus} style={{ marginLeft: 'auto', background: 'none', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }}>Retry</button>
+                </div>
+            )}
+
+            {status === 'permission_denied' && (
+                <div>
+                    <div style={{
+                        background: 'rgba(255, 193, 7, 0.1)',
+                        border: '1px solid rgba(255, 193, 7, 0.3)',
+                        borderRadius: '8px',
+                        padding: '12px',
+                        marginBottom: '16px'
+                    }}>
+                        <p style={{ margin: '0 0 8px 0', fontSize: '0.9rem', fontWeight: 600, color: 'var(--warning-text, #b45309)' }}>
+                            ⚠️ Admin Access Required
+                        </p>
+                        <p style={{ margin: 0, fontSize: '0.85rem', opacity: 0.9 }}>
+                            We couldn't check if "Butler Crew" is installed because your user is not an Admin.
+                            The app cannot auto-install the add-on for you.
+                        </p>
+                    </div>
+
+                    <p style={{ fontSize: '0.85rem', marginBottom: '16px', opacity: 0.8 }}>
+                        If the add-on is already installed and running, you can skip this check.
+                    </p>
+
+                    <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                                onClick={checkStatus}
+                                style={{
+                                    flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
+                                    background: 'var(--primary)', color: 'white', fontWeight: 500, cursor: 'pointer'
+                                }}
+                            >
+                                Retry Check
+                            </button>
+                            <button
+                                onClick={() => {
+                                    localStorage.setItem('butler_proxy_installed', 'true');
+                                    setStatus('running');
+                                    onComplete();
+                                }}
+                                style={{
+                                    flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)',
+                                    background: 'transparent', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer'
+                                }}
+                            >
+                                I have installed it
+                            </button>
+                        </div>
+
+                        <div style={{
+                            marginTop: '16px',
+                            padding: '12px',
+                            background: 'var(--bg-secondary)',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border)'
+                        }}>
+                            <p style={{ fontWeight: 600, fontSize: '0.9rem', marginTop: 0 }}>Step-by-Step Manual Installation:</p>
+                            <ol style={{ fontSize: '0.85rem', paddingLeft: '20px', lineHeight: '1.5', margin: '8px 0' }}>
+                                <li>Open <b>Settings</b> in Home Assistant.</li>
+                                <li>Go to <b>Add-ons</b> &gt; <b>Add-on Store</b>.</li>
+                                <li>Click the three dots (top right) &gt; <b>Repositories</b>.</li>
+                                <li>Paste this URL: <br /><code style={{ userSelect: 'all', background: 'rgba(0,0,0,0.1)', padding: '2px 4px', borderRadius: '4px' }}>https://github.com/jensvl92-spec/Butler</code></li>
+                                <li>Click <b>Add</b>. Then close the dialog.</li>
+                                <li>Refresh the page (F5).</li>
+                                <li>Search for "Butler Crew" and click <b>Install</b>.</li>
+                                <li>Once installed, click <b>Start</b>.</li>
+                                <li>Enable "Show in sidebar" and "Watchdog" if desired.</li>
+                            </ol>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

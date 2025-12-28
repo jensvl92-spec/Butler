@@ -278,6 +278,72 @@ async def search_memory(query: str) -> str:
         output.append(f"- {r['text']}")
     return "\n".join(output)
 
+# --- PROPOSAL TOOLS ---
+
+@mcp.tool()
+async def deny_proposal(proposal_text: str, reason: str = "") -> str:
+    """
+    Records a denied automation proposal to prevent repetition.
+    Call this when the user rejects an idea.
+    """
+    # Check if exists first (simple check)
+    existing = search_engine.search_memories(proposal_text, top_k=1, threshold=0.9)
+    
+    if existing and existing[0].get("metadata", {}).get("type") == "denied_proposal":
+        # Increment count
+        entry = existing[0]
+        meta = entry.get("metadata", {})
+        count = meta.get("count", 1) + 1
+        meta["count"] = count
+        meta["last_denied"] = time.time()
+        
+        # In a real database we'd update. Here we append a new one or modify in place?
+        # MemoryStore is list-based in memory.
+        # Let's just find it in the list and update.
+        for m in memory_store.memories:
+            if m["id"] == entry["id"]:
+                m["metadata"] = meta
+                memory_store._persist()
+                return f"Proposal denied count incremented to {count}."
+
+    # New denial
+    meta = {
+        "type": "denied_proposal",
+        "reason": reason,
+        "count": 1,
+        "created_at": time.time()
+    }
+    memory_store.save_fact(proposal_text, metadata=meta)
+    
+    # Re-index
+    if search_engine.is_ready:
+        search_engine.index_memories()
+        
+    return f"Proposal '{proposal_text}' recorded as denied."
+
+@mcp.tool()
+async def check_denied_proposals(proposal_text: str) -> str:
+    """
+    Checks if a similar automation has been denied before.
+    Returns 'ALLOWED' or 'REJECTED: <reason>'.
+    """
+    results = search_engine.search_memories(proposal_text, top_k=3, threshold=0.85)
+    
+    for r in results:
+        meta = r.get("metadata", {})
+        if meta.get("type") == "denied_proposal":
+            count = meta.get("count", 1)
+            reason = meta.get("reason", "No reason given")
+            
+            # Policy: If denied 3+ times, hard reject.
+            # If denied < 3 times, warn but allow? Or just report previous denial.
+            if count >= 3:
+                return f"REJECTED: Denied {count} times previously. Reason: {reason}"
+            else:
+                 return f"WARNING: This was denied {count} times before ({reason}). Proceed with caution."
+                 
+    return "ALLOWED"
+
 # --- DOMAIN REGISTRY TOOLS (The 'Type-First' Accessors) ---
 
 def _filter_entities(domain: str, room: Optional[str] = None) -> List[Dict[str, Any]]:

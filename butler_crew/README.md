@@ -13,6 +13,7 @@ A CrewAI-powered multi-agent system for intelligent Home Assistant control.
 | **Automation Engineer** | Invents new automations |
 | **Analyzer Expert** | Pattern analysis |
 | **Proposal Validator** | Filters denied proposals |
+| **Personal Assistant** | Manage Calendar, Email, Navigation, Music, and Tasks |
 
 ## Quick Start
 
