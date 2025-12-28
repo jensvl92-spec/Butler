@@ -118,10 +118,23 @@ export function useAIChatLogic() {
             };
             logger.info("📤 Payload Preview:", JSON.stringify(payload).substring(0, 500) + "...");
 
-            const res = await fetch(`${SUPABASE_URL}/functions/v1/process-ai-command`, {
+            // Construct Local Butler API URL from HA Connection (Port 8000)
+            let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Fallback
+            if (activeConnection.api_url) {
+                try {
+                    const haUrl = new URL(activeConnection.api_url);
+                    // Use same protocol and hostname, but switch port to 8000
+                    butlerApiUrl = `${haUrl.protocol}//${haUrl.hostname}:8000/process`;
+                } catch (e) {
+                    logger.warn("Failed to parse HA URL, using fallback", { url: activeConnection.api_url });
+                }
+            }
+
+            logger.info(`🌐 Sending to Local Butler: ${butlerApiUrl}`);
+
+            const res = await fetch(butlerApiUrl, {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(payload)
