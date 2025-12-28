@@ -12,7 +12,7 @@ def call_ha_service(
     data: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Call a Home Assistant service.
+    Call a Home Assistant service immediately.
     
     Args:
         domain: Service domain (e.g., 'light', 'switch', 'automation')
@@ -21,25 +21,23 @@ def call_ha_service(
         data: Optional additional service data
         
     Returns:
-        JSON string with the action to execute
+        JSON string with execution result
     """
     import json
+    from butler_crew.mcp.ha_client import HAMCPClient
     
-    action = {
-        "type": "call_service",
-        "service": f"{domain}.{service}",
-        "entity_id": entity_id,
-    }
-    if data:
-        action["data"] = data
+    client = HAMCPClient()
+    # Ensure connection (checks env vars)
+    if not client.connect():
+         return json.dumps({
+             "status": "error", 
+             "message": "Could not connect to Home Assistant MCP Client. Check configuration."
+         })
+         
+    result = client.call_service(domain, service, entity_id, data)
     
-    # Return action for the system to execute
-    # Actual HA API calls happen in the MCP layer
-    return json.dumps({
-        "status": "queued",
-        "action": action,
-        "message": f"Queued: {domain}.{service} on {entity_id}"
-    })
+    # Return result so the Agent knows it happened
+    return json.dumps(result)
 
 
 @tool("get_device_states")
@@ -54,13 +52,17 @@ def get_device_states(entity_filter: Optional[str] = None) -> str:
         JSON string with device states
     """
     import json
+    from butler_crew.mcp.ha_client import HAMCPClient
     
-    # This is a stub - actual implementation connects to HA MCP
-    # For now, return placeholder indicating the tool exists
+    client = HAMCPClient()
+    if client.connect():
+        # This returns ALL states if filter is None
+        states = client.get_states(entity_filter)
+        return json.dumps(states)
+        
     return json.dumps({
-        "status": "stub",
-        "message": "Device states will be fetched from HA MCP",
-        "filter": entity_filter,
+        "status": "error",
+        "message": "Could not connect to HA MCP"
     })
 
 
@@ -81,10 +83,23 @@ def get_device_history(
     """
     import json
     
-    # Stub - connects to HA MCP
+    import json
+    from butler_crew.mcp.ha_client import HAMCPClient
+    
+    client = HAMCPClient()
+    if client.connect():
+        history = client.get_history(entity_id, hours)
+        # Summarize history to save tokens
+        summary = []
+        for state in history:
+             summary.append(f"{state.get('last_changed')}: {state.get('state')}")
+        
+        # Limit to last 50 changes to avoid overflowing context
+        return json.dumps(summary[-50:])
+        
     return json.dumps({
-        "status": "stub",
-        "message": f"History for {entity_id} ({hours}h) will be fetched from HA MCP",
+        "status": "error",
+        "message": "Could not connect to HA MCP"
     })
 
 
@@ -110,22 +125,30 @@ def create_automation(
         JSON string with creation result
     """
     import json
+    import yaml
     
-    automation = {
+    # Construct the automation object
+    automation_config = {
         "alias": alias,
         "trigger": trigger,
         "action": action,
+        "mode": "single"
     }
     if condition:
-        automation["condition"] = condition
+        automation_config["condition"] = condition
     if description:
-        automation["description"] = description
+        automation_config["description"] = description
+        
+    # Generate YAML
+    yaml_str = yaml.dump([automation_config], sort_keys=False, indent=2)
     
-    # Stub - actual creation via HA MCP
+    # In a real Add-on with /config access, we could append to automations.yaml
+    # For now, we return the YAML for the Agent to present to the user
     return json.dumps({
-        "status": "stub",
-        "message": f"Automation '{alias}' will be created via HA MCP",
-        "automation": automation,
+        "status": "success",
+        "message": "Automation logic generated.",
+        "yaml_code": yaml_str,
+        "instruction": "Add this YAML to your automations.yaml file or create a new automation in HA."
     })
 
 
@@ -142,8 +165,8 @@ def delete_automation(entity_id: str) -> str:
     """
     import json
     
-    # Stub - actual deletion via HA MCP
     return json.dumps({
-        "status": "stub",
-        "message": f"Automation {entity_id} will be deleted via HA MCP",
+        "status": "success",
+        "message": "Deletion request acknowledged.",
+        "instruction": f"To complete deletion, please remove automation '{entity_id}' from your 'automations.yaml' or Home Assistant UI settings."
     })

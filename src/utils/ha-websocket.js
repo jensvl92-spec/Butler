@@ -179,6 +179,7 @@ export class HAWebSocket {
         }
         if (message.type === 'auth_ok') {
             this.authenticated = true;
+            import('./logger').then(({ logger }) => logger.info('✅ Auth OK - Re-subscribing & Refreshing State'));
             this.subscribeStateChanges();
             this.flushQueue();
             if (this.onReady)

@@ -244,7 +244,7 @@ async def process_command(request: CommandRequest):
             device_context = ""
             if request.devices:
                 device_context = "\n".join(
-                    f"- {d.get('entity_id', 'unknown')}: {d.get('state', 'unknown')}"
+                    f"- {d.get('entity_id', 'unknown')} ({d.get('attributes', {}).get('friendly_name', '')}): {d.get('state', 'unknown')}"
                     for d in request.devices
                 )
             

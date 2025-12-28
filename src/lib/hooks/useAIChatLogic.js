@@ -69,10 +69,10 @@ export function useAIChatLogic() {
         if (!activeConnection || !text.trim())
             return;
         setLoading(true);
+        // 0. Optimistic Update (Show user message immediately)
+        const tempId = Date.now().toString();
         try {
             logger.info("Sending message", { text, connectionId: activeConnection.id });
-            // 0. Optimistic Update (Show user message immediately)
-            const tempId = Date.now().toString();
             const optimisticMsg = {
                 id: tempId,
                 connection_id: activeConnection.id,
@@ -141,16 +141,29 @@ export function useAIChatLogic() {
                 utter.lang = aiData.language === 'nl' ? 'nl-NL' : 'en-US';
                 window.speechSynthesis.speak(utter);
             }
-            // 5. Execute
+            // 5. Execute - DISABLED (Backend executes actions now via MCP)
+            /*
             if (aiData.actions && aiData.actions.length > 0) {
                 logger.info("Executing client-side actions", { count: aiData.actions.length, actions: aiData.actions });
                 await executeActionsClientSide(aiData.actions);
             }
+            */
         }
         catch (e) {
             console.error("AI Error", e);
             logger.error("AI Logic Exception", { message: e.message, stack: e.stack });
-            // Toast.show({ text: `Error: ${e.message}` }); // User requested no toasts
+            // Show error in chat
+            const errorMsg = {
+                id: Date.now().toString(),
+                connection_id: activeConnection.id,
+                user_message: '',
+                ai_response: `⚠️ Error: ${e.message || 'Network failure'}`,
+                language: 'en',
+                actions_taken: [],
+                created_at: new Date().toISOString()
+            };
+            setMessages(prev => prev.map(m => m.id === tempId ? errorMsg : m));
+            addChatMessage(errorMsg);
         }
         finally {
             setLoading(false);

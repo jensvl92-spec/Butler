@@ -52,8 +52,8 @@ export const ProxySetupWizard = ({ activeConnection, onComplete }) => {
                 // Fallback: If 403/401, maybe show manual instructions?
                 // For now, assume Not Found or Error
                 if (e.message.includes('401') || e.message.includes('403')) {
-                    setErrorMsg("Permission Denied. Are you an Admin?");
-                    setStatus('error');
+                    // Non-admin user cannot check status via Supervisor API
+                    setStatus('permission_denied');
                 }
                 else {
                     // It's possible the slug is different or repo not added, assume missing if 404
@@ -63,7 +63,15 @@ export const ProxySetupWizard = ({ activeConnection, onComplete }) => {
         }
     };
     useEffect(() => {
-        checkStatus();
+        // Check if user previously dismissed/installed
+        const installed = localStorage.getItem('butler_proxy_installed');
+        if (installed === 'true') {
+            setStatus('running'); // Pretend it's running to hide logic (or use a new 'hidden' state)
+            onComplete();
+        }
+        else {
+            checkStatus();
+        }
     }, [activeConnection]);
     const handleInstall = async () => {
         try {
@@ -128,8 +136,8 @@ export const ProxySetupWizard = ({ activeConnection, onComplete }) => {
             setStatus('error');
         }
     };
-    if (status === 'running' || status === 'checking')
-        return null; // Invisible if good
+    if (status === 'running')
+        return null; // Only hide if running/installed // Invisible if good
     return (_jsxs("div", { style: {
             margin: '16px',
             padding: '16px',
@@ -149,5 +157,27 @@ export const ProxySetupWizard = ({ activeConnection, onComplete }) => {
                     width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
                     background: 'var(--success)', color: 'white', fontWeight: 600, cursor: 'pointer',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
-                }, children: [_jsx("span", { children: "\u25B6\uFE0F" }), " Start AI Server"] })), (status === 'installing' || status === 'configuring' || status === 'starting') && (_jsxs("div", { style: { textAlign: 'center', padding: '10px' }, children: [_jsxs("div", { style: { fontSize: '0.9rem', marginBottom: '8px' }, children: [status === 'installing' && '📦 Installing Add-on...', status === 'configuring' && '⚙️ Configuring Token...', status === 'starting' && '🚀 Starting Service...'] }), _jsx("div", { style: { width: '100%', height: '6px', background: 'var(--bg-secondary)', borderRadius: '3px', overflow: 'hidden' }, children: _jsx("div", { style: { width: `${progress}%`, height: '100%', background: 'var(--primary)', transition: 'width 0.3s' } }) })] })), status === 'error' && (_jsxs("div", { style: { color: 'var(--error)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }, children: [_jsx("span", { children: "\u26A0\uFE0F" }), _jsx("span", { children: errorMsg }), _jsx("button", { onClick: checkStatus, style: { marginLeft: 'auto', background: 'none', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }, children: "Retry" })] }))] }));
+                }, children: [_jsx("span", { children: "\u25B6\uFE0F" }), " Start AI Server"] })), (status === 'installing' || status === 'configuring' || status === 'starting') && (_jsxs("div", { style: { textAlign: 'center', padding: '10px' }, children: [_jsxs("div", { style: { fontSize: '0.9rem', marginBottom: '8px' }, children: [status === 'installing' && '📦 Installing Add-on...', status === 'configuring' && '⚙️ Configuring Token...', status === 'starting' && '🚀 Starting Service...'] }), _jsx("div", { style: { width: '100%', height: '6px', background: 'var(--bg-secondary)', borderRadius: '3px', overflow: 'hidden' }, children: _jsx("div", { style: { width: `${progress}%`, height: '100%', background: 'var(--primary)', transition: 'width 0.3s' } }) })] })), status === 'error' && (_jsxs("div", { style: { color: 'var(--error)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }, children: [_jsx("span", { children: "\u26A0\uFE0F" }), _jsx("span", { children: errorMsg }), _jsx("button", { onClick: checkStatus, style: { marginLeft: 'auto', background: 'none', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }, children: "Retry" })] })), status === 'permission_denied' && (_jsxs("div", { children: [_jsxs("div", { style: {
+                            background: 'rgba(255, 193, 7, 0.1)',
+                            border: '1px solid rgba(255, 193, 7, 0.3)',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            marginBottom: '16px'
+                        }, children: [_jsx("p", { style: { margin: '0 0 8px 0', fontSize: '0.9rem', fontWeight: 600, color: 'var(--warning-text, #b45309)' }, children: "\u26A0\uFE0F Admin Access Required" }), _jsx("p", { style: { margin: 0, fontSize: '0.85rem', opacity: 0.9 }, children: "We couldn't check if \"Butler Crew\" is installed because your user is not an Admin. The app cannot auto-install the add-on for you." })] }), _jsx("p", { style: { fontSize: '0.85rem', marginBottom: '16px', opacity: 0.8 }, children: "If the add-on is already installed and running, you can skip this check." }), _jsxs("div", { style: { display: 'flex', gap: '8px', flexDirection: 'column' }, children: [_jsxs("div", { style: { display: 'flex', gap: '8px' }, children: [_jsx("button", { onClick: checkStatus, style: {
+                                            flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
+                                            background: 'var(--primary)', color: 'white', fontWeight: 500, cursor: 'pointer'
+                                        }, children: "Retry Check" }), _jsx("button", { onClick: () => {
+                                            localStorage.setItem('butler_proxy_installed', 'true');
+                                            setStatus('running');
+                                            onComplete();
+                                        }, style: {
+                                            flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)',
+                                            background: 'transparent', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer'
+                                        }, children: "I have installed it" })] }), _jsxs("div", { style: {
+                                    marginTop: '16px',
+                                    padding: '12px',
+                                    background: 'var(--bg-secondary)',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--border)'
+                                }, children: [_jsx("p", { style: { fontWeight: 600, fontSize: '0.9rem', marginTop: 0 }, children: "Step-by-Step Manual Installation:" }), _jsxs("ol", { style: { fontSize: '0.85rem', paddingLeft: '20px', lineHeight: '1.5', margin: '8px 0' }, children: [_jsxs("li", { children: ["Open ", _jsx("b", { children: "Settings" }), " in Home Assistant."] }), _jsxs("li", { children: ["Go to ", _jsx("b", { children: "Add-ons" }), " > ", _jsx("b", { children: "Add-on Store" }), "."] }), _jsxs("li", { children: ["Click the three dots (top right) > ", _jsx("b", { children: "Repositories" }), "."] }), _jsxs("li", { children: ["Paste this URL: ", _jsx("br", {}), _jsx("code", { style: { userSelect: 'all', background: 'rgba(0,0,0,0.1)', padding: '2px 4px', borderRadius: '4px' }, children: "https://github.com/jensvl92-spec/Butler" })] }), _jsxs("li", { children: ["Click ", _jsx("b", { children: "Add" }), ". Then close the dialog."] }), _jsx("li", { children: "Refresh the page (F5)." }), _jsxs("li", { children: ["Search for \"Butler Crew\" and click ", _jsx("b", { children: "Install" }), "."] }), _jsxs("li", { children: ["Once installed, click ", _jsx("b", { children: "Start" }), "."] }), _jsx("li", { children: "Enable \"Show in sidebar\" and \"Watchdog\" if desired." })] })] })] })] }))] }));
 };
