@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     jq \
     curl \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies directly
@@ -33,7 +34,7 @@ COPY . /app
 # Set Python Path to include src
 ENV PYTHONPATH=/app/src
 
-# Make the run script executable
-RUN chmod a+x /app/run.sh
+# Make the run script executable and fix line endings
+RUN dos2unix /app/run.sh && chmod a+x /app/run.sh
 
 CMD [ "/app/run.sh" ]
