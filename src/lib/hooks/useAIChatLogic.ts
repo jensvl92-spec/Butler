@@ -118,34 +118,55 @@ export function useAIChatLogic() {
             };
             logger.info("📤 Payload Preview:", JSON.stringify(payload).substring(0, 500) + "...");
 
-            // Construct Local Butler API URL from HA Connection (Port 8000)
-            // FORCE HTTP: The Python backend (uvicorn) does not speak SSL.
+            let aiData: LLMResponse = {} as LLMResponse;
+
+            // DYNAMIC DISCOVERY: Try to find the true local IP via HA Config
+            // This bypasses NAT Loopback issues with DuckDNS URLs
             let butlerApiUrl = 'http://homeassistant.local:8000/process'; // Default fallback
 
-            if (activeConnection.api_url) {
-                try {
+            try {
+                // 1. Try to get Internal URL from HA Config (if we haven't cached it?)
+                // For now, we fetch it every time or reliable fast fetch.
+                // Or better: use the one derived from activeConnection if it IS local, otherwise fetch.
+
+                const isLocalConnection = activeConnection.api_url.includes('192.168') || activeConnection.api_url.includes('.local');
+
+                if (isLocalConnection) {
+                    // If we are already connected via IP, just use that hostname
                     const haUrl = new URL(activeConnection.api_url);
-                    // Use hostname from settings, but FORCE HTTP and Port 8000
                     butlerApiUrl = `http://${haUrl.hostname}:8000/process`;
-                } catch (e) {
-                    logger.warn("Failed to parse HA URL, using fallback", { url: activeConnection.api_url });
+                } else {
+                    // We are on external connection (DuckDNS), try to find internal IP
+                    try {
+                        const configRes = await fetch(`${activeConnection.api_url}/api/config`, {
+                            headers: { 'Authorization': `Bearer ${activeConnection.api_token}` }
+                        });
+                        if (configRes.ok) {
+                            const configData = await configRes.json();
+                            if (configData.internal_url) {
+                                const internalUrl = new URL(configData.internal_url);
+                                butlerApiUrl = `http://${internalUrl.hostname}:8000/process`;
+                                logger.info(`🔍 Discovered Internal HA IP: ${internalUrl.hostname}`);
+                            }
+                        }
+                    } catch (configErr) {
+                        logger.warn("Failed to fetch HA Config for Internal URL", configErr);
+                    }
                 }
+            } catch (setupErr) {
+                logger.warn("URL Discovery Error", setupErr);
             }
 
             logger.info(`🌐 Sending to Local Butler: ${butlerApiUrl}`);
 
-            let aiData: LLMResponse;
-
             try {
                 // Set a timeout for the fetch to avoid infinite hanging
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
                 const res = await fetch(butlerApiUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
                     signal: controller.signal
                 });
@@ -161,23 +182,48 @@ export function useAIChatLogic() {
                 logger.info("📥 Received AI Response", aiData);
 
             } catch (networkError: any) {
-                logger.warn(`⚠️ Primary connection failed: ${networkError.message}. Retrying with fallback...`);
+                logger.warn(`⚠️ Primary connection failed: ${networkError.message}. Retrying with fallbacks...`);
 
-                // FAILOVER: Try http://homeassistant.local:8000 explicitly if the primary failed
-                if (butlerApiUrl.includes('homeassistant.local')) throw networkError; // Already tried fallback
+                // FAILOVER STRATEGY
+                const fallbacks = [
+                    'http://homeassistant.local:8000/process',
+                    'http://homeassistant:8000/process'
+                ];
 
-                const fallbackUrl = 'http://homeassistant.local:8000/process';
-                logger.info(`🔄 Retrying with Fallback: ${fallbackUrl}`);
+                // If we tried one, don't retry it
+                const uniqueFallbacks = fallbacks.filter(f => f !== butlerApiUrl);
 
-                const res2 = await fetch(fallbackUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+                let success = false;
+                for (const fbUrl of uniqueFallbacks) {
+                    if (success) break;
+                    logger.info(`🔄 Retrying with Fallback: ${fbUrl}`);
+                    try {
+                        const cont2 = new AbortController();
+                        const tm2 = setTimeout(() => cont2.abort(), 5000); // 5s timeout
 
-                if (!res2.ok) throw new Error(`Fallback Error ${res2.status}`);
-                aiData = await res2.json();
-                logger.info("📥 Received AI Response (Fallback)", aiData);
+                        const res2 = await fetch(fbUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                            signal: cont2.signal
+                        });
+                        clearTimeout(tm2);
+
+                        if (res2.ok) {
+                            aiData = await res2.json();
+                            logger.info("📥 Received AI Response (Fallback)", aiData);
+                            success = true;
+                        }
+                    } catch (e) {
+                        logger.warn(`Fallback ${fbUrl} failed.`);
+                    }
+                }
+
+                if (!success) {
+                    // If all local fails, desperate try on External URL (if strictly forwarded)
+                    // But we force HTTP, so external might fail if only HTTPS allowed.
+                    throw new Error("Unable to connect to Butler Crew on any local address.");
+                }
             }
 
 
