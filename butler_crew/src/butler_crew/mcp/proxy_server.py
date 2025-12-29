@@ -455,70 +455,122 @@ async def get_agents(capability: str = None) -> str:
         
     return json.dumps(results, indent=2)
 
-# --- CREWAI INTEGRATION ---
-# NOTE: CrewAI is NOT imported at module level because its FilteredStream
-# causes I/O errors that crash the MCP server. It's lazy-loaded in ask_agent.
+# --- HTTP API WRAPPER ---
+# Exposes MCP tools via HTTP so Supabase Edge Functions can call them remotely
+# This is the bridge that enables remote access via Cloudflare Tunnel
 
-@mcp.tool()
-async def ask_agent(agent_name: str, request: str) -> str:
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Any
+import uvicorn
+
+api = FastAPI(
+    title="Butler MCP Proxy API",
+    description="HTTP wrapper for MCP tools - enables remote access from Supabase Edge Functions",
+    version="1.2.0"
+)
+
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ToolRequest(BaseModel):
+    """Request body for tool calls."""
+    args: Dict[str, Any] = {}
+
+class ToolResponse(BaseModel):
+    """Response from tool calls."""
+    success: bool
+    result: Any = None
+    error: str = None
+
+# Map of tool names to their async functions
+TOOL_REGISTRY = {
+    "sync_with_home_assistant": sync_with_home_assistant,
+    "get_lights": get_lights,
+    "get_switches": get_switches,
+    "get_climate": get_climate,
+    "search_devices": search_devices,
+    "execute_ha_service": execute_ha_service,
+    "save_memory": save_memory,
+    "search_memory": search_memory,
+    "deny_proposal": deny_proposal,
+    "check_denied_proposals": check_denied_proposals,
+    "get_agents": get_agents,
+}
+
+@api.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "version": "1.2.0",
+        "tools_available": list(TOOL_REGISTRY.keys()),
+        "entities_cached": len(INVENTORY["entities"]),
+        "memories_count": len(memory_store.memories),
+        "search_ready": search_engine.is_ready
+    }
+
+@api.get("/tools")
+async def list_tools():
+    """List all available MCP tools."""
+    tools = []
+    for name, func in TOOL_REGISTRY.items():
+        tools.append({
+            "name": name,
+            "description": func.__doc__ or "No description",
+        })
+    return {"tools": tools}
+
+@api.post("/tools/{tool_name}")
+async def call_tool(tool_name: str, request: ToolRequest):
     """
-    Sends a dedicated request to a specific Agent and EXECUTEs it.
-    Args:
-        agent_name: The exact name of the agent (e.g., 'butler', 'personal_assistant').
-        request: The natural language instruction (e.g., 'Check my emails').
+    Call an MCP tool by name with provided arguments.
+    This is the main endpoint Supabase Edge Functions will use.
     """
-    _load_agents()
+    if tool_name not in TOOL_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
     
-    if agent_name not in AGENTS_CACHE:
-        return f"Error: Agent '{agent_name}' not found. Available: {list(AGENTS_CACHE.keys())}"
-    
-    # Lazy-load CrewAI to avoid FilteredStream crash on startup
-    try:
-        from crewai import Crew, Task, Process
-        from butler_crew.crew import ButlerCrew
-    except ImportError as e:
-        logger.warning(f"CrewAI not available: {e}")
-        return f"Error: CrewAI libraries not installed in this environment. Cannot execute {agent_name}."
-
-    logger.info(f"Routing request to agent: {agent_name}")
+    tool_func = TOOL_REGISTRY[tool_name]
     
     try:
-        # 1. Instantiate the Crew wrapper
-        butler_system = ButlerCrew()
-        
-        # 2. Get the specific agent method (e.g., butler_system.personal_assistant())
-        if not hasattr(butler_system, agent_name):
-             return f"Error: Agent '{agent_name}' is defined in YAML but has no matching method in ButlerCrew class."
-        
-        agent_method = getattr(butler_system, agent_name)
-        target_agent = agent_method() # This returns the CrewAI Agent object
-        
-        # 3. Create a direct task for this agent
-        # We create a temporary task just for this request
-        task = Task(
-            description=request,
-            expected_output="A helpful response executing the user's request.",
-            agent=target_agent
-        )
-        
-        # 4. Create a single-agent crew to execute it
-        # We use a sequential process with just one agent
-        single_agent_crew = Crew(
-            agents=[target_agent],
-            tasks=[task],
-            process=Process.sequential,
-            verbose=True
-        )
-        
-        # 5. Kickoff!
-        result = single_agent_crew.kickoff()
-        
-        # 6. Format result
-        return str(result)
-
+        logger.info(f"HTTP Tool Call: {tool_name} with args: {request.args}")
+        result = await tool_func(**request.args)
+        return ToolResponse(success=True, result=result)
     except Exception as e:
-        logger.error(f"Agent Execution Failed: {e}", exc_info=True)
-        return f"Error executing agent {agent_name}: {str(e)}"
+        logger.error(f"Tool '{tool_name}' failed: {e}", exc_info=True)
+        return ToolResponse(success=False, error=str(e))
+
+@api.post("/sync")
+async def sync_endpoint():
+    """Convenience endpoint to trigger HA sync."""
+    result = await sync_with_home_assistant()
+    return {"result": result}
+
+# --- STARTUP ---
+@api.on_event("startup")
+async def startup_event():
+    """Initialize search engine and sync on startup."""
+    logger.info("Starting Butler MCP Proxy Server...")
+    
+    # Initialize search engine
+    if not search_engine.is_ready:
+        search_engine.initialize()
+    
+    # Auto-sync with HA on startup
+    try:
+        await sync_with_home_assistant()
+    except Exception as e:
+        logger.warning(f"Initial sync failed (will retry): {e}")
 
 if __name__ == "__main__":
-    mcp.run()
+    # Run FastAPI server on port 8000
+    # MCP protocol is also available via mcp.run() but we prioritize HTTP for remote access
+    logger.info("Starting Butler MCP Proxy on http://0.0.0.0:8000")
+    uvicorn.run(api, host="0.0.0.0", port=8000, log_level="info")
+

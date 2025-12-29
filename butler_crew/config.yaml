@@ -1,25 +1,24 @@
-name: "Butler Crew Proxy"
-version: "1.1.1"
+name: "Butler MCP Proxy"
+version: "1.2.0"
 slug: "butler_crew"
-description: "AI-Powered Proxy Server interacting with Home Assistant via MCP."
+description: "MCP Proxy Server for Butler AI - provides HA tools via HTTP for remote agent access."
 url: "https://github.com/jensvl92-spec/Butler"
 startup: application
 arch:
   - aarch64
   - amd64
-  - armhf
-  - armv7
-  - i386
 init: false
 map:
   - config:rw
 options:
   mcp_token: ""
   mcp_server_url: "http://homeassistant.local:8123/api/mcp"
+  cloudflare_tunnel_token: ""
   log_level: "info"
 schema:
   mcp_token: str
   mcp_server_url: str
-  log_level: list(debug, info, warning, error)
+  cloudflare_tunnel_token: str?
+  log_level: list(debug|info|warning|error)
 ports:
   8000/tcp: 8000

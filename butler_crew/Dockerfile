@@ -1,6 +1,6 @@
 FROM python:3.11-bookworm
 
-# Install basic tools and dependencies
+# Install basic tools, dependencies, and cloudflared for remote tunnel access
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
@@ -9,16 +9,25 @@ RUN apt-get update && apt-get install -y \
     dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies directly
-# We perform a targeted install to ensure we have exactly what we need for the Proxy
+# Install cloudflared for Cloudflare Tunnel (secure remote access)
+# Detect architecture and download appropriate binary
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o /usr/local/bin/cloudflared; \
+    else \
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared; \
+    fi && \
+    chmod +x /usr/local/bin/cloudflared
+
+# Install Python dependencies
+# NOTE: CrewAI removed - agents now run in Supabase Edge Functions
+# This proxy only provides MCP tools via HTTP
 RUN pip3 install --break-system-packages \
     mcp \
     pyyaml \
     numpy \
     uvicorn \
     fastapi \
-    crewai \
-    langchain \
     pydantic \
     requests \
     httpx \
@@ -30,10 +39,6 @@ WORKDIR /app
 
 # Copy the current directory (butler_crew source) into the container
 COPY . /app
-
-# Install the package itself in editable mode or just use PYTHONPATH
-# Installing dependencies from pyproject.toml if needed, but we relied on manual pip above for speed/caching
-# RUN pip3 install --break-system-packages .
 
 # Set Python Path to include src
 ENV PYTHONPATH=/app/src
