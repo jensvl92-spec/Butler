@@ -19,7 +19,11 @@ RUN pip3 install --break-system-packages \
     fastapi \
     crewai \
     langchain \
-    pydantic
+    pydantic \
+    requests \
+    httpx \
+    fastembed \
+    chromadb
 
 # Create app directory
 WORKDIR /app

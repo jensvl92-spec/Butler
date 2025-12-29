@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Define the config path
 CONFIG_PATH="/data/options.json"
@@ -10,6 +11,9 @@ get_config() {
 }
 
 echo "--- Starting Butler Crew Proxy (Debian) ---"
+echo "Python Version: $(python3 --version)"
+echo "Current Directory: $(pwd)"
+echo "PYTHONPATH: $PYTHONPATH"
 
 # Read configuration
 MCP_TOKEN=$(get_config 'mcp_token')
@@ -24,6 +28,14 @@ export HA_MCP_TOKEN="$MCP_TOKEN"
 export HA_MCP_URL="$MCP_URL"
 export LOG_LEVEL="$LOG_LEVEL"
 
-# Run the Proxy Server module
-# Explicitly using python3
-python3 -m butler_crew.mcp.proxy_server
+# Verify Python modules are importable
+echo "--- Verifying Python imports... ---"
+python3 -c "import mcp; print('✓ mcp')" || echo "X mcp import failed"
+python3 -c "import yaml; print('✓ pyyaml')" || echo "X pyyaml import failed"
+python3 -c "import requests; print('✓ requests')" || echo "X requests import failed"
+python3 -c "from mcp.server.fastmcp import FastMCP; print('✓ FastMCP')" || echo "X FastMCP import failed"
+
+echo "--- Starting Proxy Server... ---"
+
+# Run the Proxy Server module with unbuffered output
+exec python3 -u -m butler_crew.mcp.proxy_server
