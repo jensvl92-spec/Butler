@@ -101,71 +101,60 @@ export function useAIChatLogic() {
                 entity_id: s.entity_id, ...s
             })).filter(d => d.entity_id);
 
-            // 2. Send to Backend
+            // 2. Build payload for Supabase Edge Function
             logger.info("Posting to process-ai-command", { deviceCount: devices.length });
 
-            // LOG PAYLOAD FOR DEBUGGING
+            // Get MCP proxy URL from connection (if configured)
+            const mcpProxyUrl = (activeConnection as any).mcp_proxy_url || undefined;
+
             const payload = {
                 connection_id: activeConnection.id,
                 user_message: text,
                 language: uiState.language || 'en',
                 devices: devices,
-                services: {},
-                rooms: [],
-                execute_server_side: false,
-                active_suggestion: activeSuggestion,
+                mcp_proxy_url: mcpProxyUrl,
                 client_timestamp: new Date().toISOString()
             };
             logger.info("📤 Payload Preview:", JSON.stringify(payload).substring(0, 500) + "...");
 
             let aiData: LLMResponse = {} as LLMResponse;
 
-            if (!haWebSocket) {
-                // If WS is down, show error immediately
-                throw new Error("WebSocket disconnected. Connection to Home Assistant lost.");
-            }
-
-            // EVENT-BASED ARCHITECTURE: Fire Event -> Wait for Response Event
-            // This works Local AND Remote via Home Assistant Event Bus
-            // No opened ports required on user router!
-
-            const responsePromise = new Promise<LLMResponse>((resolve, reject) => {
-                // Subscribe to response event
-                // Note: subscribeEvents typically returns an unsubscribe function.
-                const cleanup = haWebSocket.subscribeEvents('butler_service_response', (evt: any) => {
-                    const data = evt.event_data;
-                    // Check if response matches our connection ID
-                    if (data && data.connection_id === activeConnection.id) {
-                        logger.info("📩 Received Event Response", data);
-                        resolve(data.response);
-                        // TODO: Call cleanup() if available (depends on library version)
-                    }
-                });
-
-                // Timeout 45s (Generative AI is slow)
-                setTimeout(() => {
-                    reject(new Error("Timeout waiting for Butler Response (Event Bus). Is the Add-on running?"));
-                }, 45000);
-            });
-
-            // Fire Request
-            logger.info("🔥 Firing 'butler_service_request' event via WebSocket...");
-            await haWebSocket.sendMessage({
-                type: 'fire_event',
-                event_type: 'butler_service_request',
-                event_data: payload
-            });
+            // SUPABASE-BASED ARCHITECTURE: Call Edge Function directly
+            // This works from anywhere - home or remote
+            // The Edge Function handles all agent orchestration
 
             try {
-                aiData = await responsePromise;
-                logger.info("✅ Event Response Processed", aiData);
-            } catch (err: any) {
-                logger.error("Event Bus Error", err);
-                throw err;
+                logger.info("🚀 Calling Supabase Edge Function...");
+
+                const response = await fetch(`${SUPABASE_URL}/functions/v1/process-ai-command`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Supabase error: ${response.status} - ${errorText}`);
+                }
+
+                aiData = await response.json();
+                logger.info("✅ Supabase Response Received", aiData);
+            } catch (fetchError: any) {
+                logger.error("Supabase call failed", fetchError);
+                throw fetchError;
             }
 
+            // Execute actions via WebSocket if we have a connection
+            if (aiData.actions && aiData.actions.length > 0 && haWebSocket) {
+                logger.info("🎯 Executing actions via WebSocket", { count: aiData.actions.length });
+                await executeActionsClientSide(aiData.actions);
+            }
 
-            logger.info("📥 Received AI Response", aiData); // This logs full object to Debug Tile
+            logger.info("📥 Received AI Response", aiData);
+            // This logs full object to Debug Tile
 
             // Log explicitly if actions are missing (but only if NO scheduled tasks either)
             const hasScheduled = (aiData.scheduled_tasks && aiData.scheduled_tasks > 0) || (aiData.scheduled_actions && aiData.scheduled_actions.length > 0);

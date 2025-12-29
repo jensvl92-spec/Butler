@@ -566,11 +566,22 @@ async def startup_event():
     try:
         await sync_with_home_assistant()
     except Exception as e:
-        logger.warning(f"Initial sync failed (will retry): {e}")
+        logger.warning(f"Initial HA sync failed (will retry): {e}")
+    
+    # Sync to Supabase for remote AI access
+    try:
+        from butler_crew.services.supabase_sync import initial_sync, start_background_sync
+        logger.info("Starting Supabase sync...")
+        await initial_sync()
+        await start_background_sync()
+        logger.info("Supabase sync started (every 5 min)")
+    except ImportError:
+        logger.info("Supabase sync not available (missing config)")
+    except Exception as e:
+        logger.warning(f"Supabase sync failed: {e}")
 
 if __name__ == "__main__":
     # Run FastAPI server on port 8000
     # MCP protocol is also available via mcp.run() but we prioritize HTTP for remote access
     logger.info("Starting Butler MCP Proxy on http://0.0.0.0:8000")
     uvicorn.run(api, host="0.0.0.0", port=8000, log_level="info")
-
