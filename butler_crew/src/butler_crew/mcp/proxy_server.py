@@ -456,13 +456,8 @@ async def get_agents(capability: str = None) -> str:
     return json.dumps(results, indent=2)
 
 # --- CREWAI INTEGRATION ---
-try:
-    from crewai import Crew, Task, Process
-    from butler_crew.crew import ButlerCrew
-    HAS_CREWAI = True
-except ImportError:
-    HAS_CREWAI = False
-    logger.warning("CrewAI not found. Agent execution will be mocked.")
+# NOTE: CrewAI is NOT imported at module level because its FilteredStream
+# causes I/O errors that crash the MCP server. It's lazy-loaded in ask_agent.
 
 @mcp.tool()
 async def ask_agent(agent_name: str, request: str) -> str:
@@ -477,7 +472,12 @@ async def ask_agent(agent_name: str, request: str) -> str:
     if agent_name not in AGENTS_CACHE:
         return f"Error: Agent '{agent_name}' not found. Available: {list(AGENTS_CACHE.keys())}"
     
-    if not HAS_CREWAI:
+    # Lazy-load CrewAI to avoid FilteredStream crash on startup
+    try:
+        from crewai import Crew, Task, Process
+        from butler_crew.crew import ButlerCrew
+    except ImportError as e:
+        logger.warning(f"CrewAI not available: {e}")
         return f"Error: CrewAI libraries not installed in this environment. Cannot execute {agent_name}."
 
     logger.info(f"Routing request to agent: {agent_name}")
