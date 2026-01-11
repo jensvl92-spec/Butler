@@ -8,3 +8,5 @@ venv/
 butler_addon/
 dist/
 node_modules/
+*.apk
+google-services.json
