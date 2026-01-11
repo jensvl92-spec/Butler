@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { useApp } from '../lib/AppContext';
 import { logger } from '../utils/logger';
 import { callHAService } from '../utils/home-assistant';
@@ -26,6 +26,7 @@ const DEVICE_TYPES = [
 ];
 export const Dashboard = forwardRef((props, ref) => {
     const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry } = useApp();
+    console.log('[Dashboard] RENDER. ActiveConnection:', !!activeConnection, 'EntityCount:', Object.keys(entityStates).length);
     // State
     const [tiles, setTiles] = useState(DEFAULT_TILES);
     const [editMode, setEditMode] = useState(false);
@@ -41,6 +42,8 @@ export const Dashboard = forwardRef((props, ref) => {
     const [inspectorData, setInspectorData] = useState(null);
     // Suggestion State
     const [headerSuggestions, setHeaderSuggestions] = useState([]);
+    // Auto-Sync Ref
+    const hasSyncedRef = useRef(false);
     // Derived State
     const availableEntities = Object.entries(entityStates).map(([id, state]) => ({
         entity_id: id,
@@ -58,7 +61,11 @@ export const Dashboard = forwardRef((props, ref) => {
             const mergedTiles = [...localTiles];
             let changed = false;
             rooms.forEach(dbRoom => {
-                const exists = mergedTiles.find(t => t.id === dbRoom.id || t.roomId === dbRoom.id);
+                // Check for existing by ID, roomId, OR roomName (normalized)
+                const normalizedDbName = dbRoom.name?.toLowerCase().trim();
+                const exists = mergedTiles.find(t => t.id === dbRoom.id ||
+                    t.roomId === dbRoom.id ||
+                    t.roomName?.toLowerCase().trim() === normalizedDbName);
                 if (!exists) {
                     // Create new tile for this DB room
                     mergedTiles.push({
@@ -73,8 +80,31 @@ export const Dashboard = forwardRef((props, ref) => {
                     changed = true;
                 }
             });
-            if (changed || (!stored && mergedTiles.length > 0)) {
-                setTiles(mergedTiles);
+            // Also deduplicate existing tiles by roomName (keep the one with more devices)
+            const deduped = [];
+            const seenNames = new Map(); // name -> index in deduped
+            mergedTiles.forEach(tile => {
+                const normName = tile.roomName?.toLowerCase().trim() || tile.id;
+                if (seenNames.has(normName)) {
+                    // Duplicate found - keep the one with more deviceGroups
+                    const existingIdx = seenNames.get(normName);
+                    const existing = deduped[existingIdx];
+                    if ((tile.deviceGroups?.length || 0) > (existing.deviceGroups?.length || 0)) {
+                        deduped[existingIdx] = tile; // Replace with the fuller one
+                        changed = true;
+                    }
+                }
+                else {
+                    seenNames.set(normName, deduped.length);
+                    deduped.push(tile);
+                }
+            });
+            if (changed || (!stored && deduped.length > 0)) {
+                setTiles(deduped);
+            }
+            else if (stored && deduped.length !== mergedTiles.length) {
+                // Deduplication happened
+                setTiles(deduped);
             }
             else if (stored) {
                 setTiles(localTiles);
@@ -324,6 +354,87 @@ export const Dashboard = forwardRef((props, ref) => {
         });
         setTiles(updatedTiles);
     };
+    // Independent Sync Function
+    const performToolSync = (connection, currentEntityStates) => {
+        if (!connection)
+            return;
+        import('../utils/mcp-sync').then(async ({ fetchHAServices, syncBatchToLibrarian }) => {
+            try {
+                // Ensure we have entities to map against
+                const entities = Object.values(currentEntityStates || {}).map((s) => ({
+                    entity_id: s.entity_id || '',
+                    state: s.state,
+                    attributes: s.attributes
+                })).filter(e => e.entity_id);
+                console.log('[Dashboard] Starting Full Sync...');
+                setToastMsg('🔄 Starting Sync Process...');
+                // 1. Fetch RAW services from HA
+                console.log('[Dashboard] Fetching services from HA API...');
+                const allServices = await fetchHAServices(connection.api_url, connection.api_token);
+                console.log('[Dashboard] Services fetched successfully.');
+                // 2. Queue ALL services
+                const syncQueue = [];
+                Object.entries(allServices).forEach(([domain, services]) => {
+                    Object.entries(services).forEach(([svcName, svcData]) => {
+                        syncQueue.push({ domain, name: svcName, service: svcData });
+                    });
+                });
+                const totalCount = syncQueue.length;
+                console.log(`[Dashboard] Found ${totalCount} services. (Filtering disabled)`);
+                setToastMsg(`Found ${totalCount} tools. Starting AI indexing...`);
+                // 3. Batch Process with accumulation
+                const BATCH_SIZE = 10;
+                let processedCount = 0;
+                const totalBatches = Math.ceil(totalCount / BATCH_SIZE);
+                for (let i = 0; i < totalCount; i += BATCH_SIZE) {
+                    const batchIndex = Math.floor(i / BATCH_SIZE);
+                    const isFirstBatch = batchIndex === 0;
+                    const isLastBatch = batchIndex === totalBatches - 1;
+                    // Determine sync_mode for accumulation
+                    let sync_mode = 'append';
+                    if (isFirstBatch)
+                        sync_mode = 'start';
+                    else if (isLastBatch)
+                        sync_mode = 'complete';
+                    const batch = syncQueue.slice(i, i + BATCH_SIZE);
+                    console.log(`[Dashboard] Processing batch ${batchIndex + 1}/${totalBatches} (mode: ${sync_mode})...`);
+                    const batchServices = {};
+                    batch.forEach(item => {
+                        if (!batchServices[item.domain])
+                            batchServices[item.domain] = {};
+                        batchServices[item.domain][item.name] = item.service;
+                    });
+                    const progressPct = Math.round((processedCount / totalCount) * 100);
+                    setToastMsg(`🧠 Indexing tools: ${progressPct}% (${processedCount}/${totalCount})`);
+                    try {
+                        const result = await syncBatchToLibrarian(connection.id, entities, batchServices, sync_mode);
+                        if (result.success) {
+                            console.log(`[Dashboard] Batch done. Total: ${result.devices} devices, ${result.tools} tools`);
+                        }
+                        else {
+                            console.error('[Dashboard] Batch error:', result.error);
+                        }
+                    }
+                    catch (batchErr) {
+                        console.error('[Dashboard] Batch failed:', batchErr);
+                    }
+                    processedCount += batch.length;
+                    await new Promise(r => setTimeout(r, 500));
+                }
+                console.log('[Dashboard] Sync Complete!');
+                setToastMsg(`✅ Sync Complete! ${totalCount} tools ready.`);
+            }
+            catch (err) {
+                console.error('[Dashboard] Sync Failed:', err);
+                setToastMsg(`❌ Sync Error: ${err.message}`);
+            }
+        }).catch((importErr) => {
+            console.error('[Dashboard] Failed to import sync module:', importErr);
+            setToastMsg('❌ Sync Module Load Failed');
+        });
+    };
+    // Auto-Sync DISABLED - Sync only happens when user clicks "Import from HA"
+    // This prevents duplicate entries and unnecessary API calls on every app start
     // NEW: Direct HA Registry Import
     const importLayoutFromHA = () => {
         if (!window.confirm("This will RESET your dashboard and import your exact layout from Home Assistant (Areas & Devices). Continue?"))
@@ -486,6 +597,13 @@ export const Dashboard = forwardRef((props, ref) => {
                 tile.deviceGroups.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
             });
             setTiles(newTiles);
+            // === NEW: Sync to MCP Librarian (Client-Orchestrated Batching) ===
+            // This builds the Custom MCP Server with properly formatted tools
+            // === NEW: Trigger Sync ===
+            // === NEW: Trigger Sync ===
+            if (activeConnection) {
+                performToolSync(activeConnection, entityStates);
+            }
             alert(`Import Complete!\nCreated ${areasCreatedCount} areas.\nMapped ${devicesAddedCount} devices from Home Assistant.`);
         }
         else {
@@ -707,10 +825,22 @@ export const Dashboard = forwardRef((props, ref) => {
                 valueDisplay = 'Off';
             // Icon Color
             const iconColor = isOn || (isCover && ha.state === 'open') ? 'var(--accent)' : 'var(--text-secondary)';
-            return (_jsxs("div", { className: "detail-card", children: [_jsxs("div", { className: "detail-card-header", children: [_jsx("div", { className: "detail-icon", style: { color: iconColor }, children: config.icon }), _jsxs("div", { className: "detail-info", children: [_jsx("div", { className: "detail-name", children: config.name }), _jsx("div", { className: "detail-state", children: valueDisplay })] }), myDiagnostics.length > 0 && (_jsx("div", { className: "detail-toggle", style: { width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.7 }, onClick: (e) => {
-                                    e.stopPropagation();
-                                    setInspectorData({ name: config.name, diagnostics: myDiagnostics });
-                                }, children: "\u2139\uFE0F" })), (isLight || config.type === 'switch') && (_jsx("div", { className: `toggle-switch compact ${isOn ? 'on' : ''} ${myDiagnostics.length > 0 ? '' : 'detail-toggle'}`, onClick: (e) => { e.stopPropagation(); handleToggle(config.entityId, ha.state || 'off'); } }))] }), isCover && (_jsxs("div", { className: "detail-controls-row", children: [_jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'open'); }, children: "\u2B06" }), _jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'stop'); }, children: "\u23F9" }), _jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'close'); }, children: "\u2B07" })] })), isLight && isOn && (_jsx("div", { style: { marginTop: 'auto', padding: '8px 0' }, children: renderSlider(config.entityId, brightness) }))] }, config.id));
+            return (_jsxs("div", { className: "detail-card", style: { position: 'relative' }, children: [_jsxs("div", { className: "detail-card-header", children: [_jsx("div", { className: "detail-icon", style: { color: iconColor }, children: config.icon }), _jsxs("div", { className: "detail-info", children: [_jsx("div", { className: "detail-name", children: config.name }), _jsx("div", { className: "detail-state", children: valueDisplay })] }), (isLight || config.type === 'switch') && (_jsx("div", { className: `toggle-switch compact ${isOn ? 'on' : ''} detail-toggle`, onClick: (e) => { e.stopPropagation(); handleToggle(config.entityId, ha.state || 'off'); } }))] }), isCover && (_jsxs("div", { className: "detail-controls-row", style: { paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }, children: [_jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'open'); }, children: "\u2B06" }), _jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'stop'); }, children: "\u23F9" }), _jsx("div", { className: "control-btn-icon", onClick: (e) => { e.stopPropagation(); handleCoverAction(config.entityId, 'close'); }, children: "\u2B07" })] })), isLight && isOn && (_jsx("div", { style: { marginTop: 'auto', padding: '8px 0', paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }, children: renderSlider(config.entityId, brightness) })), myDiagnostics.length > 0 && (_jsx("div", { style: {
+                            position: 'absolute',
+                            bottom: 2,
+                            left: 8,
+                            width: 24,
+                            height: 24,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            opacity: 0.5,
+                            fontSize: '0.9rem'
+                        }, onClick: (e) => {
+                            e.stopPropagation();
+                            setInspectorData({ name: config.name, diagnostics: myDiagnostics });
+                        }, children: "\u2139\uFE0F" }))] }, config.id));
         };
         return (_jsxs("div", { className: "detail-view", style: {
                 background: 'var(--bg-card)',

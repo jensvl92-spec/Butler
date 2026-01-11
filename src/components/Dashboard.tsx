@@ -8,6 +8,7 @@ import { SuggestionPopup } from './SuggestionPopup'
 import { Suggestion } from '../types'
 import { supabase } from '../lib/supabase'
 
+
 // Ref type for parent components to call import function
 export interface DashboardRef {
     importLayoutFromHA: () => void
@@ -70,6 +71,8 @@ const DEVICE_TYPES = [
 export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
     const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry } = useApp()
 
+    console.log('[Dashboard] RENDER. ActiveConnection:', !!activeConnection, 'EntityCount:', Object.keys(entityStates).length);
+
     // State
     const [tiles, setTiles] = useState<DashboardTile[]>(DEFAULT_TILES)
     const [editMode, setEditMode] = useState(false)
@@ -93,6 +96,9 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
 
 
+    // Auto-Sync Ref
+    const hasSyncedRef = useRef(false)
+
     // Derived State
     const availableEntities = Object.entries(entityStates).map(([id, state]) => ({
         entity_id: id,
@@ -113,7 +119,13 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             let changed = false
 
             rooms.forEach(dbRoom => {
-                const exists = mergedTiles.find(t => t.id === dbRoom.id || t.roomId === dbRoom.id)
+                // Check for existing by ID, roomId, OR roomName (normalized)
+                const normalizedDbName = dbRoom.name?.toLowerCase().trim()
+                const exists = mergedTiles.find(t =>
+                    t.id === dbRoom.id ||
+                    t.roomId === dbRoom.id ||
+                    t.roomName?.toLowerCase().trim() === normalizedDbName
+                )
                 if (!exists) {
                     // Create new tile for this DB room
                     mergedTiles.push({
@@ -129,8 +141,30 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                 }
             })
 
-            if (changed || (!stored && mergedTiles.length > 0)) {
-                setTiles(mergedTiles)
+            // Also deduplicate existing tiles by roomName (keep the one with more devices)
+            const deduped: DashboardTile[] = []
+            const seenNames = new Map<string, number>() // name -> index in deduped
+            mergedTiles.forEach(tile => {
+                const normName = tile.roomName?.toLowerCase().trim() || tile.id
+                if (seenNames.has(normName)) {
+                    // Duplicate found - keep the one with more deviceGroups
+                    const existingIdx = seenNames.get(normName)!
+                    const existing = deduped[existingIdx]
+                    if ((tile.deviceGroups?.length || 0) > (existing.deviceGroups?.length || 0)) {
+                        deduped[existingIdx] = tile // Replace with the fuller one
+                        changed = true
+                    }
+                } else {
+                    seenNames.set(normName, deduped.length)
+                    deduped.push(tile)
+                }
+            })
+
+            if (changed || (!stored && deduped.length > 0)) {
+                setTiles(deduped)
+            } else if (stored && deduped.length !== mergedTiles.length) {
+                // Deduplication happened
+                setTiles(deduped)
             } else if (stored) {
                 setTiles(localTiles)
             }
@@ -394,6 +428,104 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
 
 
+
+    // Independent Sync Function
+    const performToolSync = (connection: any, currentEntityStates: Record<string, any>) => {
+        if (!connection) return
+
+        import('../utils/mcp-sync').then(async ({ fetchHAServices, syncBatchToLibrarian }) => {
+            try {
+                // Ensure we have entities to map against
+                const entities = Object.values(currentEntityStates || {}).map((s: any) => ({
+                    entity_id: s.entity_id || '',
+                    state: s.state,
+                    attributes: s.attributes
+                })).filter(e => e.entity_id);
+
+                console.log('[Dashboard] Starting Full Sync...');
+                setToastMsg('🔄 Starting Sync Process...');
+
+                // 1. Fetch RAW services from HA
+                console.log('[Dashboard] Fetching services from HA API...');
+                const allServices = await fetchHAServices(connection.api_url, connection.api_token);
+                console.log('[Dashboard] Services fetched successfully.');
+
+                // 2. Queue ALL services
+                const syncQueue: Array<{ domain: string; name: string; service: any }> = [];
+                Object.entries(allServices).forEach(([domain, services]) => {
+                    Object.entries(services as any).forEach(([svcName, svcData]) => {
+                        syncQueue.push({ domain, name: svcName, service: svcData });
+                    });
+                });
+
+                const totalCount = syncQueue.length;
+                console.log(`[Dashboard] Found ${totalCount} services. (Filtering disabled)`);
+                setToastMsg(`Found ${totalCount} tools. Starting AI indexing...`);
+
+                // 3. Batch Process with accumulation
+                const BATCH_SIZE = 10;
+                let processedCount = 0;
+                const totalBatches = Math.ceil(totalCount / BATCH_SIZE);
+
+                for (let i = 0; i < totalCount; i += BATCH_SIZE) {
+                    const batchIndex = Math.floor(i / BATCH_SIZE);
+                    const isFirstBatch = batchIndex === 0;
+                    const isLastBatch = batchIndex === totalBatches - 1;
+
+                    // Determine sync_mode for accumulation
+                    let sync_mode: 'start' | 'append' | 'complete' = 'append';
+                    if (isFirstBatch) sync_mode = 'start';
+                    else if (isLastBatch) sync_mode = 'complete';
+
+                    const batch = syncQueue.slice(i, i + BATCH_SIZE);
+                    console.log(`[Dashboard] Processing batch ${batchIndex + 1}/${totalBatches} (mode: ${sync_mode})...`);
+
+                    const batchServices: Record<string, any> = {};
+                    batch.forEach(item => {
+                        if (!batchServices[item.domain]) batchServices[item.domain] = {};
+                        batchServices[item.domain][item.name] = item.service;
+                    });
+
+                    const progressPct = Math.round((processedCount / totalCount) * 100);
+                    setToastMsg(`🧠 Indexing tools: ${progressPct}% (${processedCount}/${totalCount})`);
+
+                    try {
+                        const result = await syncBatchToLibrarian(
+                            connection.id,
+                            entities,
+                            batchServices,
+                            sync_mode
+                        );
+                        if (result.success) {
+                            console.log(`[Dashboard] Batch done. Total: ${result.devices} devices, ${result.tools} tools`);
+                        } else {
+                            console.error('[Dashboard] Batch error:', result.error);
+                        }
+                    } catch (batchErr) {
+                        console.error('[Dashboard] Batch failed:', batchErr);
+                    }
+
+                    processedCount += batch.length;
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
+                console.log('[Dashboard] Sync Complete!');
+                setToastMsg(`✅ Sync Complete! ${totalCount} tools ready.`);
+
+            } catch (err: any) {
+                console.error('[Dashboard] Sync Failed:', err);
+                setToastMsg(`❌ Sync Error: ${err.message}`);
+            }
+        }).catch((importErr: any) => {
+            console.error('[Dashboard] Failed to import sync module:', importErr);
+            setToastMsg('❌ Sync Module Load Failed');
+        });
+    }
+
+    // Auto-Sync DISABLED - Sync only happens when user clicks "Import from HA"
+    // This prevents duplicate entries and unnecessary API calls on every app start
+
+
     // NEW: Direct HA Registry Import
     const importLayoutFromHA = () => {
         if (!window.confirm("This will RESET your dashboard and import your exact layout from Home Assistant (Areas & Devices). Continue?")) return
@@ -567,6 +699,15 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             })
 
             setTiles(newTiles)
+
+            // === NEW: Sync to MCP Librarian (Client-Orchestrated Batching) ===
+            // This builds the Custom MCP Server with properly formatted tools
+            // === NEW: Trigger Sync ===
+            // === NEW: Trigger Sync ===
+            if (activeConnection) {
+                performToolSync(activeConnection, entityStates);
+            }
+
             alert(`Import Complete!\nCreated ${areasCreatedCount} areas.\nMapped ${devicesAddedCount} devices from Home Assistant.`)
         } else {
             alert("No matching entities found in your HA registries.")
@@ -889,7 +1030,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             const iconColor = isOn || (isCover && ha.state === 'open') ? 'var(--accent)' : 'var(--text-secondary)'
 
             return (
-                <div key={config.id} className="detail-card">
+                <div key={config.id} className="detail-card" style={{ position: 'relative' }}>
                     <div className="detail-card-header">
                         <div className="detail-icon" style={{ color: iconColor }}>
                             {config.icon}
@@ -899,20 +1040,9 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                             <div className="detail-state">{valueDisplay}</div>
                         </div>
 
-                        {/* Diagnostics Button (if available) */}
-                        {myDiagnostics.length > 0 && (
-                            <div className="detail-toggle" style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.7 }}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setInspectorData({ name: config.name, diagnostics: myDiagnostics })
-                                }}>
-                                ℹ️
-                            </div>
-                        )}
-
                         {/* Toggle for simple switches/lights */}
                         {(isLight || config.type === 'switch') && (
-                            <div className={`toggle-switch compact ${isOn ? 'on' : ''} ${myDiagnostics.length > 0 ? '' : 'detail-toggle'}`}
+                            <div className={`toggle-switch compact ${isOn ? 'on' : ''} detail-toggle`}
                                 onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}>
                             </div>
                         )}
@@ -920,7 +1050,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
                     {/* Controls Row */}
                     {isCover && (
-                        <div className="detail-controls-row">
+                        <div className="detail-controls-row" style={{ paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
                             <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleCoverAction(config.entityId!, 'open') }}>
                                 ⬆
                             </div>
@@ -935,8 +1065,31 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
                     {/* Light Brightness Slider (if on) */}
                     {isLight && isOn && (
-                        <div style={{ marginTop: 'auto', padding: '8px 0' }}>
+                        <div style={{ marginTop: 'auto', padding: '8px 0', paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
                             {renderSlider(config.entityId!, brightness)}
+                        </div>
+                    )}
+
+                    {/* Diagnostics Button - Bottom Left */}
+                    {myDiagnostics.length > 0 && (
+                        <div style={{
+                            position: 'absolute',
+                            bottom: 2,
+                            left: 8,
+                            width: 24,
+                            height: 24,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            opacity: 0.5,
+                            fontSize: '0.9rem'
+                        }}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setInspectorData({ name: config.name, diagnostics: myDiagnostics })
+                            }}>
+                            ℹ️
                         </div>
                     )}
                 </div>

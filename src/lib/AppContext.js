@@ -2,6 +2,8 @@ import { jsx as _jsx } from "react/jsx-runtime";
 import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabase';
 import { HAWebSocket } from '../utils/ha-websocket';
+import { Preferences } from '@capacitor/preferences';
+import { syncGoogleTokens } from '../utils/auth';
 const AppContext = createContext(undefined);
 export function AppProvider({ children }) {
     const [user, setUser] = useState(null);
@@ -27,11 +29,15 @@ export function AppProvider({ children }) {
         const loadUser = async () => {
             const { data } = await supabase.auth.getSession();
             setUser(data?.session?.user || null);
+            if (data?.session)
+                syncGoogleTokens(data.session);
             setLoading(false);
         };
         loadUser();
         const { data: { subscription }, } = supabase.auth.onAuthStateChange((_event, session) => {
             setUser(session?.user || null);
+            if (session)
+                syncGoogleTokens(session);
         });
         return () => subscription?.unsubscribe();
     }, []);
@@ -53,6 +59,18 @@ export function AppProvider({ children }) {
             setEntityStates({});
             return;
         }
+        // Sync HA credentials to native widget SharedPreferences
+        const syncWidgetCredentials = async () => {
+            try {
+                await Preferences.set({ key: 'ButlerWidget.ha_url', value: activeConnection.api_url });
+                await Preferences.set({ key: 'ButlerWidget.ha_token', value: activeConnection.api_token });
+                console.log('📱 Widget credentials synced');
+            }
+            catch (e) {
+                // Preferences not available (web mode) - safe to ignore
+            }
+        };
+        syncWidgetCredentials();
         const loadRooms = async () => {
             const { data } = await supabase
                 .from('rooms')
@@ -81,9 +99,13 @@ export function AppProvider({ children }) {
                     // 1. States
                     if (statesRes.success && Array.isArray(statesRes.result)) {
                         const statesObj = {};
-                        statesRes.result.forEach((state) => { statesObj[state.entity_id] = state; });
+                        statesRes.result.forEach((state) => {
+                            statesObj[state.entity_id] = state;
+                            // Force sync initial state to DB
+                            queueStateUpdate(state.entity_id, state);
+                        });
                         setEntityStates(statesObj);
-                        logger.info(`✅ Loaded States: ${statesRes.result.length}`);
+                        logger.info(`✅ Loaded & Queued States: ${statesRes.result.length}`);
                     }
                     else {
                         logger.warn('⚠️ Failed to get states:', statesRes);
@@ -108,13 +130,71 @@ export function AppProvider({ children }) {
                     logger.error('❌ Error fetching HA data:', { message: err.message });
                 }
             };
+            // ==========================================
+            // STATE SYNC SERVICE (Batched Updates)
+            // ==========================================
+            let stateQueue = {};
+            let syncTimer = null;
+            let lastSyncTime = 0;
+            const flushStateQueue = async () => {
+                const queueSize = Object.keys(stateQueue).length;
+                if (queueSize === 0)
+                    return;
+                // Prepare batch
+                const statesToSync = Object.entries(stateQueue).map(([entity_id, state]) => ({
+                    entity_id,
+                    state: state.state,
+                    attributes: state.attributes
+                }));
+                // Clear queue immediately to avoid duplicates (optimistic)
+                stateQueue = {};
+                lastSyncTime = Date.now();
+                try {
+                    // const { logger } = await import('../utils/logger');
+                    // console.log(`[StateSync] Flushing ${statesToSync.length} updates...`, statesToSync);
+                    // logger.debug(`[StateSync] Flushing ${statesToSync.length} updates...`);
+                    const { error } = await supabase.functions.invoke('mcp-librarian/sync-states', {
+                        body: {
+                            connection_id: activeConnection.id,
+                            states: statesToSync
+                        }
+                    });
+                    if (error)
+                        console.error('[StateSync] Sync Error:', error);
+                }
+                catch (e) {
+                    console.error('[StateSync] Failed to sync states:', e);
+                    // Retry logic could be added here, but for now we skip to avoid jams
+                }
+            };
+            const queueStateUpdate = (entityId, newState) => {
+                // Add to queue
+                stateQueue[entityId] = newState;
+                // If timer not running, start it
+                if (!syncTimer) {
+                    syncTimer = setTimeout(() => {
+                        syncTimer = null;
+                        flushStateQueue();
+                    }, 2000); // 2 second debounce/buffer
+                }
+                // Force flush if queue gets too big (e.g. startup storm)
+                if (Object.keys(stateQueue).length > 50) {
+                    if (syncTimer)
+                        clearTimeout(syncTimer);
+                    syncTimer = null;
+                    flushStateQueue();
+                }
+            };
             // Clean up previous connection if any (though effect cleanup handles it)
             // Pass fetchHAData as the onReady callback (4th arg)
             ws = new HAWebSocket(activeConnection.api_url, activeConnection.api_token, (entityId, newState) => {
+                // 1. Update React UI
                 setEntityStates(prev => ({
                     ...prev,
                     [entityId]: newState
                 }));
+                // 2. Queue for Cloud Sync
+                queueStateUpdate(entityId, newState);
             }, fetchHAData);
             ws.connect()
                 .then(async () => {
@@ -212,6 +292,8 @@ export function AppProvider({ children }) {
     const addChatMessage = (msg) => {
         setChatHistory([...chatHistory, msg]);
     };
+    // Voice Trigger State (Global)
+    const [shouldTriggerVoice, setShouldTriggerVoice] = useState(false);
     return (_jsx(AppContext.Provider, { value: {
             user,
             loading,
@@ -235,6 +317,8 @@ export function AppProvider({ children }) {
             updateRoom,
             updateUIState,
             addChatMessage,
+            shouldTriggerVoice,
+            setShouldTriggerVoice,
         }, children: children }));
 }
 export function useApp() {

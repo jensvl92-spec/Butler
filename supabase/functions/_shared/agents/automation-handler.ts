@@ -31,6 +31,7 @@ OUTPUT FORMAT:
     {"entity_id": "automation.xxx", "service": "turn_on" | "turn_off" | "trigger"}
   ]
 }
+CRITICAL: The user may speak another language. You MUST respond to them in that language, BUT your \`actions\` must use the correct ENGLISH entity_ids from the context (e.g., \`automation.morning_routine\`, not \`automation.ochtend_routine\`).
 `;
 
 export interface AutomationHandlerResult {

@@ -84,6 +84,7 @@ export interface LLMResponse {
   confidence: number;
   scheduled_tasks?: number;
   logs?: string[];
+  conversation_mode?: boolean;
 }
 
 export interface UIState {

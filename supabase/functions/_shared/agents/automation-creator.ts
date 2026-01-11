@@ -42,28 +42,31 @@ OUTPUT FORMAT:
 }
 
 Always set requires_confirmation to true - automations need user approval before creation.
+
+CRITICAL: The user may speak another language. You MUST respond to them in that language, BUT your generated YAML and internal reasoning must use ENGLISH entity IDs and keywords.
+Example: User "Als de zon ondergaat" -> Trigger: platform: sun, event: sunset
 `;
 
 export interface AutomationCreatorResult {
-    text: string;
-    automation_yaml?: string;
-    requires_confirmation: boolean;
+  text: string;
+  automation_yaml?: string;
+  requires_confirmation: boolean;
 }
 
 export async function runAutomationCreator(
-    message: string,
-    entityContext: string,
-    language: string = 'en'
+  message: string,
+  entityContext: string,
+  language: string = 'en'
 ): Promise<AutomationCreatorResult> {
-    console.log(`[AutomationCreator] Processing: "${message}"`);
+  console.log(`[AutomationCreator] Processing: "${message}"`);
 
-    const languageNote = language !== 'en' ? `\nRespond in ${language}.` : '';
+  const languageNote = language !== 'en' ? `\nRespond in ${language}.` : '';
 
-    const response = await chatCompletion([
-        { role: 'system', content: AUTOMATION_CREATOR_PROMPT + languageNote },
-        { role: 'user', content: `AVAILABLE ENTITIES:\n${entityContext}\n\nUSER REQUEST: ${message}` }
-    ], 800, 0.3);
+  const response = await chatCompletion([
+    { role: 'system', content: AUTOMATION_CREATOR_PROMPT + languageNote },
+    { role: 'user', content: `AVAILABLE ENTITIES:\n${entityContext}\n\nUSER REQUEST: ${message}` }
+  ], 800, 0.3);
 
-    const result = parseJSONResponse(response);
-    return result || { text: response, requires_confirmation: true };
+  const result = parseJSONResponse(response);
+  return result || { text: response, requires_confirmation: true };
 }

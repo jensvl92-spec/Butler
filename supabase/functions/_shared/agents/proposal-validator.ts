@@ -15,17 +15,20 @@ TASK:
 Determine if an automation proposal should be presented to the user based on denial history.
 
 LOGIC:
-1. Check if the proposal is semantically similar to any previously denied proposals
-2. If denied 3+ times → REJECT (user clearly doesn't want this)
-3. If denied 1-2 times → WARN but allow
-4. If never denied → ALLOW
+1. Check if the proposal is semantically similar to any previously denied proposals.
+   - **Semantic Similarity**: A proposal is similar if it targets the same entities and achieves the same goal (e.g., "Turn on office lights when I enter" is similar to "Auto office lights at 7pm").
+2. **Denial Thresholds**:
+   - If a similar proposal was denied **3+ times** → **REJECT** (User clearly doesn't want this category of automation).
+   - If denied **1-2 times** → **WARN** (Mention it has been rejected before but might be relevant now).
+   - If never denied → **ALLOW**.
+3. **Reasoning**: Explain why you made the decision, citing the similar denied proposal if applicable.
 
 OUTPUT FORMAT:
 {
   "decision": "ALLOW" | "WARN" | "REJECT",
-  "reason": "Explanation",
-  "similar_denied_proposal": "The similar proposal that was denied (if any)",
-  "denial_count": 0
+  "reason": "Brief explanation",
+  "similar_denied_proposal": "The text of the most similar denied proposal",
+  "denial_count": number
 }
 `;
 
@@ -64,7 +67,7 @@ export async function runProposalValidator(
     const response = await chatCompletion([
         { role: 'system', content: PROPOSAL_VALIDATOR_PROMPT },
         { role: 'user', content: `PROPOSAL: ${proposalText}\n\nDENIED PROPOSALS:\n${deniedContext}` }
-    ], 200, 0);
+    ], 2000, 0, undefined, undefined, 'deepseek/deepseek-chat');
 
     const result = parseJSONResponse(response);
     return result || { decision: 'ALLOW', reason: 'Parse error - allowing', denial_count: 0 };

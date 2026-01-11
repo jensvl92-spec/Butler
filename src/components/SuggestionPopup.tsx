@@ -10,12 +10,21 @@ interface SuggestionPopupProps {
 }
 
 export const SuggestionPopup: React.FC<SuggestionPopupProps> = ({ suggestions, onClose, onAction }) => {
+    const [currentIndex, setCurrentIndex] = React.useState(0)
+
+    // Clamp index when suggestions array changes (e.g., items removed)
+    React.useEffect(() => {
+        if (suggestions.length === 0) {
+            onClose()
+        } else if (currentIndex >= suggestions.length) {
+            setCurrentIndex(Math.max(0, suggestions.length - 1))
+        }
+    }, [suggestions.length, currentIndex, onClose])
+
     if (!suggestions || suggestions.length === 0) return null
 
-    // We only show the first one to avoid overwhelming, or a stack?
-    // Let's show a stack.
-    const [currentIndex, setCurrentIndex] = React.useState(0)
     const current = suggestions[currentIndex]
+    if (!current) return null // Extra safety
 
     const handleNext = () => {
         if (currentIndex < suggestions.length - 1) {
@@ -35,13 +44,21 @@ export const SuggestionPopup: React.FC<SuggestionPopupProps> = ({ suggestions, o
         handleNext()
     }
 
-    const formatAction = (action: Action) => {
+    const formatAction = (action: any) => {
         if (action.type === 'create_automation') {
-            const data = action.data as any
-            return `Create Automation: "${data?.alias}"`
+            // Our stored format: { type: 'create_automation', action: 'description of action' }
+            return action.action || 'Create Automation'
         }
-        return `${action.type}: ${action.service} -> ${action.entity_id}`
+        // Fallback for other action types
+        if (action.service && action.entity_id) {
+            return `${action.service} → ${action.entity_id}`
+        }
+        return JSON.stringify(action)
     }
+
+    // Get trigger and condition from the suggestion (stored at root level)
+    const trigger = (current as any).trigger
+    const condition = (current as any).condition
 
     return (
         <div className="modal-overlay" style={{ zIndex: 10000 }}>
@@ -60,13 +77,25 @@ export const SuggestionPopup: React.FC<SuggestionPopupProps> = ({ suggestions, o
                     {current.description}
                 </p>
 
-                <div className="suggestion-actions-preview">
-                    <strong>Proposed Change:</strong>
-                    <ul style={{ fontSize: '0.9rem', paddingLeft: 20, marginTop: 8 }}>
-                        {current.actions.map((a, i) => (
-                            <li key={i}>{formatAction(a)}</li>
-                        ))}
-                    </ul>
+                <div className="suggestion-actions-preview" style={{ background: 'var(--card-bg)', borderRadius: 8, padding: 12 }}>
+                    {trigger && (
+                        <div style={{ marginBottom: 8 }}>
+                            <strong>🎯 When:</strong> {trigger}
+                        </div>
+                    )}
+                    {condition && (
+                        <div style={{ marginBottom: 8 }}>
+                            <strong>📋 If:</strong> {condition}
+                        </div>
+                    )}
+                    <div>
+                        <strong>⚡ Then:</strong>
+                        <ul style={{ fontSize: '0.9rem', paddingLeft: 20, marginTop: 4 }}>
+                            {current.actions.map((a, i) => (
+                                <li key={i}>{formatAction(a)}</li>
+                            ))}
+                        </ul>
+                    </div>
                 </div>
 
                 <div className="modal-actions" style={{ marginTop: 32 }}>

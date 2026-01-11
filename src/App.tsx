@@ -1,25 +1,38 @@
 import React, { useEffect, useState, useRef } from 'react'
+import { App as CapacitorApp } from '@capacitor/app'
 import { useApp } from './lib/AppContext'
 import { Auth } from './components/Auth'
 import { ConnectionSetup } from './components/ConnectionSetup'
 import { AIChat } from './components/AIChat'
 import { Dashboard, DashboardRef } from './components/Dashboard'
 import { ButlerSuggestions } from './components/ButlerSuggestions'
-import { ProxySetupWizard } from './components/ProxySetupWizard'
+import { SuggestionPopup } from './components/SuggestionPopup'
+import { Settings } from './components/Settings'
+import { Graphs, GraphConfig } from './components/Graphs'
 import { signOut } from './utils/auth'
-import { registerPushNotifications, setActionListener } from './utils/pushNotifications'
+import { registerPushNotifications, setActionListener, setSuggestionsListener } from './utils/pushNotifications'
+import { setGraphCreateCallback } from './lib/hooks/useAIChatLogic'
+import { supabase } from './lib/supabase'
+import { syncGoogleTokens } from './utils/auth'
 import './App.css'
 
 // @ts-ignore
 import { logger } from './utils/logger'
 
+// Global state for shared text (accessible from AIChat component)
+export let sharedTextForTranslation: string | null = null;
+export const clearSharedText = () => { sharedTextForTranslation = null; };
 
 function App() {
-  const { user, loading, connections, activeConnection, setActiveConnection, deleteConnection } = useApp()
+  const { user, loading, connections, activeConnection, setActiveConnection, deleteConnection, setShouldTriggerVoice } = useApp()
   const [showConnectionModal, setShowConnectionModal] = useState(false)
   const [showConnectionDropdown, setShowConnectionDropdown] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [showDebug, setShowDebug] = useState(false) // Debug State
+  const [showGraphs, setShowGraphs] = useState(false) // Graphs Page
+  const [pendingGraphs, setPendingGraphs] = useState<Omit<GraphConfig, 'id' | 'createdAt'>[]>([])
   const dashboardRef = useRef<DashboardRef>(null)
+  const [pendingSuggestions, setPendingSuggestions] = useState<any[]>([])
 
   // Theme State (Hoisted for Global Header)
   const [theme, setTheme] = useState(localStorage.getItem('app-theme') || 'dark')
@@ -70,13 +83,124 @@ function App() {
       window.removeEventListener('touchmove', onTouchMove)
       window.removeEventListener('touchend', onUp)
     }
-  }, [aiSectionHeight]) // Dependency needed for closure? No, using refs. dependency empty is fine usually but we're attaching/detaching. Actually clean up on mount.
+  }, [aiSectionHeight])
 
   useEffect(() => {
     document.body.className = ''
     if (theme !== 'dark') document.body.classList.add(`theme-${theme}`)
     localStorage.setItem('app-theme', theme)
   }, [theme])
+
+  // ... existing state ...
+
+  // Deep Link Listener (Widget Support & Auth Callback)
+  useEffect(() => {
+    const handleDeepLink = async (url: string) => {
+      logger.info('📱 Deep Link Opened:', url);
+
+      // 1. Voice Widget
+      if (url.includes('butler://voice')) {
+        logger.info("🎤 Triggering Voice Mode");
+        setShouldTriggerVoice(true);
+      }
+      // 2. Auth Callback (Google OAuth)
+      else if (url.includes('butler://auth/callback')) {
+        logger.info("🔐 Auth Callback detected");
+        // Extract hash params (Implicit Flow) or query params
+        // Supabase often returns tokens in hash: #access_token=...&refresh_token=...
+        const hashIndex = url.indexOf('#');
+        if (hashIndex !== -1) {
+          const hash = url.substring(hashIndex + 1);
+          const params = new URLSearchParams(hash);
+          const access_token = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
+          const provider_token = params.get('provider_token');
+          const provider_refresh_token = params.get('provider_refresh_token');
+
+          if (access_token && refresh_token) {
+            logger.info("🔐 Setting Supabase Session...");
+            const { data, error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token
+            });
+            if (error) {
+              logger.error("❌ Failed to set session", error);
+              alert("Authorization Failed: " + error.message);
+            } else {
+              if (data.session) {
+                syncGoogleTokens(data.session, {
+                  access_token: provider_token || '',
+                  refresh_token: provider_refresh_token || undefined
+                });
+              }
+              logger.info("✅ Session restored from deep link!");
+              alert("Google Authorization Successful! You can now use Calendar/Tasks.");
+            }
+          }
+        }
+      }
+    };
+
+    // Check launch URL
+    CapacitorApp.getLaunchUrl().then(launchUrl => {
+      if (launchUrl?.url) handleDeepLink(launchUrl.url);
+    });
+
+    // Listen for runtime URL opens
+    const listener = CapacitorApp.addListener('appUrlOpen', (data: any) => {
+      handleDeepLink(data.url);
+    });
+
+    return () => {
+      listener.then(l => l.remove());
+    };
+  }, []);
+
+  // Check for shared text from other apps (e.g., Line, WhatsApp)
+  useEffect(() => {
+    const checkSharedIntent = async () => {
+      try {
+        // @ts-ignore - checkSendIntentReceived exists on Android, not in web types
+        const result = await SendIntent.checkSendIntentReceived();
+        if (result && result.title) {
+          // If text was shared, store it for auto-translation
+          const sharedText = result.title;
+          logger.info(`📥 Received shared text: "${sharedText.substring(0, 50)}..."`);
+          sharedTextForTranslation = sharedText;
+        }
+      } catch (e: any) {
+        // No shared intent - this is normal when app opens normally
+        logger.info('No shared intent detected');
+      }
+    };
+    checkSharedIntent();
+  }, []);
+
+  // Wire up graph creation callback
+  useEffect(() => {
+    setGraphCreateCallback((config: any) => {
+      // Add graph to localStorage and open Graphs page
+      const STORAGE_KEY = 'butler_graphs';
+      const stored = localStorage.getItem(STORAGE_KEY);
+      const graphs = stored ? JSON.parse(stored) : [];
+
+      const newGraph = {
+        ...config,
+        id: `graph_${Date.now()}`,
+        createdAt: Date.now()
+      };
+
+      // Remove oldest if at max (5)
+      const updated = graphs.length >= 5
+        ? [...graphs.slice(1), newGraph]
+        : [...graphs, newGraph];
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      setShowGraphs(true);
+      logger.info('📊 Graph created and navigating to Graphs page');
+    });
+  }, []);
+
 
   // Helper to ensure clean origin
   const getCleanUrl = (url: string) => {
@@ -150,15 +274,11 @@ function App() {
               logger.info(`⏰ Setting alarm for ${hour}:${minute.toString().padStart(2, '0')} - ${message || 'Alarm'}`);
 
               try {
-                const { CapgoAlarm } = await import('@capgo/capacitor-alarm');
-                await CapgoAlarm.createAlarm({
-                  hour,
-                  minute,
-                  label: message || 'Alarm',
-                  skipUi: false, // Show alarm UI to user
-                  vibrate: true,
-                });
-                logger.info("✅ Alarm set successfully");
+                // Use Android Intent URL scheme to open Clock app directly
+                // android.intent.action.SET_ALARM
+                const intentUri = `intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${hour};i.android.intent.extra.alarm.MINUTES=${minute};S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(message || 'Alarm')};B.android.intent.extra.alarm.SKIP_UI=false;B.android.intent.extra.alarm.VIBRATE=true;end`;
+                window.open(intentUri, '_system');
+                logger.info("✅ Alarm Intent Sent");
               } catch (alarmError: any) {
                 logger.error("Failed to set alarm:", alarmError);
                 alert(`Failed to set alarm: ${alarmError.message || 'Unknown error'}`);
@@ -199,15 +319,31 @@ function App() {
             }
 
             // HANDLER: Standard Service Call (Handles Ghost Runner Calls too!)
+            // HANDLER: Standard Service Call (Handles Ghost Runner Calls too!)
             if (!action.entity_id) return;
-            const [domain] = action.entity_id.split('.');
-            const url = `${cleanApiUrl}/api/services/${domain}/${action.service}`;
+
+            // Fix: Handle cases where 'service' is missing but 'type' is present (e.g. "switch.turn_on")
+            let domain = action.entity_id.split('.')[0];
+            let service = action.service;
+
+            if (!service && action.type && action.type.includes('.')) {
+              const parts = action.type.split('.');
+              service = parts.length > 1 ? parts[1] : parts[0];
+            }
+
+            // Fallback for missing service
+            if (!service) {
+              logger.warn("Action missing service:", action);
+              return;
+            }
+
+            const url = `${cleanApiUrl}/api/services/${domain}/${service}`;
             logger.info(`📡 Background Fetch: ${url}`);
 
             // 🛡️ Payload Clean: Don't allow entity_id override if we are calling a script directly
             // (Unless it's a generic service like turn_on)
             const payload: any = { ...action.data };
-            if (domain !== 'script' || ['turn_on', 'turn_off', 'toggle', 'reload'].includes(action.service)) {
+            if (domain !== 'script' || ['turn_on', 'turn_off', 'toggle', 'reload'].includes(service)) {
               payload.entity_id = action.entity_id;
             }
 
@@ -223,6 +359,20 @@ function App() {
             logger.error(`❌ Background Action Failed:`, { message: e.message, stack: e.stack });
           }
         }));
+      });
+      // Register suggestions handler to load suggestions when notification is tapped
+      setSuggestionsListener(async () => {
+        if (!activeConnection?.id) return;
+        const { data } = await supabase
+          .from('suggestions')
+          .select('*')
+          .eq('connection_id', activeConnection.id)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false });
+        if (data && data.length > 0) {
+          setPendingSuggestions(data);
+          logger.info(`📋 Loaded ${data.length} suggestions from notification tap`);
+        }
       });
     }
   }, [connections, activeConnection, setActiveConnection])
@@ -334,6 +484,16 @@ function App() {
               <option value="pastel-rose">Rose</option>
             </select>
 
+            {/* Settings Button */}
+            <button onClick={() => setShowSettings(true)} title="Settings" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', width: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              ⚙️
+            </button>
+
+            {/* Graphs Button */}
+            <button onClick={() => setShowGraphs(true)} title="Graphs" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', width: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              📊
+            </button>
+
             <button className="logout-btn" onClick={() => activeConnection && setActiveConnection(null)}>
               Logout
             </button>
@@ -376,13 +536,7 @@ function App() {
 
         {/* Room Tiles Dashboard */}
         <div className="dashboard">
-          {/* Setup Wizard (Relocated to Dashboard for mobile visibility below AI) */}
-          {activeConnection && (
-            <ProxySetupWizard
-              activeConnection={activeConnection}
-              onComplete={() => { logger.info("Setup Wizard Complete") }}
-            />
-          )}
+
 
           {activeConnection && <Dashboard ref={dashboardRef} />}
 
@@ -407,8 +561,40 @@ function App() {
         </div>
       )}
 
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+            <Settings onClose={() => setShowSettings(false)} />
+          </div>
+        </div>
+      )}
+
+      {/* Graphs Full-Page */}
+      {showGraphs && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 5000, background: 'var(--bg-primary)', overflow: 'auto' }}>
+          <Graphs onBack={() => setShowGraphs(false)} />
+        </div>
+      )}
+
       {/* Proactive Butler Suggestions (Floating) */}
       <ButlerSuggestions />
+
+      {/* Suggestions Popup (from push notification tap) */}
+      {pendingSuggestions.length > 0 && (
+        <SuggestionPopup
+          suggestions={pendingSuggestions}
+          onClose={() => setPendingSuggestions([])}
+          onAction={async (id, action) => {
+            // Update DB
+            await supabase.from('suggestions').update({
+              status: action === 'accept' ? 'accepted' : 'rejected'
+            }).eq('id', id);
+            // Remove from local state
+            setPendingSuggestions(prev => prev.filter(s => s.id !== id));
+          }}
+        />
+      )}
     </div>
   )
 }

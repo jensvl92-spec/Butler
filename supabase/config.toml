@@ -1,0 +1,49 @@
+
+[functions.auth-spotify-init]
+enabled = true
+verify_jwt = true
+import_map = "./functions/auth-spotify-init/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/auth-spotify-init/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/auth-spotify-init/*.html" ]
+
+[functions.auth-spotify-callback]
+enabled = true
+verify_jwt = true
+import_map = "./functions/auth-spotify-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/auth-spotify-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/auth-spotify-callback/*.html" ]
+
+[functions.auth-google-init]
+enabled = true
+verify_jwt = true
+import_map = "./functions/auth-google-init/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/auth-google-init/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/auth-google-init/*.html" ]
+
+[functions.auth-google-callback]
+enabled = true
+verify_jwt = true
+import_map = "./functions/auth-google-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/auth-google-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/auth-google-callback/*.html" ]
+
+[functions.mcp-proxy]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/mcp-proxy/index.ts"

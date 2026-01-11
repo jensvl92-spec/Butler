@@ -1,7 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">AIHA</string>
-    <string name="title_activity_main">AIHA</string>
+    <string name="app_name">Butler</string>
+    <string name="title_activity_main">Butler</string>
     <string name="package_name">com.aiha.app</string>
     <string name="custom_url_scheme">com.aiha.app</string>
+    <string name="widget_description">Tap to open Butler with voice input</string>
 </resources>

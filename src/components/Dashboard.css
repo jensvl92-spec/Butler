@@ -166,9 +166,12 @@
     font-weight: 500;
     font-size: 0.95rem;
     color: var(--text-primary);
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
+    line-height: 1.3;
 }
 
 .device-state {
@@ -446,18 +449,17 @@
 
 .detail-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 12px;
 }
 
 .detail-card {
     background: var(--bg-elevated);
     border-radius: 16px;
-    /* Matches user image */
-    padding: 12px;
+    padding: 6px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
     border: 1px solid var(--border);
     transition: all 0.2s;
 }
@@ -469,42 +471,45 @@
 
 .detail-card-header {
     display: flex;
-    gap: 12px;
+    gap: 6px;
     align-items: flex-start;
 }
 
 .detail-icon {
-    width: 32px;
-    height: 32px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
-    /* Circle icon bg like image? No, image has no bg for icon, just colored icon */
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.5rem;
+    font-size: 1.2rem;
     color: var(--text-primary);
+    flex-shrink: 0;
 }
 
 /* Specific coloring for Cover/Light icons handled in JS or helper classes? */
 
 .detail-info {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
 }
 
 .detail-name {
-    font-size: 0.85rem;
-    /* Smaller text as requested */
+    font-size: 0.7rem;
     font-weight: 600;
     color: var(--text-primary);
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
+    line-height: 1.3;
     margin-bottom: 2px;
 }
 
 .detail-state {
-    font-size: 0.75rem;
+    font-size: 0.6rem;
     color: var(--text-secondary);
 }
 
@@ -590,9 +595,12 @@
 .entity-name {
     font-size: 0.95rem;
     color: var(--text-primary);
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
+    line-height: 1.3;
 }
 
 .entity-state {

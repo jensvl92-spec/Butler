@@ -1,132 +1,167 @@
 /**
- * Router Agent - Tool & Agent Selector
+ * Router Agent - Tool & Device Selector (LLM-Native)
  * 
- * Uses a fast LLM (Gemini Flash) to select relevant tools and agents
- * BEFORE passing to the main Butler agent. This keeps Butler's prompt short.
- * 
- * RULES:
- * - Be BROAD - better to include extra tools than miss important ones
- * - NO HARD LIMIT - include as many as needed
- * - Always include execute_ha_service if any device tool is selected
+ * Uses Gemini Flash to select relevant tools and devices from full MCP catalog.
+ * NO embeddings, NO vector search - just fast, multilingual LLM selection.
  */
 
-import { chatCompletion, parseJSONResponse } from '../llm-service.ts';
+import { groqMainCompletion, parseJSONResponse } from '../llm-service.ts';
 
-const ROUTER_SYSTEM_PROMPT = `
-You are a tool selector for a smart home AI butler.
+const ROUTER_SYSTEM_PROMPT = `You select relevant tools, devices, AND AGENTS for a smart home butler.
 
-YOUR JOB:
-Given a user request and lists of available TOOLS and AGENTS, select ALL that MIGHT be relevant.
+INPUT FORMAT: TOON (Token-Oriented Object Notation)
+- Header line: name[count]{field1,field2,...}
+- Data rows: tab-separated values (\t between fields)
+- Read the header to understand which column is which
+- Example: devices[2]{entity_id,name,domain,room,state}
+           light.kitchen\tKitchen Light\tlight\tkitchen\ton
 
-RULES:
-- Be BROAD - include anything potentially useful
-- If unsure, INCLUDE IT (let the smarter AI decide)
-- NO HARD LIMIT - include as many as needed
-- If selecting any device tool, ALWAYS include "execute_ha_service"
-- Consider memory tools if request mentions preferences or past behavior
+Given a user request in ANY LANGUAGE, select:
+1. TOOLS the butler might need (ALL actions that could be relevant)
+2. DEVICES that match the request (ALL matching CONTROLLABLE entities)
+3. AGENTS that specialize in the request (e.g., Analyzer for suggestions/proposals)
 
-OUTPUT FORMAT (strict JSON):
+CRITICAL RULES:
+- OVER-INCLUDE both tools AND devices! It's MUCH better to return too many than to miss one.
+- When a ROOM is mentioned: return ALL controllable devices in that room
+- When a DEVICE TYPE is mentioned: return ALL devices of that type
+- For ANY light/switch command: include BOTH light.* AND switch.* domains
+- Understand ALL languages (Dutch "keuken" = English "kitchen")
+- Return entity_ids from the FIRST COLUMN of the devices catalog
+
+ENTITY FILTERING (CRITICAL):
+For control commands (turn on, turn off, toggle, set):
+- INCLUDE: light.*, switch.*, cover.*, climate.*, lock.*, fan.*, media_player.*
+- EXCLUDE: sensor.*, binary_sensor.*, update.*, button.*, number.*, input_*, automation.*
+- Sensors CANNOT be turned on/off - they are read-only!
+
+AGENT SELECTION:
+- If user asks for "suggestions", "proposals", "ideas", "analyze my history": SELECT THE ANALYZER AGENT.
+- **NEVER** select Analyzer for control commands (turn on, turn off, set, toggle), even if they include delays or time expressions like "in X minutes", "over X minuten", "then wait".
+- Otherwise, leave agents empty.
+
+OUTPUT (strict JSON):
 {
-  "tools": ["tool_name", "tool_name", ...],
-  "agents": ["agent_name", ...] or [],
+  "tools": ["tool.name", ...],
+  "devices": ["entity_id", ...],
+  "agents": ["agent name", ...],
   "reasoning": "brief explanation"
 }
-
-EXAMPLES:
-
-User: "Turn on the kitchen lights"
-→ {"tools": ["get_lights", "search_devices", "execute_ha_service"], "agents": [], "reasoning": "Light control request"}
-
-User: "What's my next meeting?"  
-→ {"tools": [], "agents": ["personal_assistant"], "reasoning": "Calendar query - delegate to personal_assistant"}
-
-User: "It's dark and I'm watching TV"
-→ {"tools": ["get_lights", "search_devices", "search_memory", "execute_ha_service"], "agents": [], "reasoning": "Needs lights, might have movie preferences"}
-
-User: "Make the porch light turn on at sunset"
-→ {"tools": [], "agents": ["automation_creator"], "reasoning": "Creating new automation"}
 `;
 
 export interface RouterResult {
     tools: string[];
-    agents: string[];
+    devices: string[];
+    agents?: string[];
     reasoning: string;
 }
 
-interface MCPTool {
-    name: string;
-    type: string;
-    category?: string;
-    description: string;
-    when_to_use?: string;
-}
-
-interface MCPAgent {
-    name: string;
-    description: string;
-    when_to_use?: string;
-    tags?: string[];
-}
-
 /**
- * Select relevant tools and agents for a user request.
- * Uses fast LLM (Gemini Flash) for quick, broad selection.
- */
-export async function runRouter(
-    request: string,
-    availableTools: MCPTool[],
-    availableAgents: MCPAgent[]
-): Promise<RouterResult> {
-    console.log(`[Router] Selecting tools for: "${request}"`);
-
-    // Format tools for the LLM
-    const toolList = availableTools
-        .filter(t => t.type === 'tool')
-        .map(t => `• ${t.name}: ${t.description}${t.when_to_use ? ` (Use when: ${t.when_to_use})` : ''}`)
-        .join('\n');
-
-    // Format agents for the LLM
-    const agentList = availableAgents
-        .map(a => `• ${a.name}: ${a.description}${a.when_to_use ? ` (Use when: ${a.when_to_use})` : ''}`)
-        .join('\n');
-
-    const response = await chatCompletion([
-        { role: 'system', content: ROUTER_SYSTEM_PROMPT },
-        { role: 'user', content: `AVAILABLE TOOLS:\n${toolList}\n\nAVAILABLE AGENTS:\n${agentList}\n\nUSER REQUEST: ${request}` }
-    ], 200, 0); // Low temperature for consistent selection
-
-    const result = parseJSONResponse(response);
-
-    if (!result) {
-        console.warn('[Router] Failed to parse response, using fallback');
-        // Fallback: include common tools
-        return {
-            tools: ['search_devices', 'execute_ha_service'],
-            agents: [],
-            reasoning: 'Fallback selection due to parse error'
-        };
-    }
-
-    console.log(`[Router] Selected: ${result.tools?.length || 0} tools, ${result.agents?.length || 0} agents`);
-    return result as RouterResult;
-}
-
-/**
- * Fetch tools and agents from MCP proxy, then select relevant ones.
+ * Select relevant tools and devices using LLM (no embeddings)
  */
 export async function selectToolsFromMCP(
     request: string,
     mcpProxyUrl: string,
     connectionId: string
 ): Promise<RouterResult> {
-    // Fetch available tools
-    const toolsResponse = await fetch(`${mcpProxyUrl}/tools?connection_id=${connectionId}`);
-    const { tools } = await toolsResponse.json();
+    console.log(`[Router] LLM selection for: "${request}"`);
 
-    // Fetch available agents
-    const agentsResponse = await fetch(`${mcpProxyUrl}/agents`);
-    const { agents } = await agentsResponse.json();
+    try {
+        // 1. Fetch full catalog from MCP
+        const catalogUrl = `${mcpProxyUrl}/mcp/catalog?connection_id=${connectionId}`;
+        console.log(`[Router] Fetching: ${catalogUrl}`);
 
-    // Run router to select relevant ones
-    return runRouter(request, tools || [], agents || []);
+        // Supabase function-to-function calls need both apikey and Authorization
+        const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+        const catalogResponse = await fetch(catalogUrl, {
+            headers: {
+                "apikey": anonKey || serviceKey || "",
+                "Authorization": `Bearer ${serviceKey}`
+            }
+        });
+
+        if (!catalogResponse.ok) {
+            console.error(`[Router] Catalog fetch failed: ${catalogResponse.status}`);
+            return {
+                tools: [],
+                devices: [],
+                reasoning: `DIAG: Catalog fetch failed with status ${catalogResponse.status}`
+            };
+        }
+
+        const catalog = await catalogResponse.json();
+
+        // TOON format: pre-computed strings from mcp_raw_sync
+        const toonDevices = catalog.toon_devices || 'devices[0]{entity_id,name,domain,room,state}';
+        const toonTools = catalog.toon_tools || 'tools[0]{name,domain,description,when_to_use}';
+        const toonAgents = catalog.toon_agents || 'agents[0]{name,description,when_to_use}';
+
+        // Extract counts from TOON headers (e.g., "devices[50]{...}" → 50)
+        const extractCount = (toon: string) => {
+            const match = toon.match(/\[(\d+)\]/);
+            return match ? parseInt(match[1], 10) : 0;
+        };
+
+        const deviceCount = extractCount(toonDevices);
+        const toolCount = extractCount(toonTools);
+        const agentCount = extractCount(toonAgents);
+
+        console.log(`[Router] TOON Catalog: ${toolCount} tools, ${deviceCount} devices, ${agentCount} agents`);
+
+        // If catalog is empty, return diagnostic info
+        if (toolCount === 0 && deviceCount === 0 && agentCount === 0) {
+            return {
+                tools: [],
+                devices: [],
+                reasoning: `DIAG: Catalog empty. Check if sync was successful.`
+            };
+        }
+
+        // 2. Build prompt with TOON catalogs (no conversion needed!)
+        const userPrompt = `AVAILABLE TOOLS (TOON format):
+${toonTools}
+
+AVAILABLE DEVICES (TOON format):
+${toonDevices}
+
+AVAILABLE AGENTS (TOON format):
+${toonAgents}
+
+USER REQUEST: ${request}`;
+
+        // Use Groq for fast router selection
+        const response = await groqMainCompletion([
+            { role: 'system', content: ROUTER_SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt }
+        ], 1000, 0);
+        const result = parseJSONResponse(response);
+
+        if (!result) {
+            console.warn('[Router] Failed to parse response');
+            return {
+                tools: ['light.turn_on', 'light.turn_off'],
+                devices: [],
+                reasoning: `DIAG: LLM parse failed. Raw: ${response.substring(0, 100)}`
+            };
+        }
+
+        console.log(`[Router] Selected: ${result.tools?.length || 0} tools, ${result.devices?.length || 0} devices, ${result.agents?.length || 0} agents`);
+
+        // Ensure reasoning is always present
+        return {
+            tools: result.tools || [],
+            devices: result.devices || [],
+            agents: result.agents || [],
+            reasoning: result.reasoning || `Selected ${result.tools?.length || 0} tools`
+        };
+
+    } catch (e: any) {
+        console.error(`[Router] Exception: ${e.message}`);
+        return {
+            tools: [],
+            devices: [],
+            reasoning: `DIAG: Router exception: ${e.message}`
+        };
+    }
 }

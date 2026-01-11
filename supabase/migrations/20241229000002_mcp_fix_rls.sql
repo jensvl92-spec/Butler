@@ -1,0 +1,8 @@
+-- Disable RLS for MCP internal tables
+-- These are managed by service roles and AI agents
+ALTER TABLE device_inventory DISABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_tools DISABLE ROW LEVEL SECURITY;
+ALTER TABLE agents DISABLE ROW LEVEL SECURITY;
+ALTER TABLE user_memories DISABLE ROW LEVEL SECURITY;
+ALTER TABLE mcp_raw_sync DISABLE ROW LEVEL SECURITY;
+ALTER TABLE denied_proposals DISABLE ROW LEVEL SECURITY;

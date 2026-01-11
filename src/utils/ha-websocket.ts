@@ -235,10 +235,23 @@ export class HAWebSocket {
         }
     }
 
-    public sendMessage(payload: any): Promise<any> {
+    public sendMessage(payload: any, timeoutMs = 10000): Promise<any> {
         return new Promise((resolve, reject) => {
             const id = this.idCounter++
-            this.pendingRequests.set(id, { resolve, reject })
+
+            // Add timeout to prevent infinite hang
+            const timeout = setTimeout(() => {
+                if (this.pendingRequests.has(id)) {
+                    this.pendingRequests.delete(id)
+                    console.warn(`⏱️ WebSocket timeout after ${timeoutMs}ms for message ID ${id}`)
+                    reject(new Error(`WebSocket timeout after ${timeoutMs}ms`))
+                }
+            }, timeoutMs)
+
+            this.pendingRequests.set(id, {
+                resolve: (res) => { clearTimeout(timeout); resolve(res) },
+                reject: (err) => { clearTimeout(timeout); reject(err) }
+            })
 
             // Construct message
             const message = JSON.stringify({
@@ -247,13 +260,27 @@ export class HAWebSocket {
             })
 
             // Only send if OPEN and AUTHENTICATED
-            if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
-                this.ws.send(message)
+            if (this.isConnected()) {
+                this.ws!.send(message)
             } else {
                 // Buffer it
+                console.warn(`⚠️ WS Not Ready (Auth: ${this.authenticated}, State: ${this.ws?.readyState}). Buffering message ID ${id}`)
                 this.messageQueue.push(message)
+
+                // Trigger reconnect if it looks dead
+                if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+                    this.connect();
+                }
             }
         })
+    }
+
+    public isConnected(): boolean {
+        return this.ws?.readyState === WebSocket.OPEN && this.authenticated;
+    }
+
+    public getStatus(): string {
+        return `Authenticated: ${this.authenticated}, ReadyState: ${this.ws?.readyState}, Queue: ${this.messageQueue.length}`;
     }
 
     /**

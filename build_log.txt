@@ -1,0 +1,200 @@
+﻿
+> Configure project :app
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+
+> Configure project :capacitor-cordova-android-plugins
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-android:preBuild UP-TO-DATE
+> Task :capacitor-android:preDebugBuild UP-TO-DATE
+> Task :capacitor-android:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:preDebugBuild UP-TO-DATE
+> Task :capacitor-community-speech-recognition:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preDebugBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-device:preBuild UP-TO-DATE
+> Task :capacitor-device:preDebugBuild UP-TO-DATE
+> Task :capacitor-device:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-filesystem:preBuild UP-TO-DATE
+> Task :capacitor-filesystem:preDebugBuild UP-TO-DATE
+> Task :capacitor-filesystem:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-geolocation:preBuild UP-TO-DATE
+> Task :capacitor-geolocation:preDebugBuild UP-TO-DATE
+> Task :capacitor-geolocation:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-plugin-send-intent:preBuild UP-TO-DATE
+> Task :capacitor-plugin-send-intent:preDebugBuild UP-TO-DATE
+> Task :capacitor-plugin-send-intent:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-share:preBuild UP-TO-DATE
+> Task :capacitor-share:preDebugBuild UP-TO-DATE
+> Task :capacitor-share:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-toast:preBuild UP-TO-DATE
+> Task :capacitor-toast:preDebugBuild UP-TO-DATE
+> Task :capacitor-toast:writeDebugAarMetadata UP-TO-DATE
+> Task :capgo-capacitor-alarm:preBuild UP-TO-DATE
+> Task :capgo-capacitor-alarm:preDebugBuild UP-TO-DATE
+> Task :capgo-capacitor-alarm:writeDebugAarMetadata UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:processDebugGoogleServices UP-TO-DATE
+> Task :capacitor-android:generateDebugResValues UP-TO-DATE
+> Task :capacitor-android:generateDebugResources UP-TO-DATE
+> Task :capacitor-android:packageDebugResources UP-TO-DATE
+> Task :capacitor-community-speech-recognition:generateDebugResValues UP-TO-DATE
+> Task :capacitor-community-speech-recognition:generateDebugResources UP-TO-DATE
+> Task :capacitor-community-speech-recognition:packageDebugResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugResValues UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:packageDebugResources UP-TO-DATE
+> Task :capacitor-device:generateDebugResValues UP-TO-DATE
+> Task :capacitor-device:generateDebugResources UP-TO-DATE
+> Task :capacitor-device:packageDebugResources UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugResValues UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugResources UP-TO-DATE
+> Task :capacitor-filesystem:packageDebugResources UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugResValues UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugResources UP-TO-DATE
+> Task :capacitor-geolocation:packageDebugResources UP-TO-DATE
+> Task :capacitor-plugin-send-intent:generateDebugResValues UP-TO-DATE
+> Task :capacitor-plugin-send-intent:generateDebugResources UP-TO-DATE
+> Task :capacitor-plugin-send-intent:packageDebugResources UP-TO-DATE
+> Task :capacitor-share:generateDebugResValues UP-TO-DATE
+> Task :capacitor-share:generateDebugResources UP-TO-DATE
+> Task :capacitor-share:packageDebugResources UP-TO-DATE
+> Task :capacitor-toast:generateDebugResValues UP-TO-DATE
+> Task :capacitor-toast:generateDebugResources UP-TO-DATE
+> Task :capacitor-toast:packageDebugResources UP-TO-DATE
+> Task :capgo-capacitor-alarm:generateDebugResValues UP-TO-DATE
+> Task :capgo-capacitor-alarm:generateDebugResources UP-TO-DATE
+> Task :capgo-capacitor-alarm:packageDebugResources UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-android:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-android:processDebugManifest UP-TO-DATE
+> Task :capacitor-community-speech-recognition:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-community-speech-recognition:processDebugManifest UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:processDebugManifest UP-TO-DATE
+> Task :capacitor-device:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-device:processDebugManifest UP-TO-DATE
+> Task :capacitor-filesystem:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-filesystem:processDebugManifest UP-TO-DATE
+> Task :capacitor-geolocation:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-geolocation:processDebugManifest UP-TO-DATE
+> Task :capacitor-plugin-send-intent:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-plugin-send-intent:processDebugManifest UP-TO-DATE
+> Task :capacitor-share:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-share:processDebugManifest UP-TO-DATE
+> Task :capacitor-toast:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-toast:processDebugManifest UP-TO-DATE
+> Task :capgo-capacitor-alarm:extractDeepLinksDebug UP-TO-DATE
+> Task :capgo-capacitor-alarm:processDebugManifest UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :capacitor-android:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-android:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-android:generateDebugRFile UP-TO-DATE
+> Task :capacitor-community-speech-recognition:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-community-speech-recognition:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-community-speech-recognition:generateDebugRFile UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugRFile UP-TO-DATE
+> Task :capacitor-device:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-device:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-device:generateDebugRFile UP-TO-DATE
+> Task :capacitor-filesystem:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-filesystem:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugRFile UP-TO-DATE
+> Task :capacitor-geolocation:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-geolocation:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugRFile UP-TO-DATE
+> Task :capacitor-plugin-send-intent:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-plugin-send-intent:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-plugin-send-intent:generateDebugRFile UP-TO-DATE
+> Task :capacitor-share:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-share:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-share:generateDebugRFile UP-TO-DATE
+> Task :capacitor-toast:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-toast:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-toast:generateDebugRFile UP-TO-DATE
+> Task :capgo-capacitor-alarm:compileDebugLibraryResources UP-TO-DATE
+> Task :capgo-capacitor-alarm:parseDebugLocalResources UP-TO-DATE
+> Task :capgo-capacitor-alarm:generateDebugRFile UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :capacitor-android:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-android:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-android:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-community-speech-recognition:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-community-speech-recognition:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-community-speech-recognition:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:compileDebugJavaWithJavac NO-SOURCE
+> Task :capacitor-cordova-android-plugins:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-device:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-device:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-device:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-filesystem:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-filesystem:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-filesystem:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-geolocation:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-geolocation:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-geolocation:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-plugin-send-intent:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-plugin-send-intent:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-plugin-send-intent:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-share:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-share:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-share:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-toast:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-toast:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-toast:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capgo-capacitor-alarm:javaPreCompileDebug UP-TO-DATE
+> Task :capgo-capacitor-alarm:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capgo-capacitor-alarm:bundleLibCompileToJarDebug UP-TO-DATE
+
+> Task :app:compileDebugJavaWithJavac FAILED
+.\gradlew : C:\Users\jensv\Documents\GitHub\Butler\android\app\src\main\java\com\a
+iha\app\MainActivity.java:8: error: cannot find symbol
+At line:1 char:1
++ .\gradlew assembleDebug 2>&1 | Out-File -FilePath ..\build_log.txt -E ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\jensv\...not find symbol:St 
+   ring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+        registerPlugin(FloatingButtonPlugin.class);
+                       ^
+  symbol:   class FloatingButtonPlugin
+  location: class MainActivity
+1 error
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugJavaWithJavac'.
+> Compilation failed; see the compiler error output for details.
+
+* Try:
+> Run with --info option to get more log output.
+> Run with --scan to get full insights.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.7/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 2s
+124 actionable tasks: 1 executed, 123 up-to-date

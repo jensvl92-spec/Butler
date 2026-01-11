@@ -9,6 +9,11 @@ const config: CapacitorConfig = {
       enabled: true,
     },
   },
+  server: {
+    androidScheme: 'https',
+    cleartext: true,
+    allowNavigation: ['*']
+  }
 };
 
 export default config;
