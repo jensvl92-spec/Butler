@@ -280,31 +280,17 @@ export async function processHASync(
             })
         }
 
-        // Semantic Clusters for automatic room assignment of orphan devices
-        const SEMANTIC_CLUSTERS = [
-            { key: 'living', name: 'Woonkamer', icon: '🛋️', keywords: ['woonkamer', 'living', 'salon', 'tv', 'zitkamer', 'sofa', 'salontafel'] },
-            { key: 'kitchen', name: 'Keuken', icon: '🍳', keywords: ['keuken', 'kitchen', 'kook', 'oven', 'frigo', 'koelkast', 'vaatwasser', 'dampkap', 'eettafel'] },
-            { key: 'bedroom', name: 'Slaapkamer', icon: '🛏️', keywords: ['slaapkamer', 'bedroom', 'bed', 'nachtkast', 'kinderkamer', 'logeerkamer'] },
-            { key: 'bathroom', name: 'Badkamer', icon: '🚿', keywords: ['badkamer', 'bathroom', 'douche', 'bad', 'lavabo', 'wc', 'toilet'] },
-            { key: 'office', name: 'Bureau / Werkkamer', icon: '💻', keywords: ['bureau', 'office', 'werkkamer', 'kantoor', 'desk', 'computer'] },
-            { key: 'hallway', name: 'Gang & Inkom', icon: '🚪', keywords: ['gang', 'hall', 'inkom', 'overloop', 'trap', 'voordeur', 'vestiaire'] },
-            { key: 'outdoor', name: 'Tuin & Buiten', icon: '🌱', keywords: ['tuin', 'garden', 'terras', 'buiten', 'garage', 'oprit', 'carport', 'schuur'] },
-            { key: 'utility', name: 'Berging & Wasplaats', icon: '🧺', keywords: ['berging', 'wasplaats', 'wasmachine', 'droogkast', 'zolder', 'kelder', 'bijkeuken'] },
-            { key: 'energy', name: 'Energie & Metering', icon: '⚡', keywords: ['energie', 'energy', 'solar', 'zonnepanelen', 'omvormer', 'meter', 'gas', 'water', 'stroom', 'vermogen', 'injectie', 'afname', 'tarief', 'batterij'] },
-            { key: 'security', name: 'Beveiliging & Toegang', icon: '🛡️', keywords: ['rookmelder', 'rook', 'smoke', 'beveiliging', 'alarm', 'deurbel', 'bell', 'camera', 'motion', 'beweging'] }
-        ];
-
-        // Process Orphans with Intelligent Semantic Auto-Clustering
+        // Process Orphans: Only attach to existing Areas if the name matches.
+        // Never invent synthetic rooms; any remaining devices go into a single unassigned tile.
         if (topology.orphans && topology.orphans.length > 0) {
             const orphanDevices = processEntityList(topology.orphans);
-            const clusterBuckets: Record<string, any[]> = {};
-            const unclusteredDevices: any[] = [];
+            const unassignedDevices: any[] = [];
 
             for (const dev of orphanDevices) {
                 const searchStr = `${dev.entityId} ${dev.name}`.toLowerCase();
                 let matched = false;
 
-                // 1. Check if it matches an existing Area directly
+                // Check if it matches an existing Area directly
                 for (const tile of tiles) {
                     const areaNameLower = tile.roomName.toLowerCase();
                     if (searchStr.includes(areaNameLower) || (areaNameLower.length > 3 && searchStr.includes(areaNameLower.substring(0, areaNameLower.length - 1)))) {
@@ -314,49 +300,20 @@ export async function processHASync(
                     }
                 }
 
-                if (matched) continue;
-
-                // 2. Match against Semantic Clusters
-                for (const cluster of SEMANTIC_CLUSTERS) {
-                    if (cluster.keywords.some(kw => searchStr.includes(kw))) {
-                        if (!clusterBuckets[cluster.key]) clusterBuckets[cluster.key] = [];
-                        clusterBuckets[cluster.key].push(dev);
-                        matched = true;
-                        break;
-                    }
-                }
-
                 if (!matched) {
-                    unclusteredDevices.push(dev);
+                    unassignedDevices.push(dev);
                 }
             }
 
-            // Create tiles for matched semantic clusters
-            for (const cluster of SEMANTIC_CLUSTERS) {
-                const devs = clusterBuckets[cluster.key];
-                if (devs && devs.length > 0) {
-                    tiles.push({
-                        id: `room-cluster-${cluster.key}`,
-                        type: 'room',
-                        roomId: `cluster-${cluster.key}`,
-                        roomName: cluster.name,
-                        roomIcon: cluster.icon,
-                        order: tiles.length,
-                        devices: devs
-                    });
-                }
-            }
-
-            // Remaining unclustered devices
-            if (unclusteredDevices.length > 0) {
+            if (unassignedDevices.length > 0) {
                 tiles.push({
                     id: 'room-unassigned',
                     type: 'room',
                     roomId: 'unassigned',
-                    roomName: 'Overige apparaten',
+                    roomName: 'Niet-toegewezen apparaten',
                     roomIcon: '📦',
                     order: tiles.length,
-                    devices: unclusteredDevices
+                    devices: unassignedDevices
                 });
             }
         }
@@ -383,8 +340,9 @@ export async function processHASync(
     // 4. Save to LocalStorage (Dashboard)
     logger.info(`processHASync: Generating ${tiles.length} tiles (Total devices: ${tiles.reduce((acc, t) => acc + t.devices.length, 0)})`);
     localStorage.setItem('dashboard-tiles', JSON.stringify(tiles))
+    localStorage.setItem(`dashboard_tiles_${connectionId}`, JSON.stringify(tiles))
 
-    // 5. Sync to Supabase (Rooms)
+    // 5. Sync to Supabase (Rooms) - only genuine areas, not the unassigned bucket
     logger.info('processHASync: Syncing rooms to Supabase...');
     const { error: delError } = await supabase
         .from('rooms')
@@ -393,12 +351,14 @@ export async function processHASync(
 
     if (delError) logger.error('processHASync: Error clearing rooms', delError);
 
-    // Prepare batch insert
-    const roomRows = tiles.map(t => ({
-        connection_id: connectionId,
-        name: t.roomName,
-        description: `Imported from Home Assistant Area: ${t.roomId}`,
-    }))
+    // Prepare batch insert (exclude virtual unassigned bucket from db rooms)
+    const roomRows = tiles
+        .filter(t => t.roomId !== 'unassigned')
+        .map(t => ({
+            connection_id: connectionId,
+            name: t.roomName,
+            description: `Imported from Home Assistant Area: ${t.roomId}`,
+        }))
 
     if (roomRows.length > 0) {
         const { error: insError } = await supabase

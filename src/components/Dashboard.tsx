@@ -47,12 +47,7 @@ interface DashboardTile {
     deviceGroups: DeviceGroup[]
 }
 
-const DEFAULT_TILES: DashboardTile[] = [
-    { id: 'bedroom', type: 'room', roomId: 'bedroom', roomName: 'Bedroom', roomIcon: '🛏️', order: 0, deviceGroups: [] },
-    { id: 'living', type: 'room', roomId: 'living', roomName: 'Living Room', roomIcon: '🛋️', order: 1, deviceGroups: [] },
-    { id: 'kitchen', type: 'room', roomId: 'kitchen', roomName: 'Kitchen', roomIcon: '🍳', order: 2, deviceGroups: [] },
-    { id: 'office', type: 'room', roomId: 'office', roomName: 'Office', roomIcon: '💻', order: 3, deviceGroups: [] },
-]
+const DEFAULT_TILES: DashboardTile[] = []
 
 const ROOM_ICONS: Record<string, string> = {
     bedroom: '🛏️', living: '🛋️', kitchen: '🍳', bathroom: '🚿',
@@ -170,6 +165,8 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             }
         } else if (stored) {
             setTiles(localTiles)
+        } else {
+            setTiles([])
         }
     }, [activeConnection, rooms])
 
@@ -573,6 +570,13 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             deviceGroups: []
         }
 
+        // Pre-populate tiles with all areas defined in HA registry
+        if (haAreas && haAreas.length > 0) {
+            haAreas.forEach(area => {
+                getOrCreateTile(area.area_id, area.name)
+            })
+        }
+
         // --- MAP DATA ---
 
         // 1. Group Entities by Device ID
@@ -685,7 +689,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
         })
 
         // 4. Final Sort
-        if (devicesAddedCount > 0) {
+        if (newTiles.length > 0 || devicesAddedCount > 0) {
             if (unassignedTile.deviceGroups.length > 0) newTiles.push(unassignedTile)
 
             newTiles.sort((a, b) => {
@@ -702,15 +706,14 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
             // === NEW: Sync to MCP Librarian (Client-Orchestrated Batching) ===
             // This builds the Custom MCP Server with properly formatted tools
-            // === NEW: Trigger Sync ===
-            // === NEW: Trigger Sync ===
             if (activeConnection) {
                 performToolSync(activeConnection, entityStates);
             }
 
-            alert(`Import Complete!\nCreated ${areasCreatedCount} areas.\nMapped ${devicesAddedCount} devices from Home Assistant.`)
+            alert(`Import voltooid!\n${areasCreatedCount} ruimtes aangemaakt.\n${devicesAddedCount} apparaten gekoppeld uit Home Assistant.`)
         } else {
-            alert("No matching entities found in your HA registries.")
+            setTiles([])
+            alert("Geen apparaten of ruimtes gevonden in je Home Assistant configuratie.")
         }
     }
 
@@ -1225,17 +1228,35 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
 
             {/* Room Grid */}
-            <div className="room-grid">
-                {tiles.sort((a, b) => a.order - b.order).map(tile => renderRoomCard(tile))}
+            {tiles.length === 0 ? (
+                <div style={{
+                    padding: '48px 24px',
+                    textAlign: 'center',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    borderRadius: '16px',
+                    border: '1px dashed rgba(255, 255, 255, 0.15)',
+                    margin: '20px 0'
+                }}>
+                    <div style={{ fontSize: '2.8rem', marginBottom: '14px' }}>🏡</div>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.25rem', fontWeight: 600 }}>Woning in opbouw</h3>
+                    <p style={{ margin: 0, opacity: 0.75, fontSize: '0.92rem', lineHeight: '1.6', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
+                        Er zijn momenteel geen kamers of actieve apparaten geconfigureerd in Home Assistant.<br />
+                        Zodra je nieuwe apparaten of ruimtes koppelt, worden deze hier direct dynamisch weergegeven.
+                    </p>
+                </div>
+            ) : (
+                <div className="room-grid">
+                    {tiles.sort((a, b) => a.order - b.order).map(tile => renderRoomCard(tile))}
 
-                {/* Add Room Button */}
-                {editMode && (
-                    <div className="room-card add-room" onClick={() => setShowAddRoomModal(true)}>
-                        <div style={{ fontSize: '2rem' }}>+</div>
-                        <div>Add Room</div>
-                    </div>
-                )}
-            </div>
+                    {/* Add Room Button */}
+                    {editMode && (
+                        <div className="room-card add-room" onClick={() => setShowAddRoomModal(true)}>
+                            <div style={{ fontSize: '2rem' }}>+</div>
+                            <div>Add Room</div>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Config Modal */}
             {configTileId && (

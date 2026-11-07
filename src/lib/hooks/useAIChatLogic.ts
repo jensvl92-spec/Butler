@@ -172,6 +172,24 @@ export function useAIChatLogic() {
         return null;
     };
 
+    const getDynamicCoordinates = (): { lat: number; lon: number } => {
+        try {
+            const homeZone: any = entityStates?.['zone.home'];
+            const homeLat = homeZone?.attributes?.latitude;
+            const homeLon = homeZone?.attributes?.longitude;
+            if (typeof homeLat === 'number' && typeof homeLon === 'number') {
+                return {
+                    lat: lastKnownLocation?.lat || homeLat,
+                    lon: lastKnownLocation?.lon || homeLon
+                };
+            }
+        } catch { }
+        return {
+            lat: lastKnownLocation?.lat || 51.1488,
+            lon: lastKnownLocation?.lon || 5.1271
+        };
+    };
+
     // Local Execution Helper
     const executeActionsClientSide = async (actions: any[], originalText?: string): Promise<{ retryTriggered: boolean; generatedText?: string }> => {
         let generatedText: string | undefined = undefined;
@@ -341,8 +359,9 @@ export function useAIChatLogic() {
                 action.service === 'weather.get_current'
             ) {
                 const params = action.parameters || action.data || {};
-                const lat = params.lat || lastKnownLocation?.lat || 51.1488;
-                const lon = params.lon || lastKnownLocation?.lon || 5.1271;
+                const dynCoords = getDynamicCoordinates();
+                const lat = params.lat || dynCoords.lat;
+                const lon = params.lon || dynCoords.lon;
                 const lang = params.lang || uiState.language || 'nl';
 
                 const haTemp = getHAOutdoorTemp();
@@ -361,8 +380,9 @@ export function useAIChatLogic() {
                 action.service === 'weather.get_forecast'
             ) {
                 const params = action.parameters || action.data || {};
-                const lat = params.lat || lastKnownLocation?.lat || 51.1488;
-                const lon = params.lon || lastKnownLocation?.lon || 5.1271;
+                const dynCoords = getDynamicCoordinates();
+                const lat = params.lat || dynCoords.lat;
+                const lon = params.lon || dynCoords.lon;
                 const lang = params.lang || uiState.language || 'nl';
 
                 logger.info(`🌤️ Executing weather_get_forecast: lat=${lat}, lon=${lon}, lang=${lang}`);
@@ -660,8 +680,9 @@ export function useAIChatLogic() {
 
         if (isDirectWeather) {
             logger.info("⚡ [FastPath] Instant Weather Intercept (<150ms)");
-            const lat = lastKnownLocation?.lat || 51.1488;
-            const lon = lastKnownLocation?.lon || 5.1271;
+            const dynCoords = getDynamicCoordinates();
+            const lat = dynCoords.lat;
+            const lon = dynCoords.lon;
             const haTemp = getHAOutdoorTemp();
 
             const isForecast = /morgen|weekend|volgende week|voorspelling/i.test(lower);
@@ -921,8 +942,9 @@ export function useAIChatLogic() {
 
             if (!responseText && isWeatherQuery) {
                 logger.info("🌤️ Weather query detected with empty backend response; executing client-side Open-Meteo fallback...");
-                const lat = lastKnownLocation?.lat || 51.1488;
-                const lon = lastKnownLocation?.lon || 5.1271;
+                const dynCoords = getDynamicCoordinates();
+                const lat = dynCoords.lat;
+                const lon = dynCoords.lon;
                 const lang = uiState.language || 'nl';
                 const haTemp = getHAOutdoorTemp();
 
@@ -939,9 +961,8 @@ export function useAIChatLogic() {
                 const lastUserMsg = [...messages].reverse().find(m => m.user_message && m.user_message !== cleanText);
                 if (lastUserMsg && /graden|temperatuur|weer|buiten/i.test(lastUserMsg.user_message)) {
                     logger.info("🔄 Retry of previous weather query detected!");
-                    const lat = lastKnownLocation?.lat || 51.1488;
-                    const lon = lastKnownLocation?.lon || 5.1271;
-                    responseText = await fetchOpenMeteoCurrentWeather(lat, lon, uiState.language || 'nl', getHAOutdoorTemp());
+                    const dynCoords = getDynamicCoordinates();
+                    responseText = await fetchOpenMeteoCurrentWeather(dynCoords.lat, dynCoords.lon, uiState.language || 'nl', getHAOutdoorTemp());
                 }
             }
 
