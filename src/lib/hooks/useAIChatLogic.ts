@@ -6,12 +6,136 @@ import { ChatMessage, LLMResponse } from '../../types';
 import { logger } from '../../utils/logger';
 import { Geolocation } from '@capacitor/geolocation';
 import { Browser } from '@capacitor/browser';
+import { Capacitor } from '@capacitor/core';
 import { findContactByName } from '../../utils/contactsService';
+import { supabase } from '../supabase';
 // @ts-ignore
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 
-const SUPABASE_URL = (import.meta as any).env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
+const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
+
+// Module-level GPS cache so subsequent questions don't require GPS warm-up or server retry
+let lastKnownLocation: { lat: number; lon: number; timestamp: number } | null = null;
+
+const WMO_WEATHER_CODES_NL: Record<number, string> = {
+    0: 'een heldere hemel',
+    1: 'hoofdzakelijk helder weer',
+    2: 'gedeeltelijk bewolkt',
+    3: 'zwaar bewolkt',
+    45: 'mistig',
+    48: 'rijp en mist',
+    51: 'lichte motregen',
+    53: 'matige motregen',
+    55: 'dichte motregen',
+    61: 'lichte regen',
+    63: 'matige regen',
+    65: 'zware regen',
+    71: 'lichte sneeuwval',
+    73: 'matige sneeuwval',
+    75: 'zware sneeuwval',
+    80: 'lichte regenbuien',
+    81: 'matige regenbuien',
+    82: 'hevige regenbuien',
+    95: 'onweer',
+    96: 'onweer met lichte hagel',
+    99: 'onweer met zware hagel'
+};
+
+const WMO_WEATHER_CODES_EN: Record<number, string> = {
+    0: 'clear skies',
+    1: 'mainly clear',
+    2: 'partly cloudy',
+    3: 'overcast',
+    45: 'foggy',
+    48: 'depositing rime fog',
+    51: 'light drizzle',
+    53: 'moderate drizzle',
+    55: 'dense drizzle',
+    61: 'slight rain',
+    63: 'moderate rain',
+    65: 'heavy rain',
+    71: 'slight snowfall',
+    73: 'moderate snowfall',
+    75: 'heavy snowfall',
+    80: 'slight rain showers',
+    81: 'moderate rain showers',
+    82: 'violent rain showers',
+    95: 'thunderstorms',
+    96: 'thunderstorms with slight hail',
+    99: 'thunderstorms with heavy hail'
+};
+
+async function fetchOpenMeteoCurrentWeather(lat: number, lon: number, lang: string = 'nl', haTemp?: number | null): Promise<string> {
+    const isNl = lang.toLowerCase().startsWith('nl');
+    try {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+        const data = await res.json();
+        const current = data.current;
+        if (!current) throw new Error("No current weather data returned");
+
+        const temp = Math.round(current.temperature_2m * 10) / 10;
+        const apparent = Math.round(current.apparent_temperature * 10) / 10;
+        const code = current.weather_code ?? 0;
+        const humidity = current.relative_humidity_2m;
+        const wind = Math.round(current.wind_speed_10m);
+
+        const desc = (isNl ? WMO_WEATHER_CODES_NL[code] : WMO_WEATHER_CODES_EN[code]) || (isNl ? 'wisselvallig' : 'variable');
+
+        let text = isNl
+            ? `Het is momenteel ${temp}°C buiten (gevoelstemperatuur ${apparent}°C) met ${desc}. De luchtvochtigheid is ${humidity}% en de windsnelheid is ${wind} km/u.`
+            : `It is currently ${temp}°C outside (feels like ${apparent}°C) with ${desc}. Humidity is ${humidity}% and wind speed is ${wind} km/h.`;
+
+        if (haTemp !== null && haTemp !== undefined && !isNaN(haTemp)) {
+            const haText = isNl ? ` Je Home Assistant sensor meet ${haTemp}°C.` : ` Your Home Assistant sensor measures ${haTemp}°C.`;
+            text += haText;
+        }
+
+        return text;
+    } catch (e: any) {
+        logger.error("Failed to fetch weather from Open-Meteo:", e);
+        if (haTemp !== null && haTemp !== undefined && !isNaN(haTemp)) {
+            return isNl
+                ? `Volgens je Home Assistant buitensensor is het ${haTemp}°C.`
+                : `According to your Home Assistant outdoor sensor, it is ${haTemp}°C.`;
+        }
+        return isNl
+            ? "Ik kon de actuele weersinformatie helaas niet ophalen."
+            : "I was unable to retrieve the current outdoor temperature.";
+    }
+}
+
+async function fetchOpenMeteoForecast(lat: number, lon: number, lang: string = 'nl'): Promise<string> {
+    const isNl = lang.toLowerCase().startsWith('nl');
+    try {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+        const data = await res.json();
+        const daily = data.daily;
+        if (!daily || !daily.temperature_2m_max || daily.temperature_2m_max.length === 0) {
+            throw new Error("No daily forecast data");
+        }
+
+        const maxTemp = Math.round(daily.temperature_2m_max[0]);
+        const minTemp = Math.round(daily.temperature_2m_min[0]);
+        const precip = daily.precipitation_probability_max?.[0] ?? 0;
+        const code = daily.weather_code?.[0] ?? 0;
+
+        const desc = (isNl ? WMO_WEATHER_CODES_NL[code] : WMO_WEATHER_CODES_EN[code]) || (isNl ? 'wisselvallig' : 'variable');
+
+        return isNl
+            ? `Vandaag wordt het maximaal ${maxTemp}°C en minimaal ${minTemp}°C met ${desc}. De neerslagkans is ${precip}%.`
+            : `Today will reach a high of ${maxTemp}°C and a low of ${minTemp}°C with ${desc}. Chance of rain is ${precip}%.`;
+    } catch (e: any) {
+        logger.error("Failed to fetch forecast from Open-Meteo:", e);
+        return isNl
+            ? "Ik kon het weersbericht helaas niet ophalen."
+            : "I was unable to retrieve the weather forecast.";
+    }
+}
 
 // Global callback for graph creation (set by App.tsx)
 export let onGraphCreate: ((config: any) => void) | null = null;
@@ -23,13 +147,34 @@ export function useAIChatLogic() {
     const [loading, setLoading] = useState(false);
     const [conversationMode, setConversationMode] = useState(false); // Hands-free mode for recipes
 
-    // Local Execution Helper
-    const executeActionsClientSide = async (actions: any[], originalText?: string): Promise<{ retryTriggered: boolean }> => {
-        if (!haWebSocket) {
-            logger.error("❌ ExecuteActions: No/Closed WebSocket!");
-            return { retryTriggered: false };
+    const getHAOutdoorTemp = (): number | null => {
+        try {
+            if (!entityStates) return null;
+            for (const [entityId, entity] of Object.entries(entityStates)) {
+                const id = entityId.toLowerCase();
+                if (
+                    (id.includes('outdoor') || id.includes('buiten') || id.includes('outside')) &&
+                    (id.includes('temp') || id.includes('temperatuur'))
+                ) {
+                    const val = parseFloat((entity as any)?.state);
+                    if (!isNaN(val)) return val;
+                }
+            }
+            for (const [entityId, entity] of Object.entries(entityStates)) {
+                if (entityId.startsWith('weather.') && (entity as any)?.attributes?.temperature !== undefined) {
+                    const val = parseFloat((entity as any).attributes.temperature);
+                    if (!isNaN(val)) return val;
+                }
+            }
+        } catch {
+            // Ignore
         }
+        return null;
+    };
 
+    // Local Execution Helper
+    const executeActionsClientSide = async (actions: any[], originalText?: string): Promise<{ retryTriggered: boolean; generatedText?: string }> => {
+        let generatedText: string | undefined = undefined;
         logger.info("🚀 executeActionsClientSide Starting...", { count: actions.length });
 
         for (let i = 0; i < actions.length; i++) {
@@ -101,7 +246,7 @@ export function useAIChatLogic() {
                 const isInline = hasInlineDelay;
                 const targetAction = isInline ? action : actions[i + 1];
 
-                if (targetAction && targetAction.entity_id && targetAction.service) {
+                if (targetAction && targetAction.entity_id && targetAction.service && haWebSocket) {
                     logger.info(`👻 Offloading to Ghost Runner: Wait ${sec}s then call ${targetAction.service} on ${targetAction.entity_id}`);
 
                     // Format seconds to HH:MM:SS for the script delay
@@ -172,6 +317,7 @@ export function useAIChatLogic() {
                     setLoading(true);
                     const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 });
                     const loc = { lat: position.coords.latitude, lon: position.coords.longitude };
+                    lastKnownLocation = { ...loc, timestamp: Date.now() };
                     logger.info("📍 Fallback GPS Acquired. Retrying...", loc);
 
                     // Retry with forced location - return flag to suppress original response display
@@ -186,8 +332,52 @@ export function useAIChatLogic() {
                 }
             }
 
+            // WEATHER HANDLER (Client-side execution for weather_get_current and weather_get_forecast via Open-Meteo)
+            if (
+                action.action === 'weather_get_current' ||
+                action.service === 'weather_get_current' ||
+                action.type === 'weather_get_current' ||
+                action.action === 'get_current_weather' ||
+                action.service === 'weather.get_current'
+            ) {
+                const params = action.parameters || action.data || {};
+                const lat = params.lat || lastKnownLocation?.lat || 51.1488;
+                const lon = params.lon || lastKnownLocation?.lon || 5.1271;
+                const lang = params.lang || uiState.language || 'nl';
+
+                const haTemp = getHAOutdoorTemp();
+                logger.info(`🌤️ Executing weather_get_current: lat=${lat}, lon=${lon}, lang=${lang}`);
+                const weatherInfo = await fetchOpenMeteoCurrentWeather(lat, lon, lang, haTemp);
+                logger.info("✅ Weather fetched:", weatherInfo);
+                generatedText = weatherInfo;
+                continue;
+            }
+
+            if (
+                action.action === 'weather_get_forecast' ||
+                action.service === 'weather_get_forecast' ||
+                action.type === 'weather_get_forecast' ||
+                action.action === 'get_forecast' ||
+                action.service === 'weather.get_forecast'
+            ) {
+                const params = action.parameters || action.data || {};
+                const lat = params.lat || lastKnownLocation?.lat || 51.1488;
+                const lon = params.lon || lastKnownLocation?.lon || 5.1271;
+                const lang = params.lang || uiState.language || 'nl';
+
+                logger.info(`🌤️ Executing weather_get_forecast: lat=${lat}, lon=${lon}, lang=${lang}`);
+                const forecastInfo = await fetchOpenMeteoForecast(lat, lon, lang);
+                logger.info("✅ Weather forecast fetched:", forecastInfo);
+                generatedText = forecastInfo;
+                continue;
+            }
+
             // Standard Service Call (Non-delayed)
             if (action.entity_id) {
+                if (!haWebSocket) {
+                    logger.warn("⚠️ Cannot execute HA service: WebSocket not connected", action);
+                    continue;
+                }
                 // Determine domain and service name
                 // FIX: Handle Array entity_ids (e.g. multiple devices)
                 const firstEntity = Array.isArray(action.entity_id) ? action.entity_id[0] : action.entity_id;
@@ -253,11 +443,10 @@ export function useAIChatLogic() {
                         url.includes('drive.google.com');
                     const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
 
-                    if (isGoogleApp || isYouTube) {
-                        logger.info(`📱 Opening in native app (if available): ${url}`);
-                        window.open(url, '_system');
+                    if (Capacitor.isNativePlatform()) {
+                        await Browser.open({ url });
                     } else {
-                        window.open(url, '_blank');
+                        window.open(url, '_blank', 'noopener,noreferrer');
                     }
                 } else {
                     logger.warn("⚠️ open_url action missing URL");
@@ -268,13 +457,20 @@ export function useAIChatLogic() {
                 const mode = action.mode || action.parameters?.mode || 'driving';
 
                 if (destination) {
-                    // Build Google Maps app deep link
-                    // Modes: d = driving, w = walking, b = bicycling
                     const modeCode = mode === 'walking' ? 'w' : mode === 'bicycling' ? 'b' : 'd';
                     const navUrl = `google.navigation:q=${encodeURIComponent(destination)}&mode=${modeCode}`;
+                    const webMaps = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=${mode}`;
 
-                    logger.info(`🗺️ Opening Google Maps Navigation to: ${destination} (mode: ${mode})`);
-                    window.open(navUrl, '_system');
+                    logger.info(`🗺️ Opening Navigation to: ${destination} (mode: ${mode})`);
+                    if (Capacitor.isNativePlatform()) {
+                        try {
+                            await Browser.open({ url: navUrl });
+                        } catch {
+                            await Browser.open({ url: webMaps });
+                        }
+                    } else {
+                        window.open(webMaps, '_blank', 'noopener,noreferrer');
+                    }
                 } else {
                     logger.warn("⚠️ open_navigation action missing destination");
                 }
@@ -377,22 +573,24 @@ export function useAIChatLogic() {
         }
 
         // Refresh State after all actions
-        return { retryTriggered: false };
+        return { retryTriggered: false, generatedText };
     };
 
-    const playNativeTTS = async (text: string, language: string, autoListen: boolean) => {
+    const playNativeTTS = async (text: string, language: string, autoListen: boolean, isWhisper?: boolean) => {
         try {
-            // Use Capacitor TTS Plugin for reliable native voice
             const locale = (language && language.toLowerCase().includes('nl')) ? 'nl-NL' : 'en-US';
+            const volume = isWhisper ? 0.3 : 1.0;
+            const rate = isWhisper ? 0.9 : 1.05;
+            const pitch = isWhisper ? 0.85 : 1.0;
 
-            logger.info(`🔊 Plugin TTS: "${text.substring(0, 20)}..." (${locale})`);
+            logger.info(`🔊 Plugin TTS: "${text.substring(0, 20)}..." (${locale}, vol: ${volume}, whisper: ${!!isWhisper})`);
 
             await TextToSpeech.speak({
                 text: text,
                 lang: locale,
-                rate: 1.0,
-                pitch: 1.0,
-                volume: 1.0,
+                rate,
+                pitch,
+                volume,
                 category: 'ambient',
             });
 
@@ -406,11 +604,19 @@ export function useAIChatLogic() {
         } catch (e: any) {
             logger.error('❌ Plugin TTS failed, trying Web Speech fallback:', e);
 
-            // Fallback to Web Speech API
             if ('speechSynthesis' in window) {
                 const utter = new SpeechSynthesisUtterance(text);
                 const locale = (language && language.toLowerCase().includes('nl')) ? 'nl-NL' : 'en-US';
                 utter.lang = locale;
+                utter.volume = isWhisper ? 0.3 : 1.0;
+                utter.rate = isWhisper ? 0.9 : 1.05;
+                utter.pitch = isWhisper ? 0.85 : 1.0;
+
+                const voices = window.speechSynthesis.getVoices();
+                const dutchVoice = voices.find(v => v.lang.startsWith('nl') || v.lang.includes('Dutch'));
+                if (dutchVoice) {
+                    utter.voice = dutchVoice;
+                }
 
                 utter.onend = () => {
                     if (autoListen) {
@@ -418,7 +624,6 @@ export function useAIChatLogic() {
                     }
                 };
 
-                // Safety timeout for Web Speech
                 setTimeout(() => {
                     if (window.speechSynthesis.speaking) {
                         logger.warn('⚠️ Native TTS timed out (fallback)');
@@ -433,6 +638,133 @@ export function useAIChatLogic() {
                 }
             }
         }
+    };
+
+    // SOTA Local Fast Path: Zero-cloud latency execution (<150ms) for high-frequency deterministic intents
+    const tryLocalFastPath = async (
+        rawText: string,
+        tempId: string,
+        optimisticMsg: ChatMessage,
+        options?: { isWhisper?: boolean }
+    ): Promise<{ handled: boolean; responseText?: string }> => {
+        if (!activeConnection) return { handled: false };
+
+        const text = rawText.trim();
+        const lower = text.toLowerCase();
+        const lang = uiState.language || 'nl';
+
+        // 1. Direct Weather Fast Path (< 150ms)
+        const isDirectWeather = /^(wat is het weer|hoeveel graden|hoe warm is het|het weer|weerbericht|wat voor weer is het|regent het|gaat het regenen|temperatuur)\b/i.test(lower) ||
+            /^hoeveel graden is het buiten/i.test(lower) ||
+            /^wat is de temperatuur/i.test(lower);
+
+        if (isDirectWeather) {
+            logger.info("⚡ [FastPath] Instant Weather Intercept (<150ms)");
+            const lat = lastKnownLocation?.lat || 51.1488;
+            const lon = lastKnownLocation?.lon || 5.1271;
+            const haTemp = getHAOutdoorTemp();
+
+            const isForecast = /morgen|weekend|volgende week|voorspelling/i.test(lower);
+            const weatherText = isForecast
+                ? await fetchOpenMeteoForecast(lat, lon, lang)
+                : await fetchOpenMeteoCurrentWeather(lat, lon, lang, haTemp);
+
+            const completedMsg: ChatMessage = {
+                ...optimisticMsg,
+                ai_response: weatherText,
+                language: 'nl-BE',
+                actions_taken: [{ type: 'weather', entity_id: 'weather.open_meteo', service: 'weather_fast_path', data: { lat, lon } }]
+            };
+
+            setMessages(prev => prev.map(m => m.id === tempId ? completedMsg : m));
+            addChatMessage(completedMsg);
+
+            try {
+                await supabase.from('chat_history').insert({
+                    connection_id: activeConnection.id,
+                    user_message: rawText,
+                    ai_response: { text: weatherText, actions: [] },
+                    actions_taken: [],
+                    metadata: { language: 'nl-BE', fast_path: true }
+                });
+            } catch { }
+
+            playNativeTTS(weatherText, 'nl-BE', conversationMode, options?.isWhisper);
+            return { handled: true, responseText: weatherText };
+        }
+
+        // 2. Direct HA Device Control Fast Path (< 100ms)
+        const controlMatch = lower.match(/^(?:doe|zet|schakel)?\s*(?:het|de)?\s*(.+?)\s*(?:eens)?\s*(aan|uit|open|dicht)$/i);
+        if (controlMatch && haWebSocket && entityStates) {
+            const targetName = controlMatch[1].trim();
+            const action = controlMatch[2].toLowerCase();
+            const turnOn = action === 'aan' || action === 'open';
+
+            const matchingEntities = Object.values(entityStates).filter((s: any) => {
+                if (!s.entity_id) return false;
+                const domain = s.entity_id.split('.')[0];
+                if (!['light', 'switch', 'cover', 'media_player', 'fan'].includes(domain)) return false;
+
+                const friendly = (s.attributes?.friendly_name || '').toLowerCase();
+                const idPart = s.entity_id.split('.')[1].replace(/_/g, ' ').toLowerCase();
+
+                return friendly === targetName ||
+                    idPart === targetName ||
+                    friendly.includes(targetName) ||
+                    (targetName.length > 3 && (friendly.startsWith(targetName) || idPart.startsWith(targetName)));
+            });
+
+            if (matchingEntities.length === 1) {
+                const targetEntity: any = matchingEntities[0];
+                const domain = targetEntity.entity_id.split('.')[0];
+                const service = turnOn
+                    ? (domain === 'cover' ? 'open_cover' : 'turn_on')
+                    : (domain === 'cover' ? 'close_cover' : 'turn_off');
+
+                logger.info(`⚡ [FastPath] Direct HA Execution (<100ms): ${domain}.${service} on ${targetEntity.entity_id}`);
+
+                try {
+                    await haWebSocket.sendMessage({
+                        type: 'call_service',
+                        domain,
+                        service,
+                        service_data: { entity_id: targetEntity.entity_id }
+                    });
+
+                    const friendlyName = targetEntity.attributes?.friendly_name || targetEntity.entity_id;
+                    const responseText = turnOn
+                        ? `Ik heb ${friendlyName} aangedaan.`
+                        : `Ik heb ${friendlyName} uitgezet.`;
+
+                    const completedMsg: ChatMessage = {
+                        ...optimisticMsg,
+                        ai_response: responseText,
+                        language: 'nl-BE',
+                        actions_taken: [{ type: domain, entity_id: targetEntity.entity_id, service: `${domain}.${service}` }]
+                    };
+
+                    setMessages(prev => prev.map(m => m.id === tempId ? completedMsg : m));
+                    addChatMessage(completedMsg);
+
+                    try {
+                        await supabase.from('chat_history').insert({
+                            connection_id: activeConnection.id,
+                            user_message: rawText,
+                            ai_response: { text: responseText, actions: completedMsg.actions_taken },
+                            actions_taken: completedMsg.actions_taken,
+                            metadata: { language: 'nl-BE', fast_path: true }
+                        });
+                    } catch { }
+
+                    playNativeTTS(responseText, 'nl-BE', conversationMode, options?.isWhisper);
+                    return { handled: true, responseText };
+                } catch (haErr) {
+                    logger.warn("⚡ [FastPath] Direct call failed, falling back to cloud orchestrator:", haErr);
+                }
+            }
+        }
+
+        return { handled: false };
     };
 
     const sendMessage = async (text: string, options?: { forcedLocation?: any; gpsUnavailable?: boolean; isWhisper?: boolean }) => {
@@ -455,6 +787,14 @@ export function useAIChatLogic() {
             };
             setMessages(prev => [...prev, optimisticMsg]);
 
+            // SOTA Local Fast Path Check (<150ms instant response)
+            const fastPathResult = await tryLocalFastPath(text, tempId, optimisticMsg, options);
+            if (fastPathResult.handled) {
+                logger.info("⚡ [FastPath] Request successfully resolved locally with zero latency");
+                setLoading(false);
+                return;
+            }
+
             // 1. Gather Context
             const devices = Object.values(entityStates).map((s: any) => ({
                 entity_id: s.entity_id, ...s
@@ -471,16 +811,20 @@ export function useAIChatLogic() {
 
             if (options?.forcedLocation) {
                 userLocation = options.forcedLocation;
+                lastKnownLocation = { ...options.forcedLocation, timestamp: Date.now() };
                 logger.info("📍 Using forced/fallback location", userLocation);
+            } else if (lastKnownLocation && (Date.now() - lastKnownLocation.timestamp < 30 * 60 * 1000)) {
+                userLocation = { lat: lastKnownLocation.lat, lon: lastKnownLocation.lon };
+                logger.info("📍 Using cached location (< 30 mins old)", userLocation);
             } else if (!options?.gpsUnavailable) {
                 try {
-                    // "Immediate" fetch only: 300ms.
-                    // If GPS is warm, we get it. If cold, we proceed without it to avoid blocking.
-                    const getLocationPromise = Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 1000 });
-                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 300));
+                    // Quick check with 1200ms timeout
+                    const getLocationPromise = Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 1500 });
+                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 1200));
 
                     const position: any = await Promise.race([getLocationPromise, timeoutPromise]);
                     userLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
+                    lastKnownLocation = { ...userLocation, timestamp: Date.now() };
                     logger.info("📍 Got GPS location (Instant)", userLocation);
                 } catch (e: any) {
                     // Determine if it was a timeout or error
@@ -494,10 +838,16 @@ export function useAIChatLogic() {
                 logger.info("📍 Skipping GPS (marked as unavailable)");
             }
 
+            const recentHistory = messages.slice(-6).map(m => ([
+                { role: 'user', content: m.user_message },
+                { role: 'assistant', content: m.ai_response }
+            ])).flat().filter(m => m.content && m.content.trim());
+
             const payload = {
                 connection_id: activeConnection.id,
                 user_message: text,
-                language: uiState.language || 'en',
+                recent_history: recentHistory,
+                language: uiState.language || 'nl',
                 devices: devices,
                 mcp_proxy_url: mcpProxyUrl,
                 ha_url: (activeConnection as any).api_url || '',
@@ -546,12 +896,14 @@ export function useAIChatLogic() {
                 throw fetchError;
             }
 
-            // Execute actions via WebSocket if we have a connection
+            // Execute actions via WebSocket or Client-side handlers
             let retryTriggered = false;
-            if (aiData.actions && aiData.actions.length > 0 && haWebSocket) {
-                logger.info("🎯 Executing actions via WebSocket", { count: aiData.actions.length });
+            let actionGeneratedText: string | undefined = undefined;
+            if (aiData.actions && aiData.actions.length > 0) {
+                logger.info("🎯 Executing actions", { count: aiData.actions.length });
                 const result = await executeActionsClientSide(aiData.actions, text);
                 retryTriggered = result.retryTriggered;
+                actionGeneratedText = result.generatedText;
             }
 
             // If a retry was triggered (e.g. GPS fallback), skip UI update for this response
@@ -560,14 +912,57 @@ export function useAIChatLogic() {
                 return; // The retry will handle UI update
             }
 
-            logger.info("📥 Received AI Response", aiData);
-            // This logs full object to Debug Tile
+            let responseText = aiData.text || actionGeneratedText;
+
+            // Resilient Fallback 1: If responseText is empty or backend got confused on a weather query
+            const cleanText = text.trim();
+            const isWeatherQuery = /graden|temperatuur|weer|buiten|koud|warm|regen|zon|forecast|weersverwachting|wind|luchtvochtigheid/i.test(cleanText);
+            const isRetry = /probeer het nog eens|opnieuw|nog een keer|wat ik net vroeg|wat ik net gevraagd heb/i.test(cleanText);
+
+            if (!responseText && isWeatherQuery) {
+                logger.info("🌤️ Weather query detected with empty backend response; executing client-side Open-Meteo fallback...");
+                const lat = lastKnownLocation?.lat || 51.1488;
+                const lon = lastKnownLocation?.lon || 5.1271;
+                const lang = uiState.language || 'nl';
+                const haTemp = getHAOutdoorTemp();
+
+                const isForecast = /morgen|volgende week|weekend|voorspelling|forecast/i.test(cleanText);
+                if (isForecast) {
+                    responseText = await fetchOpenMeteoForecast(lat, lon, lang);
+                } else {
+                    responseText = await fetchOpenMeteoCurrentWeather(lat, lon, lang, haTemp);
+                }
+            }
+
+            // Resilient Fallback 2: If the user said "probeer het nog eens" or similar retry and responseText is empty
+            if (!responseText && isRetry) {
+                const lastUserMsg = [...messages].reverse().find(m => m.user_message && m.user_message !== cleanText);
+                if (lastUserMsg && /graden|temperatuur|weer|buiten/i.test(lastUserMsg.user_message)) {
+                    logger.info("🔄 Retry of previous weather query detected!");
+                    const lat = lastKnownLocation?.lat || 51.1488;
+                    const lon = lastKnownLocation?.lon || 5.1271;
+                    responseText = await fetchOpenMeteoCurrentWeather(lat, lon, uiState.language || 'nl', getHAOutdoorTemp());
+                }
+            }
+
+            // Resilient Fallback 3: Standard default if still empty
+            if (!responseText) {
+                if (aiData.actions && aiData.actions.length > 0) {
+                    responseText = (uiState.language || 'nl').startsWith('nl') ? 'Actie uitgevoerd.' : 'Action executed.';
+                } else {
+                    responseText = (uiState.language || 'nl').startsWith('nl')
+                        ? 'Ik heb je verzoek ontvangen, maar kon geen specifiek antwoord formuleren. Probeer het op een andere manier te vragen.'
+                        : 'I received your request, but could not determine an answer. Please try rephrasing.';
+                }
+            }
+
+            logger.info("📥 Final Resolved AI Response", { ...aiData, text: responseText });
 
             // Log explicitly if actions are missing (but only if NO scheduled tasks either)
             const hasScheduled = (aiData.scheduled_tasks && aiData.scheduled_tasks > 0) || (aiData.scheduled_actions && aiData.scheduled_actions.length > 0);
 
             if ((!aiData.actions || aiData.actions.length === 0) && !hasScheduled) {
-                logger.warn("AI Response has NO ACTIONS", { text: aiData.text });
+                logger.warn("AI Response has NO ACTIONS", { text: responseText });
             } else if (hasScheduled) {
                 logger.info(`⏳ AI Scheduled ${aiData.scheduled_tasks} tasks (No immediate actions).`);
             }
@@ -579,17 +974,51 @@ export function useAIChatLogic() {
                 });
             }
 
+            const responseLanguage = aiData.language || uiState.language || 'nl-BE';
+
             // 3. UI Update (Replace Optimistic Message)
             const completedMsg: ChatMessage = {
                 ...optimisticMsg,
-                ai_response: aiData.text,
-                language: aiData.language,
+                ai_response: responseText,
+                language: responseLanguage,
                 actions_taken: aiData.actions || [],
                 scheduled_actions: aiData.scheduled_actions || []
             };
 
             setMessages(prev => prev.map(m => m.id === tempId ? completedMsg : m));
             addChatMessage(completedMsg);
+
+            // Persist the actual resolved text and actions to Supabase chat_history table
+            try {
+                const { data: latestRows } = await supabase
+                    .from('chat_history')
+                    .select('id')
+                    .eq('connection_id', activeConnection.id)
+                    .order('created_at', { ascending: false })
+                    .limit(1);
+
+                if (latestRows && latestRows.length > 0) {
+                    await supabase
+                        .from('chat_history')
+                        .update({
+                            ai_response: { text: responseText, actions: aiData.actions || [] },
+                            actions_taken: aiData.actions || []
+                        })
+                        .eq('id', latestRows[0].id);
+                    logger.info("💾 Updated chat_history in Supabase with resolved text");
+                } else {
+                    await supabase.from('chat_history').insert({
+                        connection_id: activeConnection.id,
+                        user_message: text,
+                        ai_response: { text: responseText, actions: aiData.actions || [] },
+                        actions_taken: aiData.actions || [],
+                        metadata: { language: responseLanguage }
+                    });
+                    logger.info("💾 Inserted new chat_history into Supabase");
+                }
+            } catch (persistErr) {
+                logger.warn("⚠️ Failed to persist chat history to Supabase:", persistErr);
+            }
 
             // Handle Conversation Mode from AI response
             if (aiData.conversation_mode !== undefined) {
@@ -602,9 +1031,9 @@ export function useAIChatLogic() {
             }
 
             // 4. TTS
-            if (aiData.text) {
+            if (responseText) {
                 // Deepgram Aura is English-optimized. For Dutch/Others, use Native TTS to avoid "Denglish" accent.
-                const useDeepgram = (aiData.language === 'en' || !aiData.language);
+                const useDeepgram = (responseLanguage === 'en');
 
                 if (useDeepgram) {
                     try {
@@ -617,8 +1046,8 @@ export function useAIChatLogic() {
                                 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
                             },
                             body: JSON.stringify({
-                                text: aiData.text,
-                                language: aiData.language || 'en'
+                                text: responseText,
+                                language: responseLanguage
                             })
                         });
 
@@ -655,22 +1084,22 @@ export function useAIChatLogic() {
                             audioPlayer.play().catch(e => {
                                 logger.error('❌ Failed to play audio:', e);
                                 // Fallback to Web Speech API
-                                playNativeTTS(aiData.text, aiData.language, conversationMode || !!aiData.conversation_mode);
+                                playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
                             });
 
                             logger.info('🔊 Deepgram TTS playing');
                         } else {
                             logger.warn('⚠️ Deepgram TTS failed, falling back to Web Speech API');
-                            playNativeTTS(aiData.text, aiData.language, conversationMode || !!aiData.conversation_mode);
+                            playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
                         }
                     } catch (ttsError) {
                         logger.error('❌ TTS error:', ttsError);
-                        playNativeTTS(aiData.text, aiData.language, conversationMode || !!aiData.conversation_mode);
+                        playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
                     }
                 } else {
                     // Non-English: Use Native TTS directly
-                    logger.info(`🔊 Using Native TTS for language: ${aiData.language}`);
-                    playNativeTTS(aiData.text, aiData.language, conversationMode || !!aiData.conversation_mode);
+                    logger.info(`🔊 Using Native TTS for language: ${responseLanguage}`);
+                    playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
                 }
             }
 

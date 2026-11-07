@@ -26,24 +26,7 @@ export function AIChat() {
 
   // --- RESTORED LOGIC ---
 
-  // Clear Logs on Mount
-  useEffect(() => {
-    const style = document.createElement('style');
-    style.innerHTML = `
-      .typing-indicator span {
-        animation: blink 1.4s infinite both;
-        font-size: 24px;
-        line-height: 10px;
-        margin: 0 1px;
-      }
-      .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-      .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-      @keyframes blink { 0% { opacity: .2; } 20% { opacity: 1; } 100% { opacity: .2; } }
-    `;
-    document.head.appendChild(style);
 
-    import('../utils/logger').then(({ logger }) => logger.clearLogs());
-  }, []);
 
   // Voice Hook - Deepgram Nova-3 for high accuracy STT
   const { isListening, isStarting, partialTranscript, startListening, stopListening, error: voiceError, isWhisper, audioLevel } = useDeepgramVoice({
@@ -118,11 +101,17 @@ export function AIChat() {
         const mapped = data.reverse().map((d: any) => {
           let aiText = "";
           if (typeof d.ai_response === 'string') {
-            aiText = d.ai_response;
-          } else if (d.ai_response && d.ai_response.text) {
-            aiText = d.ai_response.text;
-          } else {
-            aiText = JSON.stringify(d.ai_response || "");
+            try {
+              const parsed = JSON.parse(d.ai_response);
+              aiText = parsed.text || (parsed.actions && parsed.actions.length > 0 ? 'Actie uitgevoerd.' : '');
+            } catch {
+              aiText = d.ai_response;
+            }
+          } else if (d.ai_response && typeof d.ai_response === 'object') {
+            aiText = d.ai_response.text || (d.ai_response.actions && d.ai_response.actions.length > 0 ? 'Actie uitgevoerd.' : '');
+          }
+          if (!aiText && d.actions_taken && d.actions_taken.length > 0) {
+            aiText = 'Actie uitgevoerd.';
           }
           return {
             id: d.id,

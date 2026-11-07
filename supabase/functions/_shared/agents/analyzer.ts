@@ -266,12 +266,12 @@ export async function runAnalyzer(
 
   const languageNote = language !== 'en' ? `\nRespond in ${language}.` : '';
 
-  log(`[Analyzer] Sending ${historyData.length} chars to LLM...`);
+  log(`[Analyzer] Sending ${historyData.length} chars to Gemini 3.1 Pro (Deep Reasoning Tier 1)...`);
 
   const response = await chatCompletion([
     { role: 'system', content: ANALYZER_PROMPT + languageNote },
     { role: 'user', content: `FOCUS AREA: ${focusArea}\n\nHISTORY DATA (TOON format):\n${historyData}` }
-  ], 25000, 0.2, undefined, undefined, 'google/gemini-3-pro-preview');
+  ], 25000, 0.2, undefined, undefined, 'google/gemini-3.1-pro-preview', { effort: 'high' });
 
   log(`[Analyzer] LLM response length: ${response?.length || 0} chars`);
   log(`[Analyzer] Response preview: ${(response || '').substring(0, 200)}`);

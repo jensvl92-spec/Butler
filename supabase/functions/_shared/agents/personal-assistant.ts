@@ -282,12 +282,31 @@ Rain probability: Today ${rain.today ? 'Yes' : 'No'}, Tomorrow ${rain.tomorrow ?
         }
     }
 
-    // Navigation request (Only if relevant intent)
-    const looksLikeNavigation = message.toLowerCase().match(/hoe lang|how long|eta|route|rijden|drive|ga naar|go to/i);
-    const destMatch = message.match(/(?:naar|to)\s+([^?.!,;]+(?!\som\s\d|\svan\d|\stegen\d))/i);
-    const destination = destMatch ? destMatch[1].trim() : null;
+    // Navigation request (Strict validation - prevent conversational phrases from matching as destinations)
+    const isNavigationIntent = intentType === 'navigation';
+    const looksLikeNavigation = /\b(hoe lang|how long|eta|route|rijden|rijtijd|drive|ga naar|navigeer naar|navigate to|go to|reisduur)\b/i.test(message);
+    const isWeatherOrTranslation = /\b(weer|graden|temperatuur|vertaal|translate|betekent)\b/i.test(message);
 
-    if (location && destination && (intentType === 'navigation' || looksLikeNavigation)) {
+    let destination: string | null = null;
+    if ((isNavigationIntent || looksLikeNavigation) && !isWeatherOrTranslation) {
+        const destMatch = message.match(/(?:naar|to|richting)\s+([^?.!,;]+(?!\som\s\d|\svan\d|\stegen\d))/i);
+        if (destMatch) {
+            const candidate = destMatch[1].trim();
+            const invalidPhrases = [
+                'ik net', 'wat ik', 'gevraagd', 'bedoel', 'zeg', 'weer', 'graden',
+                'temperatuur', 'spaans', 'engels', 'nederlands', 'frans', 'muziek',
+                'deze vraag', 'het nieuws', 'hierboven'
+            ];
+            const isInvalid = invalidPhrases.some(p => candidate.toLowerCase().includes(p)) || candidate.length < 2 || candidate.length > 50;
+            if (!isInvalid) {
+                destination = candidate;
+            } else {
+                log(`[PersonalAssistant] Discarded invalid destination candidate: "${candidate}"`);
+            }
+        }
+    }
+
+    if (location && destination && (isNavigationIntent || looksLikeNavigation)) {
         log(`[PersonalAssistant] Destination extracted: "${destination}"`);
         try {
             // Resolve relative destinations ("closest X") using Places API

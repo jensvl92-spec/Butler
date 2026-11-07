@@ -63,12 +63,12 @@ export async function fetchHAAreas(url: string, token: string): Promise<HAArea[]
         headers: getHeaders(token),
         body: JSON.stringify({
             template: `
-        {% set areas = namespace(items=[]) %}
+        {% set area_ns = namespace(items=[]) %}
         {% for area_id in areas() %}
             {% set area = area_id | area_name %}
-             {% set items = areas.items.append({ "area_id": area_id, "name": area }) %}
+            {% set _ = area_ns.items.append({ "area_id": area_id, "name": area }) %}
         {% endfor %}
-        {{ areas.items | to_json }}
+        {{ area_ns.items | to_json }}
         `
         })
     })
@@ -280,37 +280,105 @@ export async function processHASync(
             })
         }
 
-        // Process Orphans -> Unassigned Room
-        if (topology.orphans && topology.orphans.length > 0) {
-            const orphanDevices = processEntityList(topology.orphans)
+        // Semantic Clusters for automatic room assignment of orphan devices
+        const SEMANTIC_CLUSTERS = [
+            { key: 'living', name: 'Woonkamer', icon: '🛋️', keywords: ['woonkamer', 'living', 'salon', 'tv', 'zitkamer', 'sofa', 'salontafel'] },
+            { key: 'kitchen', name: 'Keuken', icon: '🍳', keywords: ['keuken', 'kitchen', 'kook', 'oven', 'frigo', 'koelkast', 'vaatwasser', 'dampkap', 'eettafel'] },
+            { key: 'bedroom', name: 'Slaapkamer', icon: '🛏️', keywords: ['slaapkamer', 'bedroom', 'bed', 'nachtkast', 'kinderkamer', 'logeerkamer'] },
+            { key: 'bathroom', name: 'Badkamer', icon: '🚿', keywords: ['badkamer', 'bathroom', 'douche', 'bad', 'lavabo', 'wc', 'toilet'] },
+            { key: 'office', name: 'Bureau / Werkkamer', icon: '💻', keywords: ['bureau', 'office', 'werkkamer', 'kantoor', 'desk', 'computer'] },
+            { key: 'hallway', name: 'Gang & Inkom', icon: '🚪', keywords: ['gang', 'hall', 'inkom', 'overloop', 'trap', 'voordeur', 'vestiaire'] },
+            { key: 'outdoor', name: 'Tuin & Buiten', icon: '🌱', keywords: ['tuin', 'garden', 'terras', 'buiten', 'garage', 'oprit', 'carport', 'schuur'] },
+            { key: 'utility', name: 'Berging & Wasplaats', icon: '🧺', keywords: ['berging', 'wasplaats', 'wasmachine', 'droogkast', 'zolder', 'kelder', 'bijkeuken'] },
+            { key: 'energy', name: 'Energie & Metering', icon: '⚡', keywords: ['energie', 'energy', 'solar', 'zonnepanelen', 'omvormer', 'meter', 'gas', 'water', 'stroom', 'vermogen', 'injectie', 'afname', 'tarief', 'batterij'] },
+            { key: 'security', name: 'Beveiliging & Toegang', icon: '🛡️', keywords: ['rookmelder', 'rook', 'smoke', 'beveiliging', 'alarm', 'deurbel', 'bell', 'camera', 'motion', 'beweging'] }
+        ];
 
-            if (orphanDevices.length > 0) {
+        // Process Orphans with Intelligent Semantic Auto-Clustering
+        if (topology.orphans && topology.orphans.length > 0) {
+            const orphanDevices = processEntityList(topology.orphans);
+            const clusterBuckets: Record<string, any[]> = {};
+            const unclusteredDevices: any[] = [];
+
+            for (const dev of orphanDevices) {
+                const searchStr = `${dev.entityId} ${dev.name}`.toLowerCase();
+                let matched = false;
+
+                // 1. Check if it matches an existing Area directly
+                for (const tile of tiles) {
+                    const areaNameLower = tile.roomName.toLowerCase();
+                    if (searchStr.includes(areaNameLower) || (areaNameLower.length > 3 && searchStr.includes(areaNameLower.substring(0, areaNameLower.length - 1)))) {
+                        tile.devices.push(dev);
+                        matched = true;
+                        break;
+                    }
+                }
+
+                if (matched) continue;
+
+                // 2. Match against Semantic Clusters
+                for (const cluster of SEMANTIC_CLUSTERS) {
+                    if (cluster.keywords.some(kw => searchStr.includes(kw))) {
+                        if (!clusterBuckets[cluster.key]) clusterBuckets[cluster.key] = [];
+                        clusterBuckets[cluster.key].push(dev);
+                        matched = true;
+                        break;
+                    }
+                }
+
+                if (!matched) {
+                    unclusteredDevices.push(dev);
+                }
+            }
+
+            // Create tiles for matched semantic clusters
+            for (const cluster of SEMANTIC_CLUSTERS) {
+                const devs = clusterBuckets[cluster.key];
+                if (devs && devs.length > 0) {
+                    tiles.push({
+                        id: `room-cluster-${cluster.key}`,
+                        type: 'room',
+                        roomId: `cluster-${cluster.key}`,
+                        roomName: cluster.name,
+                        roomIcon: cluster.icon,
+                        order: tiles.length,
+                        devices: devs
+                    });
+                }
+            }
+
+            // Remaining unclustered devices
+            if (unclusteredDevices.length > 0) {
                 tiles.push({
                     id: 'room-unassigned',
                     type: 'room',
-                    roomId: 'unassigned', // Special ID
-                    roomName: 'Unassigned',
+                    roomId: 'unassigned',
+                    roomName: 'Overige apparaten',
                     roomIcon: '📦',
                     order: tiles.length,
-                    devices: orphanDevices
-                })
+                    devices: unclusteredDevices
+                });
             }
         }
     }
 
-    // Update icons for known room names
+    // Update icons for all tiles (Bilingual Dutch & English)
     tiles.forEach(t => {
-        if (t.roomId === 'unassigned' || t.roomId === 'all') return // Skip icon logic for unassigned or all
-        const lower = t.roomName.toLowerCase()
-        if (lower.includes('bed')) t.roomIcon = '🛏️'
-        else if (lower.includes('living')) t.roomIcon = '🛋️'
-        else if (lower.includes('kitchen')) t.roomIcon = '🍳'
-        else if (lower.includes('bath')) t.roomIcon = '🚿'
-        else if (lower.includes('office') || lower.includes('study')) t.roomIcon = '💻'
-        else if (lower.includes('garage')) t.roomIcon = '🚗'
-        else if (lower.includes('garden')) t.roomIcon = '🌱'
-        else t.roomIcon = '🏠'
-    })
+        if (t.roomIcon && t.roomIcon !== 'not_found') return;
+        const lower = t.roomName.toLowerCase();
+        if (lower.includes('bed') || lower.includes('slaap')) t.roomIcon = '🛏️';
+        else if (lower.includes('living') || lower.includes('woon') || lower.includes('salon')) t.roomIcon = '🛋️';
+        else if (lower.includes('kitchen') || lower.includes('keuken') || lower.includes('kook')) t.roomIcon = '🍳';
+        else if (lower.includes('bath') || lower.includes('bad') || lower.includes('douche')) t.roomIcon = '🚿';
+        else if (lower.includes('office') || lower.includes('study') || lower.includes('bureau') || lower.includes('kantoor')) t.roomIcon = '💻';
+        else if (lower.includes('garage') || lower.includes('oprit') || lower.includes('carport')) t.roomIcon = '🚗';
+        else if (lower.includes('garden') || lower.includes('tuin') || lower.includes('terras') || lower.includes('buiten')) t.roomIcon = '🌱';
+        else if (lower.includes('gang') || lower.includes('hall') || lower.includes('inkom')) t.roomIcon = '🚪';
+        else if (lower.includes('was') || lower.includes('berg') || lower.includes('kelder') || lower.includes('zolder')) t.roomIcon = '🧺';
+        else if (lower.includes('energie') || lower.includes('energy') || lower.includes('meter') || lower.includes('solar')) t.roomIcon = '⚡';
+        else if (lower.includes('beveilig') || lower.includes('alarm') || lower.includes('camera')) t.roomIcon = '🛡️';
+        else t.roomIcon = '🏠';
+    });
 
     // 4. Save to LocalStorage (Dashboard)
     logger.info(`processHASync: Generating ${tiles.length} tiles (Total devices: ${tiles.reduce((acc, t) => acc + t.devices.length, 0)})`);

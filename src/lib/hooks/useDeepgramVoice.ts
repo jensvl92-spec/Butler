@@ -1,33 +1,19 @@
 /**
- * useDeepgramVoice - Real-time Speech-to-Text using Deepgram Nova-3
+ * useDeepgramVoice - High reliability Speech-to-Text hook
  * 
- * Uses WebSocket streaming for low-latency, high-accuracy transcription.
- * Connects through Supabase Edge Function proxy to keep API key secure.
+ * Uses @capacitor-community/speech-recognition on Android/iOS native platforms
+ * with on-device / Google Speech Recognition engine for zero-latency, reliable Dutch STT.
+ * Falls back to Web Speech API on browser/web environments.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Device } from '@capacitor/device';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 import { logger } from '../../utils/logger';
-
-// Supabase Edge Function URL for Deepgram proxy
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
-const DEEPGRAM_WS_URL = SUPABASE_URL.replace('https://', 'wss://') + '/functions/v1/deepgram-stt';
-
 
 interface UseDeepgramVoiceProps {
     onTranscript: (text: string) => void;
     onFinalTranscript: (text: string) => void;
-}
-
-interface TranscriptMessage {
-    type: 'ready' | 'transcript' | 'utterance_end' | 'error';
-    transcript?: string;
-    is_final?: boolean;
-    speech_final?: boolean;
-    confidence?: number;
-    message?: string;
 }
 
 export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgramVoiceProps) {
@@ -35,110 +21,97 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
     const [isConnecting, setIsConnecting] = useState(false);
     const [partialTranscript, setPartialTranscript] = useState('');
     const [error, setError] = useState<string>('');
-    const [isWhisper, setIsWhisper] = useState(false);  // Whisper mode detection
-    const [audioLevel, setAudioLevel] = useState(0);     // 0-100 audio level
+    const [isWhisper] = useState(false);
+    const [audioLevel, setAudioLevel] = useState(0);
 
-    // Refs
-    const wsRef = useRef<WebSocket | null>(null);
-    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const processorRef = useRef<ScriptProcessorNode | null>(null);
-    const audioBufferRef = useRef<ArrayBuffer[]>([]); // Buffer for audio before WS is ready
-    const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const currentTranscriptRef = useRef<string>('');
+    const latestTranscriptRef = useRef<string>('');
+    const silenceTimerRef = useRef<any>(null);
+    const webRecognitionRef = useRef<any>(null);
     const callbacksRef = useRef({ onTranscript, onFinalTranscript });
-    const audioLevelsRef = useRef<number[]>([]);  // Track audio levels for whisper detection
-    const WHISPER_THRESHOLD = 10;  // Lowered from 25 to make normal speech less likely to trigger whisper
+    const audioLevelIntervalRef = useRef<any>(null);
 
     // Keep callbacks ref updated
     useEffect(() => {
         callbacksRef.current = { onTranscript, onFinalTranscript };
     }, [onTranscript, onFinalTranscript]);
 
-    // Pre-warm microphone on mount
+    // Check permission on mount
     useEffect(() => {
-        logger.info('🎤 [Deepgram] Pre-warming microphone...');
-        preWarmMicrophone();
+        const checkPerms = async () => {
+            try {
+                if (Capacitor.isNativePlatform()) {
+                    const status = await SpeechRecognition.checkPermissions();
+                    if (status.speechRecognition !== 'granted') {
+                        await SpeechRecognition.requestPermissions();
+                    }
+                }
+            } catch (e) {
+                logger.warn('🎤 [Speech] Permission check error:', e);
+            }
+        };
+        checkPerms();
+
         return () => {
-            // Cleanup on unmount will be handled by the cleanup effect below
+            stopListening('cleanup');
         };
     }, []);
 
-    const preWarmMicrophone = async () => {
-        if (streamRef.current) return;
-
-        try {
-            // Check permissions first
-            if (Capacitor.isNativePlatform()) {
-                const status = await SpeechRecognition.checkPermissions();
-                if (status.speechRecognition !== 'granted') {
-                    await SpeechRecognition.requestPermissions();
-                }
-            }
-
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    sampleRate: 16000,
-                    echoCancellation: false, // Critical for speed
-                    noiseSuppression: false,
-                    autoGainControl: false
-                }
-            });
-            logger.info('🎤 [Deepgram] Microphone pre-warmed and ready');
-            streamRef.current = stream;
-        } catch (e) {
-            logger.error('🎤 [Deepgram] Pre-warm failed:', e);
-        }
-    };
-
     const stopListening = useCallback(async (reason = 'manual') => {
-        logger.info(`🎤 [Deepgram] Stopping... (Reason: ${reason})`);
+        logger.info(`🎤 [Speech] Stopping... (Reason: ${reason})`);
 
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
         }
 
-        // Stop media recorder
-        if (mediaRecorderRef.current?.state === 'recording') {
-            mediaRecorderRef.current.stop();
+        if (audioLevelIntervalRef.current) {
+            clearInterval(audioLevelIntervalRef.current);
+            audioLevelIntervalRef.current = null;
         }
-        mediaRecorderRef.current = null;
+        setAudioLevel(0);
 
-        // Stop audio processor
-        if (processorRef.current) {
-            processorRef.current.disconnect();
-            processorRef.current = null;
-        }
+        const finalCandidate = latestTranscriptRef.current.trim();
 
-        // Close audio context (release resources)
-        if (audioContextRef.current?.state !== 'closed') {
-            await audioContextRef.current?.close();
-        }
-        audioContextRef.current = null;
-
-        // Close WebSocket
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'close' }));
-            wsRef.current.close();
-        }
-        wsRef.current = null;
-
-        // ONLY stop the stream if we are unmounting ('cleanup')
-        // Otherwise keep it open for instant restart (Pre-warming)
-        if (reason === 'cleanup') {
-            if (streamRef.current) {
-                logger.info('🎤 [Deepgram] releasing microphone stream');
-                streamRef.current.getTracks().forEach(track => track.stop());
-                streamRef.current = null;
+        if (Capacitor.isNativePlatform()) {
+            try {
+                await SpeechRecognition.stop();
+                await SpeechRecognition.removeAllListeners();
+            } catch (e) {
+                logger.warn('🎤 [Speech] Native stop error (ignorable):', e);
             }
+        } else if (webRecognitionRef.current) {
+            try {
+                webRecognitionRef.current.stop();
+            } catch (e) {
+                // Ignore
+            }
+            webRecognitionRef.current = null;
         }
 
         setIsListening(false);
         setIsConnecting(false);
+
+        // If we have a recognized transcript, trigger final callback
+        if (finalCandidate) {
+            logger.info('🎤 [Speech] Emitting final transcript:', finalCandidate);
+            latestTranscriptRef.current = '';
+            callbacksRef.current.onFinalTranscript(finalCandidate);
+            setPartialTranscript('');
+        }
     }, []);
+
+    const resetSilenceTimer = useCallback(() => {
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+        }
+        // Auto-finalize 1.8 seconds after user stops speaking
+        silenceTimerRef.current = setTimeout(() => {
+            if (latestTranscriptRef.current.trim()) {
+                logger.info('🎤 [Speech] Silence timeout reached, finalizing');
+                stopListening('silence');
+            }
+        }, 1800);
+    }, [stopListening]);
 
     const startListening = useCallback(async () => {
         if (isListening || isConnecting) return;
@@ -146,203 +119,155 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
         setIsConnecting(true);
         setError('');
         setPartialTranscript('');
-        currentTranscriptRef.current = ''; // Clear accumulated text
+        latestTranscriptRef.current = '';
         callbacksRef.current.onTranscript('');
-        audioBufferRef.current = [];
+
+        // Visual audio level pulse while active
+        if (audioLevelIntervalRef.current) clearInterval(audioLevelIntervalRef.current);
+        audioLevelIntervalRef.current = setInterval(() => {
+            setAudioLevel(Math.floor(25 + Math.random() * 45));
+        }, 150);
 
         try {
-            // Re-use pre-warmed stream if available
-            let stream = streamRef.current;
+            if (Capacitor.isNativePlatform()) {
+                logger.info('🎤 [Speech] Initializing native speech recognition...');
 
-            if (!stream || !stream.active) {
-                logger.warn('🎤 [Deepgram] Stream not ready, initializing now (latency penalty)...');
-                await preWarmMicrophone();
-                stream = streamRef.current;
-
-                if (!stream) {
-                    throw new Error('Microphone initialization failed');
-                }
-            }
-
-            // Start capturing immediately (0ms latency if pre-warmed)
-            const audioConfig = startAudioCapture(stream);
-
-            // ... (rest of connection logic)
-            // Get device language
-            let language = 'multi';
-            try {
-                const result = await Device.getLanguageTag();
-                language = result.value || 'multi';
-            } catch { }
-
-            let wsUrl = `${DEEPGRAM_WS_URL}?language=${encodeURIComponent(language)}`;
-            if (audioConfig.encoding) wsUrl += `&encoding=${audioConfig.encoding}`;
-            if (audioConfig.sampleRate) wsUrl += `&sample_rate=${audioConfig.sampleRate}`;
-
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onopen = () => { logger.info('🎤 [Deepgram] WebSocket OPENED'); };
-
-            ws.onmessage = (event) => {
-                try {
-                    const data: TranscriptMessage = JSON.parse(event.data);
-                    if (data.type === 'ready') {
-                        logger.info('🎤 [Deepgram] Ready! Flushing buffer...');
-                        setIsConnecting(false);
-                        setIsListening(true);
-                        if (audioBufferRef.current.length > 0) {
-                            audioBufferRef.current.forEach(chunk => ws.send(chunk));
-                            audioBufferRef.current = [];
-                        }
-                    } else if (data.type === 'transcript' && data.transcript) {
-                        // Accumulate final transcripts, show interim for current word
-                        if (data.is_final) {
-                            // Append final transcript to accumulated text
-                            const accumulated = currentTranscriptRef.current.trim();
-                            if (accumulated) {
-                                currentTranscriptRef.current = accumulated + ' ' + data.transcript.trim();
-                            } else {
-                                currentTranscriptRef.current = data.transcript.trim();
-                            }
-                        }
-                        // Display: accumulated finals + current interim
-                        const displayText = data.is_final
-                            ? currentTranscriptRef.current
-                            : (currentTranscriptRef.current.trim() + ' ' + data.transcript).trim();
-                        setPartialTranscript(displayText);
-                        callbacksRef.current.onTranscript(displayText);
-
-                        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-                        silenceTimerRef.current = setTimeout(() => {
-                            if (currentTranscriptRef.current.trim()) {
-                                callbacksRef.current.onFinalTranscript(currentTranscriptRef.current);
-                                stopListening();
-                            }
-                        }, 1500);
-                    } else if (data.type === 'utterance_end') {
-                        if (currentTranscriptRef.current.trim()) {
-                            callbacksRef.current.onFinalTranscript(currentTranscriptRef.current);
-                            stopListening();
-                        }
+                const perms = await SpeechRecognition.checkPermissions();
+                if (perms.speechRecognition !== 'granted') {
+                    const req = await SpeechRecognition.requestPermissions();
+                    if (req.speechRecognition !== 'granted') {
+                        throw new Error('Microfoontoegang niet verleend.');
                     }
-                } catch (e) { logger.error('Parse error', e); }
-            };
-
-            ws.onerror = (e) => { setError('Connection Error'); stopListening(); };
-            ws.onclose = () => { if (isListening) stopListening(); };
-
-        } catch (e: any) {
-            logger.error('🎤 [Deepgram] Start failed:', e);
-            setError(e.message);
-            setIsConnecting(false);
-            stopListening();
-        }
-    }, [isListening, isConnecting, stopListening]);
-
-    const startAudioCapture = (stream: MediaStream): { sampleRate?: number, encoding?: string } => {
-        try {
-            // Use AudioContext for raw PCM data (better quality than MediaRecorder)
-            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-            audioContextRef.current = audioContext;
-
-            const source = audioContext.createMediaStreamSource(stream);
-
-            // Create processor node (4096 samples per chunk)
-            const processor = audioContext.createScriptProcessor(4096, 1, 1);
-            processorRef.current = processor;
-
-            processor.onaudioprocess = (e) => {
-                const inputData = e.inputBuffer.getChannelData(0);
-
-                // Convert Float32Array to Int16Array (linear16)
-                const int16Data = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const s = Math.max(-1, Math.min(1, inputData[i]));
-                    int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
 
-                const buffer = int16Data.buffer;
-
-                // Calculate audio level (RMS) for whisper detection
-                let sum = 0;
-                for (let i = 0; i < inputData.length; i++) {
-                    sum += inputData[i] * inputData[i];
-                }
-                const rms = Math.sqrt(sum / inputData.length);
-                const level = Math.min(100, Math.round(rms * 200));  // Scale to 0-100
-                setAudioLevel(level);
-
-                // Track levels for average calculation
-                audioLevelsRef.current.push(level);
-                if (audioLevelsRef.current.length > 20) {
-                    audioLevelsRef.current.shift();  // Keep last 20 samples
+                const availableRes = await SpeechRecognition.available();
+                if (!availableRes.available) {
+                    throw new Error('Spraakherkenning is niet beschikbaar op dit apparaat.');
                 }
 
-                // Determine if whispering (average level below threshold)
-                const avgLevel = audioLevelsRef.current.reduce((a, b) => a + b, 0) / audioLevelsRef.current.length;
-                setIsWhisper(avgLevel < WHISPER_THRESHOLD && avgLevel > 0);
+                await SpeechRecognition.removeAllListeners();
 
-                if (wsRef.current?.readyState === WebSocket.OPEN && !isConnecting) {
-                    wsRef.current.send(buffer);
-                } else {
-                    // Buffer if connecting
-                    audioBufferRef.current.push(buffer);
-                }
-            };
-
-            source.connect(processor);
-            processor.connect(audioContext.destination);
-
-            logger.info(`🎤 [Deepgram] AudioContext capture started (${audioContext.sampleRate}Hz)`);
-            return { sampleRate: audioContext.sampleRate, encoding: 'linear16' };
-
-        } catch (e) {
-            logger.error('🎤 [Deepgram] Audio capture error:', e);
-            // Fallback to MediaRecorder if AudioContext fails
-            return startMediaRecorderCapture(stream);
-        }
-    };
-
-    const startMediaRecorderCapture = (stream: MediaStream): { sampleRate?: number, encoding?: string } => {
-        // Fallback using MediaRecorder (less optimal but works on more platforms)
-        const mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'audio/webm;codecs=opus'
-        });
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                event.data.arrayBuffer().then(buffer => {
-                    if (wsRef.current?.readyState === WebSocket.OPEN && !isConnecting) {
-                        wsRef.current.send(buffer);
-                    } else {
-                        audioBufferRef.current.push(buffer);
+                await SpeechRecognition.addListener('partialResults', (data: { matches: string[] }) => {
+                    if (data.matches && data.matches.length > 0) {
+                        const recognized = data.matches[0];
+                        if (recognized && recognized.trim()) {
+                            latestTranscriptRef.current = recognized;
+                            setPartialTranscript(recognized);
+                            callbacksRef.current.onTranscript(recognized);
+                            resetSilenceTimer();
+                        }
                     }
                 });
+
+                await SpeechRecognition.addListener('listeningState', (data: { status: 'started' | 'stopped' }) => {
+                    logger.info(`🎤 [Speech] Native listeningState: ${data.status}`);
+                    if (data.status === 'started') {
+                        setIsConnecting(false);
+                        setIsListening(true);
+                    } else if (data.status === 'stopped') {
+                        // Check if we need to emit final
+                        if (latestTranscriptRef.current.trim()) {
+                            const final = latestTranscriptRef.current.trim();
+                            latestTranscriptRef.current = '';
+                            callbacksRef.current.onFinalTranscript(final);
+                            setPartialTranscript('');
+                        }
+                        setIsListening(false);
+                        setIsConnecting(false);
+                    }
+                });
+
+                await SpeechRecognition.start({
+                    language: 'nl-NL',
+                    maxResults: 1,
+                    prompt: 'Spreek je vraag in...',
+                    popup: false,
+                    partialResults: true
+                });
+
+                setIsConnecting(false);
+                setIsListening(true);
+                logger.info('🎤 [Speech] Native speech recognition started');
+
+            } else {
+                // Web Speech API fallback for browser development/preview
+                logger.info('🎤 [Speech] Falling back to Web Speech API');
+                const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+                if (!SpeechRecognitionClass) {
+                    throw new Error('Web Speech API wordt niet ondersteund in deze browser.');
+                }
+
+                const recognition = new SpeechRecognitionClass();
+                webRecognitionRef.current = recognition;
+                recognition.continuous = false;
+                recognition.interimResults = true;
+                recognition.lang = 'nl-NL';
+
+                recognition.onstart = () => {
+                    logger.info('🎤 [WebSpeech] Started');
+                    setIsConnecting(false);
+                    setIsListening(true);
+                };
+
+                recognition.onresult = (event: any) => {
+                    let interim = '';
+                    let final = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            final += transcript;
+                        } else {
+                            interim += transcript;
+                        }
+                    }
+
+                    const current = (final || interim).trim();
+                    if (current) {
+                        latestTranscriptRef.current = current;
+                        setPartialTranscript(current);
+                        callbacksRef.current.onTranscript(current);
+                        resetSilenceTimer();
+                    }
+                };
+
+                recognition.onerror = (event: any) => {
+                    logger.warn('🎤 [WebSpeech] Error:', event.error);
+                    if (event.error !== 'no-speech') {
+                        setError(`Spraakfout: ${event.error}`);
+                    }
+                    stopListening('error');
+                };
+
+                recognition.onend = () => {
+                    logger.info('🎤 [WebSpeech] Ended');
+                    stopListening('end');
+                };
+
+                recognition.start();
             }
-        };
 
-        mediaRecorder.start(250); // Send chunks every 250ms
-        logger.info('🎤 [Deepgram] MediaRecorder capture started (fallback)');
-        return { encoding: undefined }; // Let Deepgram auto-detect container format
-    };
-
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            logger.info('🎤 [Deepgram] Cleanup effect triggered - stopping');
-            stopListening('cleanup');
-        };
-    }, [stopListening]);
+        } catch (err: any) {
+            logger.error('🎤 [Speech] Start failed:', err);
+            setError(err.message || 'Kon spraakherkenning niet starten');
+            setIsConnecting(false);
+            setIsListening(false);
+            if (audioLevelIntervalRef.current) {
+                clearInterval(audioLevelIntervalRef.current);
+                audioLevelIntervalRef.current = null;
+            }
+            setAudioLevel(0);
+        }
+    }, [isListening, isConnecting, stopListening, resetSilenceTimer]);
 
     return {
         isListening,
         isStarting: isConnecting,
         partialTranscript,
         error,
-        isWhisper,      // NEW: true if user is whispering
-        audioLevel,     // NEW: current audio level 0-100
+        isWhisper,
+        audioLevel,
         startListening,
         stopListening
     };
