@@ -11,6 +11,7 @@ export interface CurrentWeather {
     location: string;
     temp: number;
     feels_like: number;
+    dew_point?: number;
     humidity: number;
     description: string;
     icon: string;
@@ -88,7 +89,7 @@ export async function getCurrentWeather(lat: number, lon: number, lang: string =
     }
 
     // Keyless Open-Meteo provider
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,dew_point_2m,weather_code,wind_speed_10m&timezone=auto`;
     const res = await fetch(url);
     if (!res.ok) {
         throw new Error(`Weather API error: ${res.status}`);
@@ -101,6 +102,7 @@ export async function getCurrentWeather(lat: number, lon: number, lang: string =
         location: `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
         temp: Math.round(curr.temperature_2m),
         feels_like: Math.round(curr.apparent_temperature),
+        dew_point: curr.dew_point_2m !== undefined ? Math.round(curr.dew_point_2m * 10) / 10 : undefined,
         humidity: curr.relative_humidity_2m,
         description: getWMODescription(curr.weather_code, lang),
         icon: 'weather',
@@ -183,10 +185,12 @@ export async function getForecast(lat: number, lon: number, lang: string = 'en')
  * Format weather for natural language response.
  */
 export function formatWeatherText(weather: CurrentWeather, lang: string = 'en'): string {
+    const dewStr = weather.dew_point !== undefined ? `, dauwpunt: ${weather.dew_point}°C` : '';
+    const dewStrEn = weather.dew_point !== undefined ? `, dew point: ${weather.dew_point}°C` : '';
     if (lang === 'nl' || lang === 'nl-BE') {
-        return `Het is nu ${weather.temp}°C in ${weather.location} (voelt als ${weather.feels_like}°C). ${weather.description}. Luchtvochtigheid: ${weather.humidity}%, wind: ${weather.wind_speed} m/s.`;
+        return `Het is nu ${weather.temp}°C in ${weather.location} (voelt als ${weather.feels_like}°C). ${weather.description}. Luchtvochtigheid: ${weather.humidity}%${dewStr}, wind: ${weather.wind_speed} km/u.`;
     }
-    return `Currently ${weather.temp}°C in ${weather.location} (feels like ${weather.feels_like}°C). ${weather.description}. Humidity: ${weather.humidity}%, wind: ${weather.wind_speed} m/s.`;
+    return `Currently ${weather.temp}°C in ${weather.location} (feels like ${weather.feels_like}°C). ${weather.description}. Humidity: ${weather.humidity}%${dewStrEn}, wind: ${weather.wind_speed} km/h.`;
 }
 
 /**

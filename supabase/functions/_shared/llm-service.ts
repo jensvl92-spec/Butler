@@ -1,7 +1,7 @@
 // @ts-ignore
 const LLM_API_KEY = Deno.env.get("LLM_API_KEY")!
 // @ts-ignore - Default to Gemini 3 Flash on OpenRouter (multilingual, fast agentic reasoning)
-const LLM_MODEL = Deno.env.get("LLM_MODEL") || "google/gemini-3-flash"
+const LLM_MODEL = Deno.env.get("LLM_MODEL") || "google/gemini-3-flash-preview"
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 export async function createEmbedding(text: string): Promise<number[] | null> {
@@ -166,9 +166,9 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 // - openai/gpt-oss-20b: ~1000 t/s, $0.075/1M, fast routing, intent classification & extraction
 // - openai/gpt-oss-120b: ~500 t/s, $0.15/1M, production agentic reasoning & tool execution
 // - meta-llama/llama-prompt-guard-2-86m: $0.04/1M, dedicated jailbreak & prompt injection detection
-const GROQ_MODEL_FAST = "openai/gpt-oss-20b";
-const GROQ_MODEL_MAIN = "openai/gpt-oss-120b";
-const GROQ_MODEL_GUARD = "meta-llama/llama-prompt-guard-2-86m";
+const GROQ_MODEL_FAST = "llama-3.1-8b-instant";
+const GROQ_MODEL_MAIN = "llama-3.3-70b-versatile";
+const GROQ_MODEL_GUARD = "meta-llama/llama-guard-3-8b";
 
 /**
  * Check text for prompt injection / jailbreak attacks using Groq's Prompt Guard 2 (86M).
