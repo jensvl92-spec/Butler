@@ -21,8 +21,8 @@ export type AIProvider = 'gemini' | 'openrouter';
 export const GOOGLE_GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
-export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash';
+export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash';
 
 export interface AIResolvedConfig {
     apiKey: string;

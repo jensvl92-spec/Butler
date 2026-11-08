@@ -33,7 +33,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     // AI Brain Settings (Client-Side Google Gemini / OpenRouter)
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
     const [apiKeyInput, setApiKeyInput] = useState('');
-    const [llmModel, setLlmModel] = useState('gemini-2.5-flash');
+    const [llmModel, setLlmModel] = useState('gemini-3-flash');
     const [showApiKey, setShowApiKey] = useState(false);
     const [testingKey, setTestingKey] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -52,7 +52,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         const initialKey = savedProvider === 'gemini' ? (geminiKey || openRouterKey) : (openRouterKey || geminiKey);
         setApiKeyInput(initialKey);
 
-        const savedModel = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-2.5-flash' : 'google/gemini-3-flash-preview');
+        const savedModel = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-3-flash' : 'google/gemini-3-flash');
         setLlmModel(savedModel);
 
         if (savedSnooze) {
@@ -198,7 +198,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('gemini');
-                            setLlmModel('gemini-2.5-flash');
+                            setLlmModel('gemini-3-flash');
                         }}
                         style={{
                             flex: 1,
@@ -218,7 +218,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('openrouter');
-                            setLlmModel('google/gemini-3-flash-preview');
+                            setLlmModel('google/gemini-3-flash');
                         }}
                         style={{
                             flex: 1,
@@ -256,19 +256,44 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     >
                         {aiProvider === 'gemini' ? (
                             <>
-                                <option value="gemini-2.5-flash">gemini-2.5-flash (Aanbevolen: nieuwste SOTA Flash)</option>
-                                <option value="gemini-2.0-flash">gemini-2.0-flash (Ultra snel)</option>
-                                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                                <option value="gemini-1.5-pro">gemini-1.5-pro (Diepe reasoning)</option>
+                                <option value="gemini-3-flash">gemini-3-flash (Aanbevolen: snel, voordelig & topkwaliteit)</option>
+                                <option value="gemini-3.8-flash">gemini-3.8-flash (Extreem krachtig & snel)</option>
+                                <option value="gemini-3.1-pro">gemini-3.1-pro (Diep redeneren)</option>
+                                <option value="gemini-4-preview">gemini-4-preview (Next-gen Gemini 4)</option>
+                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                             </>
                         ) : (
                             <>
-                                <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (Aanbevolen)</option>
+                                <option value="google/gemini-3-flash">google/gemini-3-flash (Aanbevolen)</option>
+                                <option value="google/gemini-3.8-flash">google/gemini-3.8-flash</option>
+                                <option value="google/gemini-3.1-pro">google/gemini-3.1-pro</option>
+                                <option value="google/gemini-4-preview">google/gemini-4-preview</option>
                                 <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
-                                <option value="groq/llama-3.3-70b-versatile">groq/llama-3.3-70b-versatile</option>
                             </>
                         )}
                     </select>
+                    <div style={{ marginTop: '6px' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            Exact Model ID (aanpasbaar):
+                        </span>
+                        <input
+                            type="text"
+                            value={llmModel}
+                            onChange={(e) => setLlmModel(e.target.value.trim())}
+                            placeholder={aiProvider === 'gemini' ? 'gemini-3-flash' : 'google/gemini-3-flash'}
+                            style={{
+                                width: '100%',
+                                marginTop: '2px',
+                                padding: '6px 10px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-main, #ffffff)',
+                                color: 'inherit',
+                                fontSize: '0.85rem',
+                                fontFamily: 'monospace'
+                            }}
+                        />
+                    </div>
                 </div>
 
                 {/* API Key Input */}
