@@ -16,12 +16,60 @@ import { Action, HADevice, LLMResponse } from '../../types';
 import { callHAService } from '../../utils/home-assistant';
 import { supabase } from '../supabase';
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-export const DEFAULT_MODEL = 'google/gemini-3-flash-preview';
+export type AIProvider = 'gemini' | 'openrouter';
+
+export const GOOGLE_GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
+
+export interface AIResolvedConfig {
+    apiKey: string;
+    provider: AIProvider;
+    model: string;
+    endpoint: string;
+}
+
+export function resolveAIConfig(providedKey?: string, providedModel?: string, providedProvider?: AIProvider): AIResolvedConfig {
+    const geminiKey =
+        localStorage.getItem('butler.gemini_api_key') ||
+        (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+
+    const openRouterKey =
+        localStorage.getItem('butler.openrouter_api_key') ||
+        (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+
+    const genericKey = localStorage.getItem('butler.api_key') || '';
+
+    let apiKey = (providedKey || geminiKey || openRouterKey || genericKey).trim();
+
+    // Auto-detect provider if not explicitly specified
+    let provider: AIProvider = providedProvider || (localStorage.getItem('butler.ai_provider') as AIProvider) || 'gemini';
+
+    if (apiKey.startsWith('AIzaSy')) {
+        provider = 'gemini';
+    } else if (apiKey.startsWith('sk-or-')) {
+        provider = 'openrouter';
+    }
+
+    let defaultModel = provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
+    let model = providedModel || localStorage.getItem('butler.llm_model') || defaultModel;
+
+    // Normalise model name for Gemini endpoint
+    if (provider === 'gemini' && model.startsWith('google/')) {
+        model = model.replace('google/', '');
+    }
+
+    const endpoint = provider === 'gemini' ? GOOGLE_GEMINI_API_URL : OPENROUTER_API_URL;
+
+    return { apiKey, provider, model, endpoint };
+}
 
 export interface ClientOrchestratorOptions {
     apiKey?: string;
     model?: string;
+    provider?: AIProvider;
     userMessage: string;
     recentHistory: Array<{ role: string; content: string }>;
     language: string;
@@ -500,19 +548,13 @@ ${relevantDevices || 'Geen actieve apparaten aangetroffen.'}
 export async function runClientReActOrchestrator(
     options: ClientOrchestratorOptions
 ): Promise<LLMResponse> {
-    const apiKey =
-        options.apiKey ||
-        localStorage.getItem('butler.openrouter_api_key') ||
-        (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+    const config = resolveAIConfig(options.apiKey, options.model, options.provider);
 
-    if (!apiKey) {
+    if (!config.apiKey) {
         throw new Error('NO_API_KEY');
     }
 
-    const model =
-        options.model ||
-        localStorage.getItem('butler.llm_model') ||
-        DEFAULT_MODEL;
+    const { apiKey, provider, model, endpoint } = config;
 
     const systemPrompt = buildSystemPrompt(options);
 
@@ -534,7 +576,7 @@ export async function runClientReActOrchestrator(
         logger.info(`[ClientOrchestrator] ${msg}`);
     };
 
-    log(`🚀 ReAct Loop started with model: ${model}`);
+    log(`🚀 ReAct Loop started [Provider: ${provider.toUpperCase()}] Model: ${model}`);
 
     const MAX_TURNS = 5;
     let turn = 0;
@@ -542,7 +584,7 @@ export async function runClientReActOrchestrator(
 
     while (turn < MAX_TURNS) {
         turn++;
-        log(`🔄 Turn ${turn}/${MAX_TURNS}: Calling LLM...`);
+        log(`🔄 Turn ${turn}/${MAX_TURNS}: Calling ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}...`);
 
         const requestBody = {
             model,
@@ -553,21 +595,28 @@ export async function runClientReActOrchestrator(
             max_tokens: 800
         };
 
-        const res = await fetch(OPENROUTER_API_URL, {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        };
+        if (provider === 'openrouter') {
+            headers['HTTP-Referer'] = 'https://aiha.app';
+            headers['X-Title'] = 'Butler AI App';
+        }
+        if (provider === 'gemini') {
+            headers['x-goog-api-key'] = apiKey;
+        }
+
+        const res = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'https://aiha.app',
-                'X-Title': 'Butler AI App'
-            },
+            headers,
             body: JSON.stringify(requestBody)
         });
 
         if (!res.ok) {
             const errBody = await res.text();
-            log(`❌ OpenRouter API error: ${res.status} - ${errBody}`);
-            throw new Error(`OpenRouter error (${res.status}): ${errBody}`);
+            log(`❌ ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'} API error: ${res.status} - ${errBody}`);
+            throw new Error(`${provider === 'gemini' ? 'Gemini' : 'OpenRouter'} error (${res.status}): ${errBody}`);
         }
 
         const data = await res.json();

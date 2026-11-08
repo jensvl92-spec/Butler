@@ -11,7 +11,7 @@ import { findContactByName } from '../../utils/contactsService';
 import { supabase } from '../supabase';
 // @ts-ignore
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
-import { runClientReActOrchestrator } from '../services/clientOrchestrator';
+import { runClientReActOrchestrator, resolveAIConfig } from '../services/clientOrchestrator';
 
 const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
 const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
@@ -571,14 +571,16 @@ export function useAIChatLogic() {
             let aiData: LLMResponse = {} as LLMResponse;
 
             // SOTA CLIENT-SIDE REACT ARCHITECTURE (OPTION B)
-            // Runs Gemini 3 Flash directly on the device with local tool calls
-            const openRouterKey = localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+            // Supports Google Gemini (AI Studio) and OpenRouter with local tool calls
+            const aiConfig = resolveAIConfig();
 
-            if (openRouterKey) {
+            if (aiConfig.apiKey) {
                 try {
-                    logger.info("🧠 Running Client-Side SOTA ReAct Orchestrator (Gemini 3 Flash)...");
+                    logger.info(`🧠 Running Client-Side SOTA ReAct Orchestrator [${aiConfig.provider.toUpperCase()} - ${aiConfig.model}]...`);
                     aiData = await runClientReActOrchestrator({
-                        apiKey: openRouterKey,
+                        apiKey: aiConfig.apiKey,
+                        model: aiConfig.model,
+                        provider: aiConfig.provider,
                         userMessage: text,
                         recentHistory: recentHistory,
                         language: uiState.language || 'nl',
@@ -594,8 +596,8 @@ export function useAIChatLogic() {
                     logger.error("Client ReAct Orchestrator error:", clientErr);
                     aiData = {
                         text: (uiState.language || 'nl').startsWith('nl')
-                            ? `Fout bij uitvoeren van AI: ${clientErr.message || 'Onbekende fout'}. Controleer je OpenRouter API-sleutel in Instellingen.`
-                            : `AI execution error: ${clientErr.message || 'Unknown error'}. Please check your OpenRouter API key in Settings.`,
+                            ? `Fout bij uitvoeren van AI: ${clientErr.message || 'Onbekende fout'}. Controleer je Gemini / OpenRouter API-sleutel in Instellingen.`
+                            : `AI execution error: ${clientErr.message || 'Unknown error'}. Please check your Gemini / OpenRouter API key in Settings.`,
                         actions: [],
                         language: uiState.language || 'nl',
                         confidence: 0,
@@ -603,15 +605,15 @@ export function useAIChatLogic() {
                     };
                 }
             } else {
-                logger.warn("⚠️ No OpenRouter API key found in localStorage or environment");
+                logger.warn("⚠️ No Gemini or OpenRouter API key configured");
                 aiData = {
                     text: (uiState.language || 'nl').startsWith('nl')
-                        ? 'Butler is geüpgraded naar de directe Client-Side ReAct AI met Gemini 3 Flash! Vul eenmalig je OpenRouter API-sleutel in via Instellingen (⚙️) om de AI te activeren.'
-                        : 'Butler has been upgraded to the direct Client-Side ReAct AI with Gemini 3 Flash! Please enter your OpenRouter API key in Settings (⚙️) to activate.',
+                        ? 'Butler is geüpgraded naar directe Client-Side ReAct AI! Vul eenmalig je Gemini (of OpenRouter) API-sleutel in via Instellingen (⚙️) om de AI te activeren.'
+                        : 'Butler has been upgraded to direct Client-Side ReAct AI! Please enter your Gemini (or OpenRouter) API key in Settings (⚙️) to activate.',
                     actions: [],
                     language: uiState.language || 'nl',
                     confidence: 1.0,
-                    logs: ['[Client] No OpenRouter API key configured.']
+                    logs: ['[Client] No API key configured.']
                 };
             }
 
