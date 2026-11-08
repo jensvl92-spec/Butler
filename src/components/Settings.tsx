@@ -30,10 +30,24 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);  // Proactive voice alerts
     const [clearingHistory, setClearingHistory] = useState(false);
 
+    // AI Brain Settings (Client-Side Gemini 3 Flash / OpenRouter)
+    const [openRouterKey, setOpenRouterKey] = useState('');
+    const [llmModel, setLlmModel] = useState('google/gemini-3-flash-preview');
+    const [showApiKey, setShowApiKey] = useState(false);
+    const [testingKey, setTestingKey] = useState(false);
+    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+    const [keySaved, setKeySaved] = useState(false);
+
     // Load settings from localStorage
     useEffect(() => {
         const savedEnabled = localStorage.getItem('floatingButton.enabled') === 'true';
         const savedSnooze = localStorage.getItem('floatingButton.snoozeUntil');
+
+        const savedKey = localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+        setOpenRouterKey(savedKey);
+
+        const savedModel = localStorage.getItem('butler.llm_model') || 'google/gemini-3-flash-preview';
+        setLlmModel(savedModel);
 
         if (savedSnooze) {
             const snoozeTime = parseInt(savedSnooze, 10);
@@ -143,6 +157,186 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <h2 style={{ margin: 0 }}>⚙️ Settings</h2>
                 {onClose && <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>}
+            </div>
+
+            {/* AI Brain Section (Gemini 3 Flash & OpenRouter) */}
+            <div style={{
+                marginBottom: '24px',
+                padding: '16px',
+                background: 'rgba(99, 102, 241, 0.08)',
+                borderRadius: '12px',
+                border: '1px solid rgba(99, 102, 241, 0.25)'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        🧠 AI Brain (Client-Side ReAct)
+                    </h3>
+                    <span style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                        background: openRouterKey ? '#dcfce7' : '#fef9c3',
+                        color: openRouterKey ? '#15803d' : '#854d0e'
+                    }}>
+                        {openRouterKey ? '🟢 Gemini 3 Actief' : '🟡 Sleutel Vereist'}
+                    </span>
+                </div>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: '1.4' }}>
+                    Butler draait direct op jouw toestel via een Single ReAct Orchestrator met live tools voor weer, Home Assistant en geheugen.
+                </p>
+
+                {/* Model Selector */}
+                <div style={{ marginBottom: '12px' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
+                        AI Model
+                    </label>
+                    <select
+                        value={llmModel}
+                        onChange={(e) => setLlmModel(e.target.value)}
+                        style={{
+                            width: '100%',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border)',
+                            background: 'var(--bg-main, #ffffff)',
+                            color: 'inherit',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (Aanbevolen)</option>
+                        <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
+                        <option value="groq/llama-3.3-70b-versatile">groq/llama-3.3-70b-versatile</option>
+                    </select>
+                </div>
+
+                {/* API Key Input */}
+                <div style={{ marginBottom: '12px' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
+                        OpenRouter API-Sleutel (sk-or-...)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <input
+                            type={showApiKey ? 'text' : 'password'}
+                            value={openRouterKey}
+                            onChange={(e) => setOpenRouterKey(e.target.value)}
+                            placeholder="sk-or-v1-..."
+                            style={{
+                                flex: 1,
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-main, #ffffff)',
+                                color: 'inherit',
+                                fontSize: '0.85rem'
+                            }}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                            style={{
+                                padding: '8px 12px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-card)',
+                                cursor: 'pointer',
+                                fontSize: '0.8rem'
+                            }}
+                        >
+                            {showApiKey ? 'Verberg' : 'Toon'}
+                        </button>
+                    </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                    <button
+                        onClick={() => {
+                            localStorage.setItem('butler.openrouter_api_key', openRouterKey.trim());
+                            localStorage.setItem('butler.llm_model', llmModel);
+                            setKeySaved(true);
+                            setTimeout(() => setKeySaved(false), 2500);
+                        }}
+                        style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            borderRadius: '8px',
+                            background: '#4f46e5',
+                            color: '#ffffff',
+                            border: 'none',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        {keySaved ? '✅ Opgeslagen!' : '💾 Opslaan'}
+                    </button>
+                    <button
+                        onClick={async () => {
+                            const keyToTest = openRouterKey.trim() || localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+                            if (!keyToTest) {
+                                setTestResult({ success: false, message: 'Vul eerst een API-sleutel in.' });
+                                return;
+                            }
+                            setTestingKey(true);
+                            setTestResult(null);
+                            try {
+                                const start = Date.now();
+                                const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Authorization': `Bearer ${keyToTest}`,
+                                        'HTTP-Referer': 'https://aiha.app',
+                                        'X-Title': 'Butler AI App'
+                                    },
+                                    body: JSON.stringify({
+                                        model: llmModel,
+                                        messages: [{ role: 'user', content: 'Ping' }],
+                                        max_tokens: 10
+                                    })
+                                });
+                                const elapsed = Date.now() - start;
+                                if (res.ok) {
+                                    setTestResult({ success: true, message: `✅ Verbinding geslaagd! ${llmModel} reageerde in ${elapsed}ms.` });
+                                } else {
+                                    const err = await res.text();
+                                    setTestResult({ success: false, message: `❌ Fout (${res.status}): ${err.substring(0, 150)}` });
+                                }
+                            } catch (e: any) {
+                                setTestResult({ success: false, message: `❌ Netwerkfout: ${e.message}` });
+                            } finally {
+                                setTestingKey(false);
+                            }
+                        }}
+                        disabled={testingKey}
+                        style={{
+                            padding: '8px 12px',
+                            borderRadius: '8px',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border)',
+                            color: 'inherit',
+                            fontWeight: 500,
+                            cursor: testingKey ? 'wait' : 'pointer',
+                            fontSize: '0.85rem'
+                        }}
+                    >
+                        {testingKey ? '⏳ Testen...' : '🧪 Test Verbinding'}
+                    </button>
+                </div>
+
+                {testResult && (
+                    <div style={{
+                        marginTop: '10px',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        fontSize: '0.8rem',
+                        background: testResult.success ? '#dcfce7' : '#fee2e2',
+                        color: testResult.success ? '#15803d' : '#b91c1c'
+                    }}>
+                        {testResult.message}
+                    </div>
+                )}
             </div>
 
             {/* Floating Button Section */}

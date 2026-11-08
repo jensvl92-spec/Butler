@@ -11,6 +11,7 @@ import { findContactByName } from '../../utils/contactsService';
 import { supabase } from '../supabase';
 // @ts-ignore
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
+import { runClientReActOrchestrator } from '../services/clientOrchestrator';
 
 const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
 const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
@@ -199,6 +200,12 @@ export function useAIChatLogic() {
                     await sendMessage(originalText, { gpsUnavailable: true });
                     return { retryTriggered: true };
                 }
+            }
+
+            // If already executed by Client Orchestrator, do not re-execute
+            if (action.result === 'success') {
+                logger.info("✅ Action already executed during ReAct loop, skipping duplicate call", action);
+                continue;
             }
 
             // Standard Service Call (Non-delayed)
@@ -563,32 +570,49 @@ export function useAIChatLogic() {
 
             let aiData: LLMResponse = {} as LLMResponse;
 
-            // SUPABASE-BASED ARCHITECTURE: Call Edge Function directly
-            // This works from anywhere - home or remote
-            // The Edge Function handles all agent orchestration
+            // SOTA CLIENT-SIDE REACT ARCHITECTURE (OPTION B)
+            // Runs Gemini 3 Flash directly on the device with local tool calls
+            const openRouterKey = localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
 
-            try {
-                logger.info("🚀 Calling Supabase Edge Function...");
-
-                const response = await fetch(`${SUPABASE_URL}/functions/v1/process-ai-command`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-                    },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`Supabase error: ${response.status} - ${errorText}`);
+            if (openRouterKey) {
+                try {
+                    logger.info("🧠 Running Client-Side SOTA ReAct Orchestrator (Gemini 3 Flash)...");
+                    aiData = await runClientReActOrchestrator({
+                        apiKey: openRouterKey,
+                        userMessage: text,
+                        recentHistory: recentHistory,
+                        language: uiState.language || 'nl',
+                        devices: devices,
+                        haUrl: (activeConnection as any).api_url,
+                        haToken: (activeConnection as any).token || (activeConnection as any).api_token,
+                        haWebSocket: haWebSocket,
+                        location: userLocation,
+                        connectionId: activeConnection.id
+                    });
+                    logger.info("✅ Client ReAct Orchestrator Finished", aiData);
+                } catch (clientErr: any) {
+                    logger.error("Client ReAct Orchestrator error:", clientErr);
+                    aiData = {
+                        text: (uiState.language || 'nl').startsWith('nl')
+                            ? `Fout bij uitvoeren van AI: ${clientErr.message || 'Onbekende fout'}. Controleer je OpenRouter API-sleutel in Instellingen.`
+                            : `AI execution error: ${clientErr.message || 'Unknown error'}. Please check your OpenRouter API key in Settings.`,
+                        actions: [],
+                        language: uiState.language || 'nl',
+                        confidence: 0,
+                        logs: [`[Client] Error: ${clientErr.message}`]
+                    };
                 }
-
-                aiData = await response.json();
-                logger.info("✅ Supabase Response Received", aiData);
-            } catch (fetchError: any) {
-                logger.error("Supabase call failed", fetchError);
-                throw fetchError;
+            } else {
+                logger.warn("⚠️ No OpenRouter API key found in localStorage or environment");
+                aiData = {
+                    text: (uiState.language || 'nl').startsWith('nl')
+                        ? 'Butler is geüpgraded naar de directe Client-Side ReAct AI met Gemini 3 Flash! Vul eenmalig je OpenRouter API-sleutel in via Instellingen (⚙️) om de AI te activeren.'
+                        : 'Butler has been upgraded to the direct Client-Side ReAct AI with Gemini 3 Flash! Please enter your OpenRouter API key in Settings (⚙️) to activate.',
+                    actions: [],
+                    language: uiState.language || 'nl',
+                    confidence: 1.0,
+                    logs: ['[Client] No OpenRouter API key configured.']
+                };
             }
 
             // Execute actions via WebSocket or Client-side handlers
