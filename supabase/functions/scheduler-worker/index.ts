@@ -16,50 +16,61 @@ Deno.serve(async (req: Request) => {
 
         async function log(level: string, message: string, details?: any) {
             console.log(`[${level}] ${message}`, details || '');
-            await supabase.from('scheduler_logs').insert({ level, message, details }).then(({ error }) => {
-                if (error) console.error("Log failed", error);
-            });
+            try {
+                await supabase.from('scheduler_logs').insert({ level, message, details });
+            } catch (err) {
+                console.error("Log insert failed:", err);
+            }
         }
 
         await log('info', "⏰ Scheduler Worker Started");
 
-        // 1. Fetch & Lock Tasks (Atomic "Select for Update" simulation)
-        const lookaheadTime = new Date(Date.now() + 65000).toISOString()
+        // 1. Recover stale 'processing' tasks (older than 5 minutes) so they are not lost forever
+        const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        await supabase
+            .from('scheduled_actions')
+            .update({ status: 'pending', error: 'LEASE_EXPIRED_RETRY' })
+            .eq('status', 'processing')
+            .lte('scheduled_for', staleThreshold);
+
+        // 2. Fetch & Lock Tasks due now or within the next 10 seconds
+        const nowIso = new Date(Date.now() + 10000).toISOString();
         const { data: grabbedTasks, error: fetchError } = await supabase
             .from('scheduled_actions')
-            .update({ status: 'failed', error: 'LOCKED_FOR_PROCESSING' })
+            .update({ status: 'processing', error: null })
             .eq('status', 'pending')
-            .lte('scheduled_for', lookaheadTime)
-            .select('*, ha_connections(api_url, api_token, fcm_token)')
+            .lte('scheduled_for', nowIso)
+            .select('*, ha_connections(api_url, api_token, fcm_token)');
 
         if (fetchError) {
-            await log('error', "Expected DB Query Error", fetchError);
-            throw fetchError
-        }
-        if (!grabbedTasks || grabbedTasks.length === 0) {
-            await log('info', "💤 No tasks.");
-            return new Response(JSON.stringify({ result: "no_tasks" }), { headers: { "Content-Type": "application/json" } })
+            await log('error', "DB Fetch/Lock Error", fetchError);
+            throw fetchError;
         }
 
-        await log('info', `⚡ Locked ${grabbedTasks.length} tasks`);
+        if (!grabbedTasks || grabbedTasks.length === 0) {
+            await log('info', "💤 No tasks due for processing.");
+            return new Response(JSON.stringify({ result: "no_tasks" }), { headers: { "Content-Type": "application/json" } });
+        }
+
+        await log('info', `⚡ Locked ${grabbedTasks.length} tasks for processing`);
         grabbedTasks.sort((a: any, b: any) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime());
-        const results: any[] = []
+        const results: any[] = [];
 
         for (const task of grabbedTasks) {
             const delay = new Date(task.scheduled_for).getTime() - Date.now();
             await log('info', `Processing Task: ${task.title}`, { delay_ms: delay, scheduled_for: task.scheduled_for });
 
-            if (delay > 0) {
-                await log('info', `⏳ Sleeping ${delay}ms...`);
+            // Short pause if due in 1-5 seconds
+            if (delay > 0 && delay <= 5000) {
                 await new Promise(r => setTimeout(r, delay));
             }
 
             const rawConn = task.ha_connections;
             if (!rawConn) {
                 await log('error', `Connection not found for task ${task.id}`);
-                await supabase.from('scheduled_actions').update({ status: 'failed', error: 'Connection not found' }).eq('id', task.id)
-                results.push({ id: task.id, status: 'failed_no_connection' })
-                continue
+                await supabase.from('scheduled_actions').update({ status: 'failed', error: 'Connection not found' }).eq('id', task.id);
+                results.push({ id: task.id, status: 'failed_no_connection' });
+                continue;
             }
 
             // Map to Interface
@@ -68,46 +79,71 @@ Deno.serve(async (req: Request) => {
                 api_url: rawConn.api_url,
                 api_token: rawConn.api_token,
                 fcm_token: rawConn.fcm_token
-            }
+            };
 
             try {
                 // EXECUTE via Shared Matrix
                 await executeActionMatrix(task.actions as AIAction[], connection, supabase);
 
                 await log('info', `✅ Executed: ${task.title}`);
-                await supabase.from('scheduled_actions').update({ status: 'executed', executed_at: new Date().toISOString(), error: null }).eq('id', task.id)
+                await supabase.from('scheduled_actions').update({
+                    status: 'executed',
+                    executed_at: new Date().toISOString(),
+                    error: null
+                }).eq('id', task.id);
 
                 if (connection.fcm_token) {
                     try {
                         const { sendFCM } = await import("../_shared/firebase.ts");
                         await sendFCM(connection.fcm_token, `✅ Acted: ${task.title}`, `Executed at ${new Date().toLocaleTimeString()}`);
-                    } catch (pushErr) { console.error(pushErr) }
+                    } catch (pushErr) {
+                        console.error('Push notification failed:', pushErr);
+                    }
                 }
-                results.push({ id: task.id, status: 'success' })
+                results.push({ id: task.id, status: 'success' });
 
             } catch (err: any) {
-                await log('error', `Task ${task.id} failed`, err);
+                await log('error', `Task ${task.id} execution failed`, err);
 
-                // HYBRID FALLBACK
+                // HYBRID FALLBACK: Delegate to Phone via FCM if cloud execution failed
                 if (connection.fcm_token) {
                     try {
                         const { sendFCM } = await import("../_shared/firebase.ts");
                         const actionPayload = JSON.stringify({ actions: task.actions, taskId: task.id });
-                        await sendFCM(connection.fcm_token, `⚠️ Action Required: ${task.title}`, `Cloud failed. Tap to execute locally.`, 'EXECUTE_ACTION', { type: 'EXECUTE_ACTION', payload: actionPayload });
-                        await supabase.from('scheduled_actions').update({ status: 'failed', error: 'Delegated to Phone' }).eq('id', task.id)
-                        results.push({ id: task.id, status: 'delegated_to_phone' })
+                        await sendFCM(
+                            connection.fcm_token,
+                            `⚠️ Action Required: ${task.title}`,
+                            `Cloud failed. Tap to execute locally.`,
+                            'EXECUTE_ACTION',
+                            { type: 'EXECUTE_ACTION', payload: actionPayload }
+                        );
+                        await supabase.from('scheduled_actions').update({
+                            status: 'failed',
+                            error: 'Delegated to Phone'
+                        }).eq('id', task.id);
+                        results.push({ id: task.id, status: 'delegated_to_phone' });
                         continue;
-                    } catch (pushErr) { /* ignore */ }
+                    } catch (pushErr) {
+                        console.error('FCM fallback delegation failed:', pushErr);
+                    }
                 }
 
-                await supabase.from('scheduled_actions').update({ status: 'failed', error: err.message }).eq('id', task.id)
-                results.push({ id: task.id, status: 'failed', error: err.message })
+                await supabase.from('scheduled_actions').update({
+                    status: 'failed',
+                    error: err.message || 'Execution failed'
+                }).eq('id', task.id);
+                results.push({ id: task.id, status: 'failed', error: err.message });
             }
         }
 
-        return new Response(JSON.stringify({ result: "completed", processed: results.length }), { headers: { "Content-Type": "application/json" } })
+        return new Response(JSON.stringify({ result: "completed", processed: results.length, details: results }), {
+            headers: { "Content-Type": "application/json" }
+        });
 
     } catch (err: any) {
-        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } })
+        return new Response(JSON.stringify({ error: err.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+        });
     }
-})
+});

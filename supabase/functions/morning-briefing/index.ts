@@ -22,7 +22,8 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-const LLM_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || Deno.env.get("GROQ_API_KEY")!
+const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
 
 function jsonResponse(data: any, status = 200) {
     return new Response(JSON.stringify(data), {
@@ -51,29 +52,38 @@ ${context.predictions && context.predictions.suggestions.length > 0 ? `Predictio
 
 Rules:
 - Be concise, friendly, and helpful
-- Start with "Good morning!"
+- Start with "Good morning!" (or "Goedemorgen!" in Dutch)
 - Mention only relevant info (skip unavailable data)
 - End with a positive note
 - Max 3-4 sentences`;
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const useGroq = !!GROQ_API_KEY;
+        const endpoint = useGroq 
+            ? 'https://api.groq.com/openai/v1/chat/completions'
+            : 'https://openrouter.ai/api/v1/chat/completions';
+        const apiKey = useGroq ? GROQ_API_KEY : OPENROUTER_API_KEY;
+        const model = useGroq ? 'llama-3.1-8b-instant' : 'google/gemini-2.5-flash';
+
+        if (!apiKey) throw new Error('No LLM API key configured');
+
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${LLM_API_KEY}`,
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
+                model,
                 messages: [{ role: 'user', content: prompt }],
-                max_tokens: 200,
-                temperature: 0.7
+                max_tokens: 300,
+                temperature: 0.6
             })
         });
 
-        if (!response.ok) throw new Error('LLM request failed');
+        if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
         const data = await response.json();
-        return data.choices[0]?.message?.content || 'Good morning! Have a great day.';
+        return data.choices[0]?.message?.content || (language === 'nl' ? 'Goedemorgen! Maak er een fijne dag van.' : 'Good morning! Have a great day.');
     } catch (e) {
         console.error('[Briefing] LLM error:', e);
         // Fallback to template-based briefing

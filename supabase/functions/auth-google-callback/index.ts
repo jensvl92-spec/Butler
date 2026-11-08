@@ -47,10 +47,31 @@ serve(async (req) => {
     // Initialize Supabase Admin client
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // FETCH USER
-    const { data: users, error: userError } = await supabaseAdmin.auth.admin.listUsers();
-    if (userError || !users.users.length) throw new Error('No user found');
-    const userId = users.users[0].id;
+    // FETCH USER from OAuth state if present, otherwise fallback
+    let userId: string | null = null;
+    const stateParam = url.searchParams.get('state');
+    if (stateParam) {
+      const candidateId = stateParam.includes(':') ? stateParam.split(':')[0] : stateParam;
+      if (candidateId && candidateId.length > 20) {
+        const { data: userRecord } = await supabaseAdmin.auth.admin.getUserById(candidateId);
+        if (userRecord?.user) {
+          userId = userRecord.user.id;
+        }
+      }
+    }
+
+    if (!userId) {
+      const { data: users, error: userError } = await supabaseAdmin.auth.admin.listUsers();
+      if (userError || !users.users.length) throw new Error('No user found');
+      userId = users.users[0].id;
+    }
+
+    // Set RLS user context
+    try {
+      await supabaseAdmin.rpc('set_app_user', { p_user_id: userId });
+    } catch (_ctxErr) {
+      // Ignore if RPC fails or not installed
+    }
 
     // Calculate expiry
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);

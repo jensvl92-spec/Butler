@@ -18,8 +18,9 @@ serve(async (req) => {
   // Dynamic redirect URI based on where the function is running
   const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/auth-spotify-callback`;
 
-  // Generate random state for security
-  const state = crypto.randomUUID();
+  const requestedUserId = url.searchParams.get('user_id') || '';
+  // Generate state containing user_id if provided
+  const state = requestedUserId ? `${requestedUserId}:${crypto.randomUUID()}` : crypto.randomUUID();
 
   // Construct Auth URL
   const params = new URLSearchParams({

@@ -26,14 +26,17 @@ export function ConnectionSetup({ onConnectionAdded }: ConnectionSetupProps) {
     try {
       // Trim whitespace and handle full browser URLs
       let cleanUrl = apiUrl.trim()
+      // Auto-prefix http:// if omitted for Tailscale IPs (100.x) or domain names
+      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+        cleanUrl = 'http://' + cleanUrl
+      }
       try {
         const urlObj = new URL(cleanUrl)
         // FORCE the URL to be just protocol + host + port
         // This strips /config/dashboard, /lovelace, etc. automatically
-        // e.g. https://ha.com:8123/config/dashboard -> https://ha.com:8123
         cleanUrl = urlObj.origin
       } catch (e) {
-        // Invalid URL, let it fail naturally later or keep raw input
+        // Invalid URL, keep input
       }
 
       // SMART TOKEN EXTRACTION
@@ -139,15 +142,20 @@ export function ConnectionSetup({ onConnectionAdded }: ConnectionSetupProps) {
           required
         />
         <input
-          type="url"
-          placeholder="Home Assistant URL (e.g., http://192.168.1.100:8123)"
+          type="text"
+          placeholder="Home Assistant URL (bv. http://100.x.y.z:8123 of http://192.168.1.x:8123)"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           required
         />
+        {(apiUrl.includes('100.') || apiUrl.includes('.ts.net')) && (
+          <p style={{ color: '#10b981', fontSize: '0.8rem', marginTop: '4px' }}>
+            🛡️ <b>Tailscale gedetecteerd:</b> Zorg dat de Tailscale VPN-app op deze telefoon verbonden is.
+          </p>
+        )}
         {apiUrl.includes('.local') && (
           <p style={{ color: 'orange', fontSize: '0.8rem', marginTop: '4px' }}>
-            ⚠️ Android often fails to resolve <b>.local</b> domains. Please use the <b>IP Address</b> (e.g. 192.168.1.x) if connection fails.
+            ⚠️ Android ondersteunt <b>.local</b> vaak niet. Gebruik je Tailscale IP (100.x.x.x) of lokaal IP (192.168.x.x).
           </p>
         )}
         <input

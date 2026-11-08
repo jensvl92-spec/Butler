@@ -14,6 +14,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "npm:@supabase/supabase-js@2.38.4"
+import { chatCompletion, parseJSONResponse } from '../_shared/llm-service.ts'
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -51,7 +52,7 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/learn-habits', '');
+    const path = url.pathname.replace(/^.*\/learn-habits/, '') || '/';
 
     try {
         const body = req.method === 'POST' ? await req.json() : {};
@@ -87,9 +88,7 @@ Deno.serve(async (req: Request) => {
                 });
             }
 
-            console.log(`[Habits] Analyzing ${chats.length} chat entries`);
-
-            // Extract patterns: group by entity + service + hour + day
+            // === 1. Extract Chat Patterns (Time-based routines) ===
             const patternMap = new Map<string, ActionPattern>();
 
             for (const chat of chats) {
@@ -122,12 +121,12 @@ Deno.serve(async (req: Request) => {
             const significantPatterns = Array.from(patternMap.values())
                 .filter(p => p.count >= MIN_OCCURRENCES);
 
-            console.log(`[Habits] Found ${significantPatterns.length} significant patterns`);
+            console.log(`[Habits] Found ${significantPatterns.length} significant time patterns`);
 
-            // Upsert patterns
+            // Upsert time patterns
             let upserted = 0;
             for (const pattern of significantPatterns) {
-                const confidence = Math.min(1.0, pattern.count / 10); // Max confidence at 10 occurrences
+                const confidence = Math.min(1.0, pattern.count / 10);
 
                 await supabase.from('behavior_patterns').upsert({
                     connection_id: connectionId,
@@ -143,10 +142,114 @@ Deno.serve(async (req: Request) => {
                 upserted++;
             }
 
+            // === 2. Autonomous Multi-Variable Context Correlation Mining (LLM Loop) ===
+            // The LLM on its own analyzes chronological traces across ALL domains (climate, lights, covers, appliances, etc.)
+            let correlationsFound = 0;
+            const discoveredRules: any[] = [];
+
+            try {
+                const { data: snapshots } = await supabase
+                    .from('context_snapshots')
+                    .select('*')
+                    .eq('connection_id', connectionId)
+                    .gte('created_at', thirtyDaysAgo)
+                    .order('created_at', { ascending: true })
+                    .limit(150);
+
+                if (snapshots && snapshots.length >= 3) {
+                    // Build a compact, chronological trace of events and context for the LLM
+                    const traceLines = snapshots.map((s: any) => {
+                        const ts = new Date(s.created_at).toISOString().substring(11, 16);
+                        const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.day_of_week];
+                        const weatherInfo = s.outdoor_temp !== null ? `outdoor:${s.outdoor_temp}°C/${s.outdoor_weather}` : '';
+                        const presenceInfo = s.presence_state ? `presence:${s.presence_state}` : '';
+                        const sData = s.service_data && Object.keys(s.service_data).length > 0 ? JSON.stringify(s.service_data) : '';
+                        return `${day} ${ts} | entity:${s.entity_id} | action:${s.service} ${sData} | ${presenceInfo} ${weatherInfo}`.trim();
+                    }).join('\n');
+
+                    const MINER_PROMPT = `
+You are the Butler Autonomous Correlation Engine (Level 5 Autonomy).
+Your task is to analyze the smart home event trace and discover RECURRING CAUSAL ASSOCIATIONS across ANY DOMAIN (climate, lights, covers, switches, media, presence, vacuum, locks, etc.).
+
+CRITICAL INSTRUCTIONS:
+1. Do NOT assume predefined scenarios or hardcode assumptions. Find what actually co-occurs in the user's data.
+2. Identify when an environmental, temporal, or situational trigger (e.g. resident heading home, sunset, temperature drop/rise, leaving a room, waking up) reliably precedes a user action on another device within a reasonable time window.
+3. Extract generalizable rules so the proactive agent can anticipate the user's intention in future occurrences.
+4. Output all titles and descriptions in natural, friendly Dutch.
+
+Return valid JSON format:
+{
+  "correlations": [
+    {
+      "title": "Korte Nederlandse titel",
+      "description": "Uitleg in het Nederlands over de ontdekte gewoonte",
+      "trigger_entity_id": "entity of trigger",
+      "trigger_state": "trigger status or event",
+      "conditions": {
+        "outdoor_temp_lte": 15,
+        "outdoor_temp_gte": 25,
+        "outdoor_weather": "rainy"
+      },
+      "action_entity_id": "target entity id",
+      "action_service": "service to call",
+      "action_data": {},
+      "confidence": 0.85,
+      "occurrence_count": 3
+    }
+  ]
+}
+If no reliable pattern is found, return { "correlations": [] }.
+`;
+
+                    // Autonomous correlation mining using Gemini 3.1 Pro with deep reasoning
+                    const llmResponse = await chatCompletion(
+                        [
+                            { role: 'system', content: MINER_PROMPT },
+                            { role: 'user', content: `TRACE DATA:\n${traceLines}` }
+                        ],
+                        4000,
+                        0.2,
+                        undefined,
+                        undefined,
+                        'google/gemini-3.1-pro-preview',
+                        { effort: 'high' }
+                    );
+
+                    const parsed = parseJSONResponse(llmResponse);
+                    const rules = parsed?.correlations || [];
+
+                    for (const rule of rules) {
+                        if (!rule.trigger_entity_id || !rule.action_entity_id || !rule.action_service) continue;
+
+                        await supabase.from('behavior_correlations').upsert({
+                            connection_id: connectionId,
+                            title: rule.title || 'Geleerde gewoonte',
+                            description: rule.description || '',
+                            trigger_entity_id: rule.trigger_entity_id,
+                            trigger_state: rule.trigger_state || 'any',
+                            conditions: rule.conditions || {},
+                            action_entity_id: rule.action_entity_id,
+                            action_service: rule.action_service,
+                            action_data: rule.action_data || {},
+                            occurrence_count: rule.occurrence_count || 3,
+                            confidence: Math.min(1.0, Math.max(0.6, rule.confidence || 0.75)),
+                            auto_executable: false,
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'connection_id, trigger_entity_id, trigger_state, action_entity_id, action_service' });
+
+                        correlationsFound++;
+                        discoveredRules.push(rule);
+                    }
+                }
+            } catch (corrErr) {
+                console.error('[Habits] Autonomous correlation mining error:', corrErr);
+            }
+
             return jsonResponse({
                 success: true,
                 analyzed_chats: chats.length,
                 patterns_found: significantPatterns.length,
+                correlations_found: correlationsFound,
                 patterns: significantPatterns.slice(0, 10).map(p => ({
                     entity: p.entity_id,
                     action: p.service,

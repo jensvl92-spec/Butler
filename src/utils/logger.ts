@@ -16,8 +16,13 @@ const STORAGE_KEY = 'app_debug_logs';
 class LoggerService {
     private logs: LogEntry[] = [];
 
+    private saveTimer: any = null;
+
     constructor() {
         this.loadLogs();
+        if (typeof window !== 'undefined') {
+            window.addEventListener('beforeunload', () => this.flushLogs());
+        }
     }
 
     private loadLogs() {
@@ -31,7 +36,15 @@ class LoggerService {
         }
     }
 
-    private saveLogs() {
+    private scheduleSave() {
+        if (this.saveTimer) return;
+        this.saveTimer = setTimeout(() => {
+            this.saveTimer = null;
+            this.flushLogs();
+        }, 1500); // Batch writes every 1.5 seconds
+    }
+
+    private flushLogs() {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(this.logs));
         } catch (e) {
@@ -54,7 +67,7 @@ class LoggerService {
             this.logs = this.logs.slice(-MAX_LOGS);
         }
 
-        this.saveLogs();
+        this.scheduleSave();
 
         // Also log to console for dev
         console.log(`[${entry.level}] ${entry.message}`, data || '');
@@ -77,8 +90,12 @@ class LoggerService {
     }
 
     clearLogs() {
+        if (this.saveTimer) {
+            clearTimeout(this.saveTimer);
+            this.saveTimer = null;
+        }
         this.logs = [];
-        this.saveLogs();
+        this.flushLogs();
     }
 
     async downloadLogs() {

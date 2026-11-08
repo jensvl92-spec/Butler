@@ -30,7 +30,7 @@ serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/mcp-proxy', '');
+    const path = url.pathname.replace(/^.*\/mcp-proxy/, '') || '/';
 
     try {
         // ============================================

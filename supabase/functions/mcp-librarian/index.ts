@@ -94,7 +94,7 @@ serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/mcp-librarian', '');
+    const path = url.pathname.replace(/^.*\/mcp-librarian/, '') || '/';
 
     try {
         if (path === '/sync-states' && req.method === 'POST') {

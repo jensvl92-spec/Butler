@@ -180,7 +180,7 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/recipe-assistant', '');
+    const path = url.pathname.replace(/^.*\/recipe-assistant/, '') || '/';
 
     try {
         const body = req.method !== 'GET' && req.method !== 'DELETE' ? await req.json() : {};

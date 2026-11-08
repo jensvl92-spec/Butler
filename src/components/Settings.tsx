@@ -291,7 +291,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                             const { error, count } = await supabase
                                 .from('suggestions')
                                 .delete()
-                                .eq('connection_id', activeConnection.id)
+                                .or(`connection_id.eq.${activeConnection.id},connection_id.is.null`)
                                 .eq('status', 'rejected');
 
                             if (error) {

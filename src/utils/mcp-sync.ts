@@ -6,8 +6,9 @@
 
 import { supabase } from '../lib/supabase';
 
-const SUPABASE_URL = (import.meta as any).env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
+const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
+
 
 /**
  * Fetch HA services (available actions)

@@ -14,15 +14,15 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Available Deepgram Aura voices
-const VOICES = {
-    'en': 'aura-asteria-en',      // Female, American English
-    'en-us': 'aura-asteria-en',
-    'en-gb': 'aura-luna-en',      // Female, British English
-    'nl': 'aura-orion-en',        // Male, neutral (Dutch not natively supported, use neutral English)
-    'nl-nl': 'aura-orion-en',
-    'nl-be': 'aura-orion-en',
-    'default': 'aura-asteria-en'
+// Available Deepgram Aura-2 voices (with native Dutch support)
+const VOICES: Record<string, string> = {
+    'en': 'aura-2-asteria-en',      // Female, Conversational English
+    'en-us': 'aura-2-asteria-en',
+    'en-gb': 'aura-2-luna-en',       // Female, British English
+    'nl': 'aura-2-orion-nl',         // Native Dutch voice (Aura-2)
+    'nl-nl': 'aura-2-orion-nl',
+    'nl-be': 'aura-2-orion-nl',
+    'default': 'aura-2-asteria-en'
 };
 
 serve(async (req: Request) => {

@@ -27,9 +27,14 @@ export function ButlerSuggestions() {
                     table: 'suggestions',
                     filter: 'status=eq.pending',
                 },
-                payload => {
+                (payload: any) => {
+                    // Multi-tenant check: ignore suggestion if targeted to another connection
+                    if (payload.new?.connection_id && activeConnection?.id && payload.new.connection_id !== activeConnection.id) {
+                        return;
+                    }
+
                     console.log('🔔 New Suggestion received!', payload.new)
-                    setActiveSuggestion(payload.new as any) // Type cast for now
+                    setActiveSuggestion(payload.new as any)
 
                     // Native Toast for immediate attention
                     Toast.show({
@@ -43,7 +48,7 @@ export function ButlerSuggestions() {
         return () => {
             supabase.removeChannel(channel)
         }
-    }, [])
+    }, [activeConnection?.id])
 
     const handleAction = async (accepted: boolean) => {
         if (!activeSuggestion) return
@@ -107,7 +112,7 @@ export function ButlerSuggestions() {
         // Update status in DB
         supabase.from('suggestions').update({
             status: accepted ? 'accepted' : 'rejected'
-        }).eq('id', activeSuggestion.id).then(({ error }) => {
+        }).eq('id', activeSuggestion.id).then(({ error }: { error: any }) => {
             if (error) console.error("Error updating suggestion status", error)
         })
 

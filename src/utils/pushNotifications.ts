@@ -41,19 +41,23 @@ export const registerPushNotifications = async (connectionId?: string) => {
             return;
         }
 
-        // Register for push notifications
-        await PushNotifications.register();
-
         // Listen for registration success
-        PushNotifications.addListener('registration', async (token: Token) => {
+        await PushNotifications.addListener('registration', async (token: Token) => {
             console.log('🔔 FCM Token received:', token.value.substring(0, 20) + '...');
             await saveTokenToSupabase(token.value, connectionId);
         });
 
         // Listen for registration errors
-        PushNotifications.addListener('registrationError', (error) => {
+        await PushNotifications.addListener('registrationError', (error) => {
             console.error('❌ Push registration error:', error);
         });
+
+        // Register for push notifications
+        try {
+            await PushNotifications.register();
+        } catch (regError) {
+            console.error('❌ Failed during PushNotifications.register():', regError);
+        }
 
         // Listen for push notifications received while app is in foreground
         PushNotifications.addListener('pushNotificationReceived', (notification) => {
@@ -85,7 +89,10 @@ export const registerPushNotifications = async (connectionId?: string) => {
                     const payload = typeof data.payload === 'string'
                         ? JSON.parse(data.payload)
                         : data.payload;
-                    await actionHandler([payload]);
+                    const actionsToExecute = Array.isArray(payload)
+                        ? payload
+                        : (Array.isArray(payload.actions) ? payload.actions : [payload]);
+                    await actionHandler(actionsToExecute);
                 } catch (e) {
                     console.error('Failed to execute notification action:', e);
                 }

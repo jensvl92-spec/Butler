@@ -259,8 +259,9 @@ function App() {
         if (!activeConnection) { logger.warn("No active connection for background action"); return; }
 
         const cleanApiUrl = getCleanUrl(activeConnection.api_url);
+        const flatActions = actions.flatMap(a => (a && Array.isArray(a.actions)) ? a.actions : [a]);
 
-        await Promise.allSettled(actions.map(async (action) => {
+        await Promise.allSettled(flatActions.map(async (action) => {
           try {
             // HANDLER: Set Alarm (Native)
             if (action.type === 'set_alarm') {
@@ -274,10 +275,12 @@ function App() {
               logger.info(`⏰ Setting alarm for ${hour}:${minute.toString().padStart(2, '0')} - ${message || 'Alarm'}`);
 
               try {
-                // Use Android Intent URL scheme to open Clock app directly
-                // android.intent.action.SET_ALARM
                 const intentUri = `intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${hour};i.android.intent.extra.alarm.MINUTES=${minute};S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(message || 'Alarm')};B.android.intent.extra.alarm.SKIP_UI=false;B.android.intent.extra.alarm.VIBRATE=true;end`;
-                window.open(intentUri, '_system');
+                try {
+                  window.location.href = intentUri;
+                } catch {
+                  window.open(intentUri, '_blank');
+                }
                 logger.info("✅ Alarm Intent Sent");
               } catch (alarmError: any) {
                 logger.error("Failed to set alarm:", alarmError);

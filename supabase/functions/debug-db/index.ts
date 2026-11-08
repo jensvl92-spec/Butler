@@ -1,28 +1,44 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 // @ts-ignore
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 // @ts-ignore
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
 serve(async (req: Request) => {
     try {
+        // Enforce Authentication
+        const authHeader = req.headers.get('Authorization')
+        if (!authHeader) {
+            return new Response(JSON.stringify({ error: 'Unauthorized: Missing Authorization header' }), {
+                status: 401,
+                headers: { "Content-Type": "application/json" }
+            })
+        }
+
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        const token = authHeader.replace('Bearer ', '')
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+
+        if (authError || !user) {
+            return new Response(JSON.stringify({ error: 'Unauthorized: Invalid credentials' }), {
+                status: 401,
+                headers: { "Content-Type": "application/json" }
+            })
+        }
 
         const results: any = { columns_found: [], type_test_string: null, type_test_object: null };
 
-        // 1. Get Schema via Row Inspection
+        // 1. Get Schema via Column Names (Without leaking sensitive row values)
         const { data: rows, error: readError } = await supabase.from('chat_history').select('*').limit(1);
         if (rows && rows.length > 0) {
             results.columns_found = Object.keys(rows[0]);
-            results.sample_row = rows[0];
         } else {
             results.columns_found = "No rows to inspect or Read Failed: " + (readError?.message || "Empty");
         }
 
-        // 2. Get Connection ID
+        // 2. Verify connection write permissions
         const { data: conn } = await supabase.from('ha_connections').select('id').limit(1).single();
 
         if (conn) {

@@ -170,7 +170,7 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/energy-scheduler', '');
+    const path = url.pathname.replace(/^.*\/energy-scheduler/, '') || '/';
 
     try {
         // Get connection_id from query params (GET) or body (POST)

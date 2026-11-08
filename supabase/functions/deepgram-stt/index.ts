@@ -72,9 +72,9 @@ serve(async (req: Request) => {
 
     console.log(`[Deepgram] Normalized language: ${language} -> ${normalizedLanguage}`);
 
-    // Base params - use nova-2 (state of the art as of 2025)
+    // Base params - use nova-3 (State of the art multilingual streaming ASR)
     const deepgramParamsObj: Record<string, string> = {
-        model: 'nova-2',  // Fixed: nova-3 doesn't exist, nova-2 is the latest
+        model: 'nova-3',
         language: normalizedLanguage,
         punctuate: 'true',
         interim_results: 'true',

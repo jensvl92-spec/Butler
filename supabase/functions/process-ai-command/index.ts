@@ -87,8 +87,21 @@ serve(async (req: Request) => {
             });
         }
 
-        // MCP Proxy URL (Default to Supabase, but allow override from client)
-        const mcpProxyUrl = clientProxyUrl || `${SUPABASE_URL}/functions/v1/mcp-proxy`;
+        // MCP Proxy URL (Safe default to internal Supabase Edge Function to prevent SSRF)
+        let mcpProxyUrl = `${SUPABASE_URL}/functions/v1/mcp-proxy`;
+        if (clientProxyUrl) {
+            try {
+                const clientOrigin = new URL(clientProxyUrl).origin;
+                const supabaseOrigin = new URL(SUPABASE_URL).origin;
+                if (clientOrigin === supabaseOrigin) {
+                    mcpProxyUrl = clientProxyUrl;
+                } else {
+                    console.warn(`[Security] Untrusted client mcp_proxy_url rejected: ${clientProxyUrl}`);
+                }
+            } catch (_urlErr) {
+                console.warn(`[Security] Invalid mcp_proxy_url ignored: ${clientProxyUrl}`);
+            }
+        }
 
         // === Helper: Get History ===
         const getChatHistory = async (connectionId: string): Promise<any[]> => {

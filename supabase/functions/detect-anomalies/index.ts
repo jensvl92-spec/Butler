@@ -81,7 +81,7 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const url = new URL(req.url);
-    const path = url.pathname.replace('/detect-anomalies', '');
+    const path = url.pathname.replace(/^.*\/detect-anomalies/, '') || '/';
 
     try {
         const body = req.method === 'POST' ? await req.json() : {};
