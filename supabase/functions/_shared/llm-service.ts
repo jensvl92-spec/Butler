@@ -141,7 +141,7 @@ export async function routerCompletion(systemPrompt: string, userPrompt: string)
                 { role: "user", content: userPrompt }
             ],
             temperature: 0,
-            max_tokens: 2500
+            max_tokens: 10000
         }),
     });
 

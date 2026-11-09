@@ -1432,8 +1432,8 @@ export async function runClientReActOrchestrator(
             tool_choice: 'auto',
             // Google recommends temperature 1.0 for Gemini 3 to prevent degraded/empty output
             temperature: provider === 'gemini' ? 1.0 : 0.3,
-            // Allow ample tokens for Gemini thinking budget + completion tokens
-            max_tokens: 2500
+            // Allow 10,000 tokens for Gemini thinking models (thinking tokens can consume 2,000-8,000 tokens)
+            max_tokens: 10000
         };
 
         const headers: Record<string, string> = {

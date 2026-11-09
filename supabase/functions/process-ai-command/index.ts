@@ -310,8 +310,8 @@ BELANGRIJKE GEDRAGSREGELS:
 
             const llmResponse = await chatCompletion(
                 messages,
-                800,
-                0.2,
+                10000,
+                1.0,
                 TOOLS,
                 undefined,
                 "google/gemini-3-flash-preview"
