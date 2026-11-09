@@ -21,8 +21,33 @@ export type AIProvider = 'gemini' | 'openrouter';
 export const GOOGLE_GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash';
-export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
+
+export function sanitizeModelId(raw: string | undefined | null, provider: AIProvider): string {
+    if (!raw) return provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
+    let clean = raw.trim();
+    // Strip surrounding quotes
+    clean = clean.replace(/^["']|["']$/g, '');
+    // Take first token before spaces or brackets (e.g. "gemini-3-flash-preview (latest)" -> "gemini-3-flash-preview")
+    clean = clean.split(' ')[0].split('(')[0].trim();
+
+    if (provider === 'gemini') {
+        clean = clean.replace(/^models\//i, '').replace(/^google\//i, '');
+        if (clean === 'gemini-3-flash') {
+            clean = 'gemini-3-flash-preview';
+        }
+    } else {
+        // OpenRouter
+        if (!clean.includes('/')) {
+            clean = `google/${clean}`;
+        }
+        if (clean === 'google/gemini-3-flash') {
+            clean = 'google/gemini-3-flash-preview';
+        }
+    }
+    return clean;
+}
 
 export interface AIResolvedConfig {
     apiKey: string;
@@ -54,12 +79,8 @@ export function resolveAIConfig(providedKey?: string, providedModel?: string, pr
     }
 
     let defaultModel = provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
-    let model = providedModel || localStorage.getItem('butler.llm_model') || defaultModel;
-
-    // Normalise model name for Gemini endpoint
-    if (provider === 'gemini' && model.startsWith('google/')) {
-        model = model.replace('google/', '');
-    }
+    let rawModel = providedModel || localStorage.getItem('butler.llm_model') || defaultModel;
+    let model = sanitizeModelId(rawModel, provider);
 
     const endpoint = provider === 'gemini' ? GOOGLE_GEMINI_API_URL : OPENROUTER_API_URL;
 

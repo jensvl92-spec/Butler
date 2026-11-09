@@ -3,6 +3,7 @@ import { registerPlugin } from '@capacitor/core';
 import { signOut } from '../utils/auth';
 import { supabase } from '../lib/supabase';
 import { useApp } from '../lib/AppContext';
+import { sanitizeModelId } from '../lib/services/clientOrchestrator';
 
 // @ts-ignore
 import { logger } from '../utils/logger';
@@ -33,7 +34,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     // AI Brain Settings (Client-Side Google Gemini / OpenRouter)
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
     const [apiKeyInput, setApiKeyInput] = useState('');
-    const [llmModel, setLlmModel] = useState('gemini-3-flash');
+    const [llmModel, setLlmModel] = useState('gemini-3-flash-preview');
     const [showApiKey, setShowApiKey] = useState(false);
     const [testingKey, setTestingKey] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -52,8 +53,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         const initialKey = savedProvider === 'gemini' ? (geminiKey || openRouterKey) : (openRouterKey || geminiKey);
         setApiKeyInput(initialKey);
 
-        const savedModel = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-3-flash' : 'google/gemini-3-flash');
-        setLlmModel(savedModel);
+        const savedModelRaw = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview');
+        const cleanSavedModel = sanitizeModelId(savedModelRaw, savedProvider);
+        setLlmModel(cleanSavedModel);
 
         if (savedSnooze) {
             const snoozeTime = parseInt(savedSnooze, 10);
@@ -198,15 +200,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('gemini');
-                            setLlmModel('gemini-3-flash');
+                            setLlmModel('gemini-3-flash-preview');
                         }}
                         style={{
                             flex: 1,
                             padding: '8px 10px',
                             borderRadius: '8px',
-                            border: aiProvider === 'gemini' ? '2px solid #4f46e5' : '1px solid var(--border)',
-                            background: aiProvider === 'gemini' ? 'rgba(79, 70, 229, 0.15)' : 'var(--bg-card)',
-                            color: 'inherit',
+                            border: aiProvider === 'gemini' ? '2px solid #4f46e5' : '1px solid var(--border, #3a3a4a)',
+                            background: aiProvider === 'gemini' ? 'rgba(79, 70, 229, 0.2)' : 'var(--bg-card, #1a1a24)',
+                            color: 'var(--text-primary, #ffffff)',
                             fontWeight: aiProvider === 'gemini' ? 600 : 400,
                             cursor: 'pointer',
                             fontSize: '0.85rem'
@@ -218,15 +220,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('openrouter');
-                            setLlmModel('google/gemini-3-flash');
+                            setLlmModel('google/gemini-3-flash-preview');
                         }}
                         style={{
                             flex: 1,
                             padding: '8px 10px',
                             borderRadius: '8px',
-                            border: aiProvider === 'openrouter' ? '2px solid #4f46e5' : '1px solid var(--border)',
-                            background: aiProvider === 'openrouter' ? 'rgba(79, 70, 229, 0.15)' : 'var(--bg-card)',
-                            color: 'inherit',
+                            border: aiProvider === 'openrouter' ? '2px solid #4f46e5' : '1px solid var(--border, #3a3a4a)',
+                            background: aiProvider === 'openrouter' ? 'rgba(79, 70, 229, 0.2)' : 'var(--bg-card, #1a1a24)',
+                            color: 'var(--text-primary, #ffffff)',
                             fontWeight: aiProvider === 'openrouter' ? 600 : 400,
                             cursor: 'pointer',
                             fontSize: '0.85rem'
@@ -238,7 +240,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
                 {/* Model Selector */}
                 <div style={{ marginBottom: '12px' }}>
-                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px', color: 'var(--text-primary, #ffffff)' }}>
                         AI Model ({aiProvider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'})
                     </label>
                     <select
@@ -246,51 +248,53 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         onChange={(e) => setLlmModel(e.target.value)}
                         style={{
                             width: '100%',
-                            padding: '8px 10px',
+                            padding: '10px 12px',
                             borderRadius: '8px',
-                            border: '1px solid var(--border)',
-                            background: 'var(--bg-main, #ffffff)',
-                            color: 'inherit',
-                            fontSize: '0.85rem'
+                            border: '1px solid var(--border, #3a3a4a)',
+                            background: 'var(--bg-elevated, #252532)',
+                            color: 'var(--text-primary, #ffffff)',
+                            fontSize: '0.85rem',
+                            outline: 'none'
                         }}
                     >
                         {aiProvider === 'gemini' ? (
                             <>
-                                <option value="gemini-3-flash">gemini-3-flash (Aanbevolen: snel, voordelig & topkwaliteit)</option>
-                                <option value="gemini-3.8-flash">gemini-3.8-flash (Extreem krachtig & snel)</option>
-                                <option value="gemini-3.1-pro">gemini-3.1-pro (Diep redeneren)</option>
-                                <option value="gemini-4-preview">gemini-4-preview (Next-gen Gemini 4)</option>
-                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                <option value="gemini-3-flash-preview" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3-flash-preview (Aanbevolen: snel, voordelig & topkwaliteit)</option>
+                                <option value="gemini-3.8-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3.8-flash (Extreem krachtig & snel)</option>
+                                <option value="gemini-3.1-pro" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3.1-pro (Diep redeneren)</option>
+                                <option value="gemini-2.5-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-2.5-flash (Betrouwbaar werkpaard)</option>
                             </>
                         ) : (
                             <>
-                                <option value="google/gemini-3-flash">google/gemini-3-flash (Aanbevolen)</option>
-                                <option value="google/gemini-3.8-flash">google/gemini-3.8-flash</option>
-                                <option value="google/gemini-3.1-pro">google/gemini-3.1-pro</option>
-                                <option value="google/gemini-4-preview">google/gemini-4-preview</option>
-                                <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
+                                <option value="google/gemini-3-flash-preview" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3-flash-preview (Aanbevolen)</option>
+                                <option value="google/gemini-3.8-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3.8-flash</option>
+                                <option value="google/gemini-3.1-pro" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3.1-pro</option>
+                                <option value="google/gemini-2.5-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-2.5-flash</option>
                             </>
                         )}
                     </select>
-                    <div style={{ marginTop: '6px' }}>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    <div style={{ marginTop: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)' }}>
                             Exact Model ID (aanpasbaar):
                         </span>
                         <input
                             type="text"
                             value={llmModel}
-                            onChange={(e) => setLlmModel(e.target.value.trim())}
-                            placeholder={aiProvider === 'gemini' ? 'gemini-3-flash' : 'google/gemini-3-flash'}
+                            onChange={(e) => setLlmModel(e.target.value)}
+                            onBlur={() => setLlmModel(prev => sanitizeModelId(prev, aiProvider))}
+                            placeholder={aiProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview'}
                             style={{
                                 width: '100%',
-                                marginTop: '2px',
-                                padding: '6px 10px',
+                                marginTop: '4px',
+                                padding: '10px 12px',
                                 borderRadius: '8px',
-                                border: '1px solid var(--border)',
-                                background: 'var(--bg-main, #ffffff)',
-                                color: 'inherit',
-                                fontSize: '0.85rem',
-                                fontFamily: 'monospace'
+                                border: '1px solid var(--border, #3a3a4a)',
+                                background: 'var(--bg-elevated, #252532)',
+                                color: 'var(--text-primary, #ffffff)',
+                                caretColor: '#6366f1',
+                                fontSize: '0.9rem',
+                                fontFamily: 'monospace',
+                                outline: 'none'
                             }}
                         />
                     </div>
@@ -299,7 +303,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 {/* API Key Input */}
                 <div style={{ marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary, #ffffff)' }}>
                             {aiProvider === 'gemini' ? 'Google Gemini API-Sleutel (AIzaSy...)' : 'OpenRouter API-Sleutel (sk-or-...)'}
                         </label>
                         {aiProvider === 'gemini' && (
@@ -307,7 +311,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 href="https://aistudio.google.com/app/apikey"
                                 target="_blank"
                                 rel="noreferrer"
-                                style={{ fontSize: '0.75rem', color: '#4f46e5', textDecoration: 'none' }}
+                                style={{ fontSize: '0.75rem', color: '#818cf8', textDecoration: 'none' }}
                             >
                                 🔗 Gratis ophalen bij Google
                             </a>
@@ -322,7 +326,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 setApiKeyInput(val);
                                 if (val.startsWith('AIzaSy') && aiProvider !== 'gemini') {
                                     setAiProvider('gemini');
-                                    setLlmModel('gemini-2.5-flash');
+                                    setLlmModel('gemini-3-flash-preview');
                                 } else if (val.startsWith('sk-or-') && aiProvider !== 'openrouter') {
                                     setAiProvider('openrouter');
                                     setLlmModel('google/gemini-3-flash-preview');
@@ -331,22 +335,25 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                             placeholder={aiProvider === 'gemini' ? 'AIzaSy...' : 'sk-or-v1-...'}
                             style={{
                                 flex: 1,
-                                padding: '8px 10px',
+                                padding: '10px 12px',
                                 borderRadius: '8px',
-                                border: '1px solid var(--border)',
-                                background: 'var(--bg-main, #ffffff)',
-                                color: 'inherit',
-                                fontSize: '0.85rem'
+                                border: '1px solid var(--border, #3a3a4a)',
+                                background: 'var(--bg-elevated, #252532)',
+                                color: 'var(--text-primary, #ffffff)',
+                                caretColor: '#6366f1',
+                                fontSize: '0.9rem',
+                                outline: 'none'
                             }}
                         />
                         <button
                             type="button"
                             onClick={() => setShowApiKey(!showApiKey)}
                             style={{
-                                padding: '8px 12px',
+                                padding: '8px 14px',
                                 borderRadius: '8px',
-                                border: '1px solid var(--border)',
-                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border, #3a3a4a)',
+                                background: 'var(--bg-card, #1a1a24)',
+                                color: 'var(--text-primary, #ffffff)',
                                 cursor: 'pointer',
                                 fontSize: '0.8rem'
                             }}
@@ -362,6 +369,8 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         onClick={() => {
                             const trimmed = apiKeyInput.trim();
                             const isGemini = aiProvider === 'gemini' || trimmed.startsWith('AIzaSy');
+                            const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
+                            setLlmModel(cleanModel);
                             if (isGemini) {
                                 localStorage.setItem('butler.gemini_api_key', trimmed);
                                 localStorage.setItem('butler.ai_provider', 'gemini');
@@ -370,13 +379,13 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 localStorage.setItem('butler.ai_provider', 'openrouter');
                             }
                             localStorage.setItem('butler.api_key', trimmed);
-                            localStorage.setItem('butler.llm_model', llmModel);
+                            localStorage.setItem('butler.llm_model', cleanModel);
                             setKeySaved(true);
                             setTimeout(() => setKeySaved(false), 2500);
                         }}
                         style={{
                             flex: 1,
-                            padding: '8px 12px',
+                            padding: '10px 12px',
                             borderRadius: '8px',
                             background: '#4f46e5',
                             color: '#ffffff',
@@ -404,46 +413,95 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                             setTestingKey(true);
                             setTestResult(null);
 
-                            const endpoint = isGemini
-                                ? 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
-                                : 'https://openrouter.ai/api/v1/chat/completions';
-
-                            let testModel = llmModel;
-                            if (isGemini && testModel.startsWith('google/')) {
-                                testModel = testModel.replace('google/', '');
-                            }
+                            const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
+                            setLlmModel(cleanModel);
 
                             try {
                                 const start = Date.now();
-                                const headers: Record<string, string> = {
-                                    'Content-Type': 'application/json',
-                                    'Authorization': `Bearer ${keyToTest}`
-                                };
-                                if (!isGemini) {
-                                    headers['HTTP-Referer'] = 'https://aiha.app';
-                                    headers['X-Title'] = 'Butler AI App';
-                                } else {
-                                    headers['x-goog-api-key'] = keyToTest;
-                                }
-
-                                const res = await fetch(endpoint, {
-                                    method: 'POST',
-                                    headers,
-                                    body: JSON.stringify({
-                                        model: testModel,
-                                        messages: [{ role: 'user', content: 'Ping' }],
-                                        max_tokens: 10
-                                    })
-                                });
-                                const elapsed = Date.now() - start;
-                                if (res.ok) {
-                                    setTestResult({
-                                        success: true,
-                                        message: `✅ Verbinding geslaagd! ${testModel} via ${isGemini ? 'Google Gemini' : 'OpenRouter'} reageerde in ${elapsed}ms.`
+                                if (isGemini) {
+                                    // 1. Google AI Studio OpenAI-compatible endpoint
+                                    const openaiRes = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': `Bearer ${keyToTest}`,
+                                            'x-goog-api-key': keyToTest
+                                        },
+                                        body: JSON.stringify({
+                                            model: cleanModel,
+                                            messages: [{ role: 'user', content: 'Ping' }],
+                                            max_tokens: 10
+                                        })
                                     });
+
+                                    const elapsed = Date.now() - start;
+
+                                    if (openaiRes.ok) {
+                                        setTestResult({
+                                            success: true,
+                                            message: `✅ Verbinding geslaagd! ${cleanModel} via Google AI Studio reageerde in ${elapsed}ms.`
+                                        });
+                                    } else {
+                                        // 2. Direct Gemini REST endpoint fallback verification
+                                        let directOk = false;
+                                        try {
+                                            const directRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${keyToTest}`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({
+                                                    contents: [{ parts: [{ text: 'Ping' }] }],
+                                                    generationConfig: { maxOutputTokens: 10 }
+                                                })
+                                            });
+                                            if (directRes.ok) {
+                                                directOk = true;
+                                            }
+                                        } catch {
+                                            directOk = false;
+                                        }
+
+                                        if (directOk) {
+                                            setTestResult({
+                                                success: true,
+                                                message: `✅ Verbinding geslaagd! ${cleanModel} geverifieerd via Google Gemini API in ${elapsed}ms.`
+                                            });
+                                        } else {
+                                            const err = await openaiRes.text();
+                                            setTestResult({
+                                                success: false,
+                                                message: `❌ Fout (${openaiRes.status}): ${err.substring(0, 160)}`
+                                            });
+                                        }
+                                    }
                                 } else {
-                                    const err = await res.text();
-                                    setTestResult({ success: false, message: `❌ Fout (${res.status}): ${err.substring(0, 150)}` });
+                                    // OpenRouter
+                                    const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': `Bearer ${keyToTest}`,
+                                            'HTTP-Referer': 'https://aiha.app',
+                                            'X-Title': 'Butler AI App'
+                                        },
+                                        body: JSON.stringify({
+                                            model: cleanModel,
+                                            messages: [{ role: 'user', content: 'Ping' }],
+                                            max_tokens: 10
+                                        })
+                                    });
+                                    const elapsed = Date.now() - start;
+                                    if (openRouterRes.ok) {
+                                        setTestResult({
+                                            success: true,
+                                            message: `✅ Verbinding geslaagd! ${cleanModel} via OpenRouter reageerde in ${elapsed}ms.`
+                                        });
+                                    } else {
+                                        const err = await openRouterRes.text();
+                                        setTestResult({
+                                            success: false,
+                                            message: `❌ Fout (${openRouterRes.status}): ${err.substring(0, 160)}`
+                                        });
+                                    }
                                 }
                             } catch (e: any) {
                                 setTestResult({ success: false, message: `❌ Netwerkfout: ${e.message}` });
@@ -453,11 +511,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         }}
                         disabled={testingKey}
                         style={{
-                            padding: '8px 12px',
+                            padding: '10px 14px',
                             borderRadius: '8px',
-                            background: 'var(--bg-card)',
-                            border: '1px solid var(--border)',
-                            color: 'inherit',
+                            background: 'var(--bg-card, #1a1a24)',
+                            border: '1px solid var(--border, #3a3a4a)',
+                            color: 'var(--text-primary, #ffffff)',
                             fontWeight: 500,
                             cursor: testingKey ? 'wait' : 'pointer',
                             fontSize: '0.85rem'
