@@ -19,6 +19,20 @@ interface FloatingButtonPlugin {
 
 const FloatingButton = registerPlugin<FloatingButtonPlugin>('FloatingButton');
 
+export const GEMINI_MODELS = [
+    { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview (Aanbevolen: snel, voordelig & topkwaliteit)' },
+    { id: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Extreem krachtig & snel)' },
+    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Diep redeneren)' },
+    { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Betrouwbaar werkpaard)' },
+];
+
+export const OPENROUTER_MODELS = [
+    { id: 'google/gemini-3-flash-preview', label: 'google/gemini-3-flash-preview (Aanbevolen)' },
+    { id: 'google/gemini-3.8-flash', label: 'google/gemini-3.8-flash' },
+    { id: 'google/gemini-3.1-pro', label: 'google/gemini-3.1-pro' },
+    { id: 'google/gemini-2.5-flash', label: 'google/gemini-2.5-flash' },
+];
+
 interface SettingsProps {
     onClose?: () => void;
 }
@@ -35,6 +49,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
     const [apiKeyInput, setApiKeyInput] = useState('');
     const [llmModel, setLlmModel] = useState('gemini-3-flash-preview');
+    const [isCustomModel, setIsCustomModel] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [testingKey, setTestingKey] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -56,6 +71,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         const savedModelRaw = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview');
         const cleanSavedModel = sanitizeModelId(savedModelRaw, savedProvider);
         setLlmModel(cleanSavedModel);
+
+        const presets = savedProvider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS;
+        setIsCustomModel(!presets.some(m => m.id === cleanSavedModel));
 
         if (savedSnooze) {
             const snoozeTime = parseInt(savedSnooze, 10);
@@ -200,7 +218,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('gemini');
-                            setLlmModel('gemini-3-flash-preview');
+                            if (!isCustomModel) {
+                                setLlmModel('gemini-3-flash-preview');
+                            } else {
+                                setLlmModel(prev => sanitizeModelId(prev, 'gemini'));
+                            }
                         }}
                         style={{
                             flex: 1,
@@ -220,7 +242,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('openrouter');
-                            setLlmModel('google/gemini-3-flash-preview');
+                            if (!isCustomModel) {
+                                setLlmModel('google/gemini-3-flash-preview');
+                            } else {
+                                setLlmModel(prev => sanitizeModelId(prev, 'openrouter'));
+                            }
                         }}
                         style={{
                             flex: 1,
@@ -244,60 +270,120 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         AI Model ({aiProvider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'})
                     </label>
                     <select
-                        value={llmModel}
-                        onChange={(e) => setLlmModel(e.target.value)}
+                        value={isCustomModel ? 'custom' : llmModel}
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === 'custom') {
+                                setIsCustomModel(true);
+                            } else {
+                                setIsCustomModel(false);
+                                setLlmModel(val);
+                            }
+                        }}
                         style={{
                             width: '100%',
                             padding: '10px 12px',
                             borderRadius: '8px',
-                            border: '1px solid var(--border, #3a3a4a)',
+                            border: isCustomModel ? '2px solid #818cf8' : '1px solid var(--border, #3a3a4a)',
                             background: 'var(--bg-elevated, #252532)',
                             color: 'var(--text-primary, #ffffff)',
                             fontSize: '0.85rem',
                             outline: 'none'
                         }}
                     >
-                        {aiProvider === 'gemini' ? (
-                            <>
-                                <option value="gemini-3-flash-preview" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3-flash-preview (Aanbevolen: snel, voordelig & topkwaliteit)</option>
-                                <option value="gemini-3.8-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3.8-flash (Extreem krachtig & snel)</option>
-                                <option value="gemini-3.1-pro" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-3.1-pro (Diep redeneren)</option>
-                                <option value="gemini-2.5-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>gemini-2.5-flash (Betrouwbaar werkpaard)</option>
-                            </>
-                        ) : (
-                            <>
-                                <option value="google/gemini-3-flash-preview" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3-flash-preview (Aanbevolen)</option>
-                                <option value="google/gemini-3.8-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3.8-flash</option>
-                                <option value="google/gemini-3.1-pro" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-3.1-pro</option>
-                                <option value="google/gemini-2.5-flash" style={{ background: '#1a1a24', color: '#ffffff' }}>google/gemini-2.5-flash</option>
-                            </>
-                        )}
+                        {(aiProvider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS).map((m) => (
+                            <option key={m.id} value={m.id} style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                {m.label}
+                            </option>
+                        ))}
+                        <option value="custom" style={{ background: '#1a1a24', color: '#818cf8', fontWeight: 600 }}>
+                            ✏️ Ander / Aangepast model (handmatig invoeren)...
+                        </option>
                     </select>
-                    <div style={{ marginTop: '8px' }}>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)' }}>
-                            Exact Model ID (aanpasbaar):
-                        </span>
-                        <input
-                            type="text"
-                            value={llmModel}
-                            onChange={(e) => setLlmModel(e.target.value)}
-                            onBlur={() => setLlmModel(prev => sanitizeModelId(prev, aiProvider))}
-                            placeholder={aiProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview'}
-                            style={{
-                                width: '100%',
-                                marginTop: '4px',
-                                padding: '10px 12px',
-                                borderRadius: '8px',
-                                border: '1px solid var(--border, #3a3a4a)',
-                                background: 'var(--bg-elevated, #252532)',
-                                color: 'var(--text-primary, #ffffff)',
-                                caretColor: '#6366f1',
-                                fontSize: '0.9rem',
-                                fontFamily: 'monospace',
-                                outline: 'none'
-                            }}
-                        />
-                    </div>
+
+                    {isCustomModel ? (
+                        <div style={{
+                            marginTop: '8px',
+                            padding: '10px 12px',
+                            background: 'rgba(99, 102, 241, 0.12)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(99, 102, 241, 0.35)'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#818cf8' }}>
+                                    ✏️ Aangepast Model ID:
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsCustomModel(false);
+                                        setLlmModel(aiProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview');
+                                    }}
+                                    style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: 'var(--text-secondary, #9ca3af)',
+                                        fontSize: '0.75rem',
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline'
+                                    }}
+                                >
+                                    Standaard model herstellen
+                                </button>
+                            </div>
+                            <input
+                                type="text"
+                                value={llmModel}
+                                autoFocus
+                                onChange={(e) => setLlmModel(e.target.value)}
+                                onBlur={() => {
+                                    const clean = sanitizeModelId(llmModel, aiProvider);
+                                    setLlmModel(clean);
+                                    const presets = aiProvider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS;
+                                    if (presets.some(m => m.id === clean)) {
+                                        setIsCustomModel(false);
+                                    }
+                                }}
+                                placeholder={aiProvider === 'gemini' ? 'bijv. gemini-3-flash-preview of publishers/google/models/...' : 'bijv. google/gemini-3-flash-preview'}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 10px',
+                                    borderRadius: '6px',
+                                    border: '1px solid var(--border, #3a3a4a)',
+                                    background: 'var(--bg-elevated, #252532)',
+                                    color: 'var(--text-primary, #ffffff)',
+                                    caretColor: '#6366f1',
+                                    fontSize: '0.85rem',
+                                    fontFamily: 'monospace',
+                                    outline: 'none'
+                                }}
+                            />
+                            <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: 'var(--text-secondary, #9ca3af)', lineHeight: '1.3' }}>
+                                💡 <strong>Tip:</strong> Je mag ook het volledige Google Cloud pad plakken (zoals <code>publishers/google/models/gemini-2.5-flash</code>). Butler schoont dit automatisch op.
+                            </p>
+                        </div>
+                    ) : (
+                        <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #9ca3af)' }}>
+                                Actief model: <code style={{ color: '#818cf8', fontWeight: 600 }}>{llmModel}</code>
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setIsCustomModel(true)}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#818cf8',
+                                    fontSize: '0.75rem',
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline',
+                                    padding: '0'
+                                }}
+                            >
+                                ✏️ Ander model invoeren
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* API Key Input */}
@@ -371,6 +457,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                             const isGemini = aiProvider === 'gemini' || trimmed.startsWith('AIzaSy');
                             const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
                             setLlmModel(cleanModel);
+                            const activePresets = isGemini ? GEMINI_MODELS : OPENROUTER_MODELS;
+                            setIsCustomModel(!activePresets.some(m => m.id === cleanModel));
+
                             if (isGemini) {
                                 localStorage.setItem('butler.gemini_api_key', trimmed);
                                 localStorage.setItem('butler.ai_provider', 'gemini');
@@ -415,6 +504,8 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
                             const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
                             setLlmModel(cleanModel);
+                            const activePresets = isGemini ? GEMINI_MODELS : OPENROUTER_MODELS;
+                            setIsCustomModel(!activePresets.some(m => m.id === cleanModel));
 
                             try {
                                 const start = Date.now();

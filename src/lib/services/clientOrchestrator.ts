@@ -27,18 +27,41 @@ export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
 export function sanitizeModelId(raw: string | undefined | null, provider: AIProvider): string {
     if (!raw) return provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
     let clean = raw.trim();
-    // Strip surrounding quotes
-    clean = clean.replace(/^["']|["']$/g, '');
-    // Take first token before spaces or brackets (e.g. "gemini-3-flash-preview (latest)" -> "gemini-3-flash-preview")
+
+    // 1. Strip surrounding quotes or backticks
+    clean = clean.replace(/^[ "'`]+|[ "'`]+$/g, '').trim();
+
+    // 2. If user pasted a full URL or path containing '/models/'
+    if (clean.includes('/models/')) {
+        clean = clean.split('/models/')[1];
+    }
+
+    // 3. Strip query parameters or actions (e.g. ?key=... or :generateContent or :streamGenerateContent)
+    if (clean.includes('?')) {
+        clean = clean.split('?')[0];
+    }
+    if (clean.includes(':')) {
+        clean = clean.split(':')[0];
+    }
+
+    // 4. Strip Google Cloud Vertex AI / Model Garden prefixes
+    // e.g. projects/.../publishers/google/models/... or publishers/google/models/...
+    clean = clean.replace(/^.*publishers\/google\/models\//i, '');
+    clean = clean.replace(/^publishers\/[^\/]+\/models\//i, '');
+
+    // 5. Strip 'models/' prefix
+    clean = clean.replace(/^models\//i, '');
+
+    // 6. Take first token before spaces or brackets (e.g. "gemini-3-flash-preview (latest)" -> "gemini-3-flash-preview")
     clean = clean.split(' ')[0].split('(')[0].trim();
 
     if (provider === 'gemini') {
-        clean = clean.replace(/^models\//i, '').replace(/^google\//i, '');
+        clean = clean.replace(/^google\//i, '');
         if (clean === 'gemini-3-flash') {
             clean = 'gemini-3-flash-preview';
         }
     } else {
-        // OpenRouter
+        // OpenRouter requires provider/model format
         if (!clean.includes('/')) {
             clean = `google/${clean}`;
         }
