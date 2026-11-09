@@ -90,9 +90,18 @@ export async function fetchHAAreas(url: string, token: string): Promise<HAArea[]
 export async function fetchSmartHASync(url: string, token: string) {
     logger.info(`fetchSmartHASync: Requesting topology from ${url}`);
 
-    // ... [Original Template] ...
+    // Template with graceful backwards compatibility for floors (HA 2024.4+)
     const template = `
-    {% set output = namespace(areas=[], orphans=[]) %}
+    {% set output = namespace(floors=[], areas=[], orphans=[]) %}
+    {% if floors is defined %}
+      {% for f_id in floors() %}
+        {% set output.floors = output.floors + [{
+          "id": f_id,
+          "name": floor_name(f_id),
+          "areas": floor_areas(f_id)
+        }] %}
+      {% endfor %}
+    {% endif %}
     
     {% for area_id in areas() %}
       {% set output.areas = output.areas + [{
@@ -108,7 +117,7 @@ export async function fetchSmartHASync(url: string, token: string) {
       {% endif %}
     {% endfor %}
     
-    {{ { "areas": output.areas, "orphans": output.orphans } | to_json }}
+    {{ { "floors": output.floors, "areas": output.areas, "orphans": output.orphans } | to_json }}
     `
 
     const response = await fetch(getUrl('/api/template', url), {
@@ -126,7 +135,11 @@ export async function fetchSmartHASync(url: string, token: string) {
     const text = await response.text();
     logger.info(`fetchSmartHASync: Received topology (length: ${text.length})`);
     try {
-        return JSON.parse(text);
+        const parsed = JSON.parse(text);
+        try {
+            localStorage.setItem('ha_topology_latest', text);
+        } catch { }
+        return parsed;
     } catch (e) {
         logger.error(`fetchSmartHASync: JSON Parse Error`, { text, error: e });
         throw e;
@@ -369,4 +382,344 @@ export async function processHASync(
     }
 
     return tiles
+}
+
+// -------------------------------------------------------------
+// Extended Home Assistant API Connectors (History, Logbook, Camera, Todo, Calendar, Automation)
+// -------------------------------------------------------------
+
+/** Convert ArrayBuffer to Base64 safely without call stack overflow */
+function bufferToBase64(buffer: ArrayBuffer): string {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    const chunkSize = 8192;
+    for (let i = 0; i < len; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+        binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+    }
+    return btoa(binary);
+}
+
+/** 1. Fetch History and compute statistical summary */
+export async function fetchHAHistory(
+    apiUrl: string,
+    apiToken: string,
+    entityId: string,
+    hoursAgo: number = 24
+) {
+    const startTimeIso = new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString();
+    const url = `${getUrl(`/api/history/period/${encodeURIComponent(startTimeIso)}`, apiUrl)}?filter_entity_id=${encodeURIComponent(entityId)}&minimal_response=1`;
+    logger.info(`fetchHAHistory: Requesting history for ${entityId} (${hoursAgo}h ago)`);
+
+    const res = await fetch(url, { headers: getHeaders(apiToken) });
+    if (!res.ok) {
+        throw new Error(`HA History fetch failed with status ${res.status}`);
+    }
+
+    const data: any[][] = await res.json();
+    if (!data || data.length === 0 || !data[0] || data[0].length === 0) {
+        return { entity_id: entityId, message: 'Geen historische data gevonden voor deze periode.' };
+    }
+
+    const points = data[0];
+    const states = points.map(p => ({
+        state: p.state,
+        val: parseFloat(p.state),
+        time: p.last_changed || p.last_updated
+    }));
+
+    const validNums = states.filter(s => !isNaN(s.val));
+    const firstPoint = points[0];
+    const lastPoint = points[points.length - 1];
+
+    if (validNums.length > 0) {
+        const vals = validNums.map(v => v.val);
+        const minVal = Math.min(...vals);
+        const maxVal = Math.max(...vals);
+        const avgVal = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const startVal = validNums[0].val;
+        const endVal = validNums[validNums.length - 1].val;
+        const change = endVal - startVal;
+
+        return {
+            entity_id: entityId,
+            period_hours: hoursAgo,
+            start_time: firstPoint.last_changed,
+            end_time: lastPoint.last_changed,
+            total_data_points: points.length,
+            current_state: lastPoint.state,
+            start_state: firstPoint.state,
+            numeric_summary: {
+                start_value: Math.round(startVal * 100) / 100,
+                end_value: Math.round(endVal * 100) / 100,
+                delta_change: Math.round(change * 100) / 100,
+                min: Math.round(minVal * 100) / 100,
+                max: Math.round(maxVal * 100) / 100,
+                average: Math.round(avgVal * 100) / 100
+            },
+            unit: lastPoint.attributes?.unit_of_measurement || null
+        };
+    }
+
+    // Categorical / string states (e.g. on/off, open/closed)
+    const transitions = points.slice(-10).map(p => ({
+        state: p.state,
+        time: new Date(p.last_changed).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' })
+    }));
+
+    return {
+        entity_id: entityId,
+        period_hours: hoursAgo,
+        current_state: lastPoint.state,
+        transitions_count: points.length,
+        recent_changes: transitions
+    };
+}
+
+/** 2. Fetch Logbook Events */
+export async function fetchHALogbook(
+    apiUrl: string,
+    apiToken: string,
+    entityId?: string,
+    hoursAgo: number = 24
+) {
+    const startTimeIso = new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString();
+    let url = `${getUrl(`/api/logbook/${encodeURIComponent(startTimeIso)}`, apiUrl)}`;
+    if (entityId) {
+        url += `?entity=${encodeURIComponent(entityId)}`;
+    }
+    logger.info(`fetchHALogbook: Requesting logbook (${hoursAgo}h ago)${entityId ? ` for ${entityId}` : ''}`);
+
+    const res = await fetch(url, { headers: getHeaders(apiToken) });
+    if (!res.ok) {
+        throw new Error(`HA Logbook fetch failed with status ${res.status}`);
+    }
+
+    const events: any[] = await res.json();
+    if (!events || events.length === 0) {
+        return { message: 'Geen logboekgebeurtenissen gevonden voor deze periode.' };
+    }
+
+    const formatted = events.slice(-30).reverse().map(e => ({
+        time: new Date(e.when).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        date: new Date(e.when).toLocaleDateString('nl-BE'),
+        entity_id: e.entity_id,
+        name: e.name,
+        message: e.message,
+        state: e.state
+    }));
+
+    return {
+        total_events: events.length,
+        period_hours: hoursAgo,
+        events: formatted
+    };
+}
+
+/** 3. Fetch Camera Snapshot as Base64 JPEG */
+export async function fetchHACameraSnapshot(
+    apiUrl: string,
+    apiToken: string,
+    cameraEntityId: string
+): Promise<{ base64: string; dataUrl: string; entity_id: string }> {
+    const url = getUrl(`/api/camera_proxy/${encodeURIComponent(cameraEntityId)}`, apiUrl);
+    logger.info(`fetchHACameraSnapshot: Fetching snapshot from ${cameraEntityId}`);
+
+    const res = await fetch(url, { headers: getHeaders(apiToken) });
+    if (!res.ok) {
+        throw new Error(`Failed to fetch camera snapshot (${res.status})`);
+    }
+
+    const buffer = await res.arrayBuffer();
+    const base64 = bufferToBase64(buffer);
+    const dataUrl = `data:image/jpeg;base64,${base64}`;
+
+    return {
+        base64,
+        dataUrl,
+        entity_id: cameraEntityId
+    };
+}
+
+/** 4. Fetch Todo Lists & Items */
+export async function fetchHATodoItems(
+    apiUrl: string,
+    apiToken: string,
+    listEntityId?: string
+) {
+    logger.info(`fetchHATodoItems: Fetching todo items${listEntityId ? ` for ${listEntityId}` : ''}`);
+
+    // If specific list not provided, find available todo entities from /api/states
+    let targetListId = listEntityId;
+    if (!targetListId) {
+        const statesRes = await fetch(getUrl('/api/states', apiUrl), { headers: getHeaders(apiToken) });
+        if (statesRes.ok) {
+            const states: any[] = await statesRes.json();
+            const todoSensors = states.filter(s => s.entity_id.startsWith('todo.'));
+            if (todoSensors.length > 0) {
+                targetListId = todoSensors[0].entity_id;
+            }
+        }
+    }
+
+    if (!targetListId) {
+        return { message: 'Geen to-do lijst of boodschappenlijst gevonden in Home Assistant.' };
+    }
+
+    // Modern HA: POST to /api/services/todo/get_items with return_response
+    const serviceUrl = getUrl('/api/services/todo/get_items?return_response=1', apiUrl);
+    try {
+        const res = await fetch(serviceUrl, {
+            method: 'POST',
+            headers: getHeaders(apiToken),
+            body: JSON.stringify({ entity_id: targetListId })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const items = data[targetListId]?.items || [];
+            return {
+                list_entity_id: targetListId,
+                total_items: items.length,
+                pending_items: items.filter((i: any) => i.status === 'needs_action'),
+                completed_items: items.filter((i: any) => i.status === 'completed'),
+                raw_items: items
+            };
+        }
+    } catch (e: any) {
+        logger.warn('fetchHATodoItems via get_items service failed, falling back:', e);
+    }
+
+    // Fallback: read state attribute
+    const stateRes = await fetch(getUrl(`/api/states/${targetListId}`, apiUrl), { headers: getHeaders(apiToken) });
+    if (stateRes.ok) {
+        const stateObj = await stateRes.json();
+        return {
+            list_entity_id: targetListId,
+            friendly_name: stateObj.attributes?.friendly_name || targetListId,
+            item_count: stateObj.state,
+            attributes: stateObj.attributes
+        };
+    }
+
+    return { message: `Kon lijst ${targetListId} niet uitlezen.` };
+}
+
+/** 5. Manage Todo Items (Add, Update/Complete, Remove) */
+export async function manageHATodoItem(
+    apiUrl: string,
+    apiToken: string,
+    action: 'add' | 'update' | 'remove',
+    params: { listEntityId: string; item: string; status?: 'needs_action' | 'completed' }
+) {
+    const { listEntityId, item, status } = params;
+    let service = 'add_item';
+    let serviceData: any = { entity_id: listEntityId, item };
+
+    if (action === 'update') {
+        service = 'update_item';
+        serviceData = { entity_id: listEntityId, item, status: status || 'completed' };
+    } else if (action === 'remove') {
+        service = 'remove_item';
+        serviceData = { entity_id: listEntityId, item: [item] };
+    }
+
+    const { callHAService } = await import('./home-assistant');
+    await callHAService('todo', service, serviceData, apiUrl, apiToken);
+    return {
+        success: true,
+        action,
+        item,
+        list_entity_id: listEntityId,
+        message: `Item "${item}" ${action === 'add' ? 'toegevoegd aan' : action === 'update' ? 'bijgewerkt in' : 'verwijderd uit'} ${listEntityId}.`
+    };
+}
+
+/** 6. Fetch Calendar Events */
+export async function fetchHACalendarEvents(
+    apiUrl: string,
+    apiToken: string,
+    calendarEntityId?: string,
+    daysAhead: number = 7
+) {
+    logger.info(`fetchHACalendarEvents: Fetching calendar events (${daysAhead} days ahead)`);
+    let calId = calendarEntityId;
+
+    if (!calId) {
+        const calsRes = await fetch(getUrl('/api/calendars', apiUrl), { headers: getHeaders(apiToken) });
+        if (calsRes.ok) {
+            const cals: any[] = await calsRes.json();
+            if (cals && cals.length > 0) {
+                calId = cals[0].entity_id;
+            }
+        }
+    }
+
+    if (!calId) {
+        return { message: 'Geen actieve kalender gevonden in Home Assistant.' };
+    }
+
+    const startIso = new Date().toISOString();
+    const endIso = new Date(Date.now() + daysAhead * 24 * 3600 * 1000).toISOString();
+    const eventsUrl = `${getUrl(`/api/calendars/${encodeURIComponent(calId)}`, apiUrl)}?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`;
+
+    const res = await fetch(eventsUrl, { headers: getHeaders(apiToken) });
+    if (!res.ok) {
+        throw new Error(`Failed to fetch calendar events (${res.status})`);
+    }
+
+    const events: any[] = await res.json();
+    return {
+        calendar_entity_id: calId,
+        period_days: daysAhead,
+        total_events: events.length,
+        events: events.map(ev => ({
+            summary: ev.summary,
+            start: ev.start?.dateTime || ev.start?.date || ev.start,
+            end: ev.end?.dateTime || ev.end?.date || ev.end,
+            description: ev.description || null,
+            location: ev.location || null
+        }))
+    };
+}
+
+/** 7. Save and reload Home Assistant Automation */
+export async function saveHAAutomation(
+    apiUrl: string,
+    apiToken: string,
+    automationConfig: { id?: string; alias: string; description?: string; trigger: any[]; condition?: any[]; action: any[]; mode?: string }
+) {
+    const autoId = automationConfig.id || `butler_auto_${Date.now()}`;
+    const payload = {
+        ...automationConfig,
+        id: autoId
+    };
+
+    logger.info(`saveHAAutomation: Creating automation ${autoId} (${payload.alias})`);
+    const saveUrl = getUrl(`/api/config/automation/config/${encodeURIComponent(autoId)}`, apiUrl);
+    const res = await fetch(saveUrl, {
+        method: 'POST',
+        headers: getHeaders(apiToken),
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Opslaan van automatisering mislukt (${res.status}): ${err}`);
+    }
+
+    // Reload automations
+    try {
+        const { callHAService } = await import('./home-assistant');
+        await callHAService('automation', 'reload', {}, apiUrl, apiToken);
+    } catch (reloadErr) {
+        logger.warn('Automation reload warning:', reloadErr);
+    }
+
+    return {
+        success: true,
+        automation_id: autoId,
+        alias: payload.alias,
+        message: `Automatisering "${payload.alias}" succesvol opgeslagen en geactiveerd in Home Assistant!`
+    };
 }

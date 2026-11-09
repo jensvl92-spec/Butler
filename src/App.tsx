@@ -405,102 +405,80 @@ function App() {
     <div className="app-container" style={{ flexDirection: 'column' }}>
       {/* Setup Wizard (One-Click Install) */}
 
-      {/* Global Header (Restored) */}
-      <header className="app-header" style={{
-        display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', flexShrink: 0
-      }}>
-        {/* Top Row: Title */}
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
-          <div style={{ fontSize: '1.8rem' }}>👤</div>
-          <h1 style={{ fontSize: '1.5rem', margin: 0 }}>Butler</h1>
+      {/* Hypermodern Dynamic Island Header */}
+      <header className="dynamic-island-header">
+        {/* Brand Orb & Name */}
+        <div className="header-brand" onClick={() => setShowConnectionDropdown(!showConnectionDropdown)}>
+          <div className="brand-orb">⚡</div>
+          <h1 className="brand-title">Butler</h1>
         </div>
 
-        {/* Controls Row */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-          {/* 1. Connection Dropdown */}
-          <div className="connection-dropdown" style={{ position: 'relative' }}>
-            <button onClick={() => setShowConnectionDropdown(!showConnectionDropdown)} style={{
-              padding: '8px 12px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px',
-              display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)', minWidth: '140px', justifyContent: 'space-between'
+        {/* Center Connection Capsule */}
+        <div style={{ position: 'relative' }}>
+          <div className="connection-capsule" onClick={() => setShowConnectionDropdown(!showConnectionDropdown)}>
+            <div className={`status-dot ${activeConnection ? '' : 'disconnected'}`} />
+            <span className="name">{activeConnection ? activeConnection.name : 'Geen verbinding'}</span>
+            <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>▼</span>
+          </div>
+
+          {showConnectionDropdown && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
+              background: 'var(--bg-elevated)', border: 'var(--glass-border)', borderRadius: '16px',
+              zIndex: 1000, minWidth: '220px', overflow: 'hidden', boxShadow: 'var(--shadow-lg)',
+              backdropFilter: 'blur(24px)'
             }}>
-              {activeConnection ? activeConnection.name : 'Select Connection'}
-              <span>▼</span>
-            </button>
-            {showConnectionDropdown && (
-              <div style={{
-                position: 'absolute', top: '100%', left: 0, marginTop: '4px', background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)', borderRadius: '8px', zIndex: 100, width: '100%', overflow: 'hidden'
-              }}>
-                {connections.map(c => (
-                  <div key={c.id} onClick={() => { setActiveConnection(c); setShowConnectionDropdown(false) }}
-                    style={{
-                      padding: '8px 12px',
-                      cursor: 'pointer',
-                      borderBottom: '1px solid var(--border)',
-                      fontSize: '0.9rem',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}>
-                    <span>{c.name}</span>
-                    <button
-                      onClick={(e) => handleDeleteConnection(e, c.id)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        padding: '4px',
-                        borderRadius: '4px',
-                        fontSize: '1rem'
-                      }}
-                      title="Delete Connection"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                ))}
-                <div onClick={() => { setShowConnectionModal(true); setShowConnectionDropdown(false) }}
-                  style={{ padding: '8px 12px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', fontSize: '0.9rem', textAlign: 'center' }}>
-                  + Add Connection
-                </div>
+              <div style={{ padding: '10px 14px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: 'var(--glass-border)' }}>
+                Home Assistant Verbindingen
               </div>
-            )}
-          </div>
+              {connections.map(c => (
+                <div key={c.id} onClick={() => { setActiveConnection(c); setShowConnectionDropdown(false); }}
+                  style={{
+                    padding: '10px 14px', cursor: 'pointer', borderBottom: 'var(--glass-border)',
+                    fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    background: activeConnection?.id === c.id ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                    color: activeConnection?.id === c.id ? '#a5b4fc' : 'var(--text-primary)'
+                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div className="status-dot" />
+                    <span>{c.name}</span>
+                  </div>
+                  <button onClick={(e) => handleDeleteConnection(e, c.id)}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', fontSize: '0.9rem' }}
+                    title="Verwijder">
+                    🗑️
+                  </button>
+                </div>
+              ))}
+              <div onClick={() => { setShowConnectionModal(true); setShowConnectionDropdown(false); }}
+                style={{ padding: '10px 14px', cursor: 'pointer', background: 'rgba(255,255,255,0.03)', fontSize: '0.85rem', color: 'var(--accent-light)', textAlign: 'center', fontWeight: 600 }}>
+                + Nieuwe Verbinding Toevoegen
+              </div>
+            </div>
+          )}
+        </div>
 
-          {/* 2. Controls Group (Sync, Theme, Logout) */}
-          <div style={{ display: 'flex', gap: '8px' }}>
-            {activeConnection && (
-              <button onClick={() => dashboardRef.current?.importLayoutFromHA()} title="Sync" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', width: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                ↻
-              </button>
-            )}
-
-            {/* Theme Dropdown (Compact) */}
-            <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{
-              background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0 8px', outline: 'none'
-            }}>
-              <option value="dark">Dark</option>
-              <option value="white">White</option>
-              <option value="light">Light</option>
-              <option value="pastel-mint">Mint</option>
-              <option value="pastel-rose">Rose</option>
-            </select>
-
-            {/* Settings Button */}
-            <button onClick={() => setShowSettings(true)} title="Settings" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', width: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              ⚙️
+        {/* Right Header Actions */}
+        <div className="header-actions">
+          {activeConnection && (
+            <button className="header-icon-btn" onClick={() => dashboardRef.current?.importLayoutFromHA()} title="Synchroniseer Home Assistant Layout">
+              ↻
             </button>
+          )}
 
-            {/* Graphs Button */}
-            <button onClick={() => setShowGraphs(true)} title="Graphs" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', width: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              📊
-            </button>
+          <button className="header-icon-btn" onClick={() => setShowGraphs(true)} title="Grafieken">
+            📊
+          </button>
 
-            <button className="logout-btn" onClick={() => activeConnection && setActiveConnection(null)}>
-              Logout
+          <button className="header-icon-btn" onClick={() => setShowSettings(true)} title="Instellingen">
+            ⚙️
+          </button>
+
+          {activeConnection && (
+            <button className="header-icon-btn" onClick={() => setActiveConnection(null)} title="Ontkoppelen" style={{ color: '#ef4444' }}>
+              ✕
             </button>
-          </div>
+          )}
         </div>
       </header>
 

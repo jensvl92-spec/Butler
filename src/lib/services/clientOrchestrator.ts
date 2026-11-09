@@ -14,6 +14,14 @@
 import { logger } from '../../utils/logger';
 import { Action, HADevice, LLMResponse } from '../../types';
 import { callHAService } from '../../utils/home-assistant';
+import {
+    fetchHAHistory,
+    fetchHALogbook,
+    fetchHACameraSnapshot,
+    fetchHATodoItems,
+    manageHATodoItem,
+    fetchHACalendarEvents
+} from '../../utils/ha-api';
 import { supabase } from '../supabase';
 
 export type AIProvider = 'gemini' | 'openrouter';
@@ -260,6 +268,155 @@ const ORCHESTRATOR_TOOLS = [
                     }
                 },
                 required: ['entity_id_or_search']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_ha_history_and_statistics',
+            description: 'Haalt historische data en statistische berekeningen op van een Home Assistant sensor of teller (bv. stroomopbrengst zonnepanelen over 24u/7d, minimum/maximum temperatuur vannacht, kWh verbruik warmtepomp). Berekent automatisch het verschil (delta) en gemiddeldes.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    entity_id: {
+                        type: 'string',
+                        description: 'Exacte entity_id van de sensor (bv. sensor.solar_production_total, sensor.woonkamer_temperatuur).'
+                    },
+                    hours_ago: {
+                        type: 'number',
+                        description: 'Hoeveel uur terugkijken (bv. 24 voor afgelopen etmaal, 168 voor afgelopen week, 8 voor afgelopen nacht). Standaard 24.'
+                    }
+                },
+                required: ['entity_id']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_ha_logbook',
+            description: 'Haalt het Home Assistant logboek op om te zien wanneer gebeurtenissen hebben plaatsgevonden en wie/wat ze heeft getriggerd (bv. "Hoe laat ging de voordeur open?", "Wanneer is het alarm ingeschakeld?", "Wie deed het licht aan?").',
+            parameters: {
+                type: 'object',
+                properties: {
+                    entity_id: {
+                        type: 'string',
+                        description: 'Optionele entity_id om specifiek op te filteren (bv. binary_sensor.voordeur_contact).'
+                    },
+                    hours_ago: {
+                        type: 'number',
+                        description: 'Aantal uren terug in het logboek (standaard 24).'
+                    }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'capture_camera_snapshot',
+            description: 'Haalt een actuele live snapshot op van een beveiligingscamera of deurbel in Home Assistant en laat deze visueel analyseren door de AI (bv. "Wie staat er aan de deur?", "Ligt er een pakketje op de oprit?", "Staat de garagepoort open?").',
+            parameters: {
+                type: 'object',
+                properties: {
+                    camera_entity_id: {
+                        type: 'string',
+                        description: 'Exacte camera entity_id (bv. camera.voordeur, camera.oprit, camera.tuin).'
+                    },
+                    question: {
+                        type: 'string',
+                        description: 'De specifieke visuele vraag van de gebruiker (bv. "Staat er iemand aan de deur?", "Is de poort dicht?").'
+                    }
+                },
+                required: ['camera_entity_id', 'question']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'manage_todo_list',
+            description: 'Beheert to-do lijsten en boodschappenlijstjes in Home Assistant (items ophalen, nieuw item toevoegen, afvinken als voltooid, of verwijderen).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['list', 'add', 'complete', 'remove'],
+                        description: 'De actie: "list" om items te bekijken, "add" om toe te voegen, "complete" om af te vinken, "remove" om te wissen.'
+                    },
+                    item_summary: {
+                        type: 'string',
+                        description: 'De tekst van het item (bv. "Melk", "Brood", "Gras maaien"). Verplicht bij add, complete of remove.'
+                    },
+                    list_entity_id: {
+                        type: 'string',
+                        description: 'Optionele entity_id van de lijst (bv. todo.boodschappen, todo.shopping_list). Indien leeg kiest Butler automatisch de actieve lijst.'
+                    }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_calendar_events',
+            description: 'Haalt agenda-afspraken en kalender-evenementen op uit Home Assistant kalenders (bv. afvalkalender, ophaaldagen voor restafval/PMD/papier, gezinsagenda, of persoonlijke afspraken).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    calendar_entity_id: {
+                        type: 'string',
+                        description: 'Optionele entity_id van de kalender (bv. calendar.afvalkalender, calendar.gezin). Indien leeg doorzoekt Butler alle kalenders.'
+                    },
+                    days_ahead: {
+                        type: 'number',
+                        description: 'Aantal dagen vooruitkijken (standaard 7 dagen).'
+                    }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'create_home_assistant_automation',
+            description: 'Ontwerpt een complete Home Assistant automatisering en presenteert deze als interactieve kaart aan de gebruiker met een directe "Installeer in Home Assistant" knop.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    alias: {
+                        type: 'string',
+                        description: 'Duidelijke en beschrijvende titel van de automatisering (bv. "Automatisch zonwering sluiten bij felle zon").'
+                    },
+                    description: {
+                        type: 'string',
+                        description: 'Korte toelichting van wat de automatisering doet.'
+                    },
+                    trigger: {
+                        type: 'array',
+                        items: { type: 'object' },
+                        description: 'Lijst van triggers in Home Assistant formaat (bv. platform: numeric_state, entity_id: sensor.temperatuur, above: 24).'
+                    },
+                    condition: {
+                        type: 'array',
+                        items: { type: 'object' },
+                        description: 'Optionele lijst van voorwaarden in Home Assistant formaat.'
+                    },
+                    action: {
+                        type: 'array',
+                        items: { type: 'object' },
+                        description: 'Lijst van acties in Home Assistant formaat (bv. service: cover.close_cover, target: { entity_id: cover.living }).'
+                    },
+                    mode: {
+                        type: 'string',
+                        enum: ['single', 'restart', 'queued', 'parallel'],
+                        description: 'Uitvoeringsmodus (standaard single).'
+                    }
+                },
+                required: ['alias', 'trigger', 'action']
             }
         }
     }
@@ -842,6 +999,123 @@ async function executeGetEntityStateTool(
 }
 
 // -------------------------------------------------------------
+// 7. Extended Tool Execution Handlers (History, Logbook, Camera, Todo, Calendar, Automation)
+// -------------------------------------------------------------
+async function executeHistoryTool(
+    args: any,
+    options: { haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { entity_id, hours_ago = 24 } = args;
+    if (!options.haUrl || !options.haToken) {
+        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor geschiedenis.' };
+    }
+    try {
+        return await fetchHAHistory(options.haUrl, options.haToken, entity_id, hours_ago);
+    } catch (e: any) {
+        return { error: `Geschiedenis ophalen mislukt voor ${entity_id}: ${e.message}` };
+    }
+}
+
+async function executeLogbookTool(
+    args: any,
+    options: { haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { entity_id, hours_ago = 24 } = args;
+    if (!options.haUrl || !options.haToken) {
+        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor het logboek.' };
+    }
+    try {
+        return await fetchHALogbook(options.haUrl, options.haToken, entity_id, hours_ago);
+    } catch (e: any) {
+        return { error: `Logboek ophalen mislukt: ${e.message}` };
+    }
+}
+
+async function executeCameraSnapshotTool(
+    args: any,
+    options: { haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { camera_entity_id, question } = args;
+    if (!options.haUrl || !options.haToken) {
+        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor camerabeelden.' };
+    }
+    try {
+        const snap = await fetchHACameraSnapshot(options.haUrl, options.haToken, camera_entity_id);
+        return {
+            camera_entity_id,
+            question,
+            has_image: true,
+            snapshot_data_url: snap.dataUrl,
+            status: 'Camerabeeld succesvol opgehaald. Beeld is klaar voor weergave en analyse.'
+        };
+    } catch (e: any) {
+        return { error: `Camerabeeld ophalen mislukt van ${camera_entity_id}: ${e.message}` };
+    }
+}
+
+async function executeTodoListTool(
+    args: any,
+    options: { haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { action, item_summary, list_entity_id } = args;
+    if (!options.haUrl || !options.haToken) {
+        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor to-do lijsten.' };
+    }
+    try {
+        if (action === 'list') {
+            return await fetchHATodoItems(options.haUrl, options.haToken, list_entity_id);
+        } else {
+            if (!item_summary) {
+                return { error: `Item tekst ontbreekt voor actie "${action}".` };
+            }
+            let targetList = list_entity_id;
+            if (!targetList) {
+                const listInfo = await fetchHATodoItems(options.haUrl, options.haToken);
+                targetList = (listInfo as any)?.list_entity_id || 'todo.shopping_list';
+            }
+            return await manageHATodoItem(options.haUrl, options.haToken, action, {
+                listEntityId: targetList,
+                item: item_summary,
+                status: action === 'complete' ? 'completed' : 'needs_action'
+            });
+        }
+    } catch (e: any) {
+        return { error: `To-do actie "${action}" mislukt: ${e.message}` };
+    }
+}
+
+async function executeCalendarEventsTool(
+    args: any,
+    options: { haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { calendar_entity_id, days_ahead = 7 } = args;
+    if (!options.haUrl || !options.haToken) {
+        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor kalenders.' };
+    }
+    try {
+        return await fetchHACalendarEvents(options.haUrl, options.haToken, calendar_entity_id, days_ahead);
+    } catch (e: any) {
+        return { error: `Kalender-evenementen ophalen mislukt: ${e.message}` };
+    }
+}
+
+function executeCreateAutomationTool(args: any): any {
+    const { alias, description, trigger, condition, action, mode = 'single' } = args;
+    const autoId = `butler_${Date.now()}`;
+    return {
+        id: autoId,
+        alias,
+        description: description || `Aangemaakt door Butler op ${new Date().toLocaleString('nl-BE')}`,
+        trigger: Array.isArray(trigger) ? trigger : [trigger],
+        condition: condition ? (Array.isArray(condition) ? condition : [condition]) : [],
+        action: Array.isArray(action) ? action : [action],
+        mode,
+        ready_for_user_review: true,
+        message: `Automatisering "${alias}" is ontworpen en klaargezet voor goedkeuring.`
+    };
+}
+
+// -------------------------------------------------------------
 // 8. Dynamic System Prompt Builder
 // -------------------------------------------------------------
 function buildSystemPrompt(options: ClientOrchestratorOptions): string {
@@ -849,6 +1123,49 @@ function buildSystemPrompt(options: ClientOrchestratorOptions): string {
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    // Format active entities compactly, grouped by Floor & Room if topology available
+    let topologyText = '';
+    try {
+        const rawTopo = localStorage.getItem('ha_topology_latest');
+        if (rawTopo) {
+            const topo = JSON.parse(rawTopo);
+            const deviceMap = new Map(devices.map(d => [d.entity_id, d]));
+            const sections: string[] = [];
+
+            if (Array.isArray(topo.areas)) {
+                if (Array.isArray(topo.floors) && topo.floors.length > 0) {
+                    topo.floors.forEach((f: any) => {
+                        const floorAreas = (f.areas || []).map((areaId: string) => topo.areas.find((a: any) => a.id === areaId)).filter(Boolean);
+                        if (floorAreas.length > 0) {
+                            const areaLines: string[] = [];
+                            floorAreas.forEach((ar: any) => {
+                                const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
+                                if (areaDevs.length > 0) {
+                                    const devList = areaDevs.slice(0, 8).map((d: any) => `${d.entity_id} (${d.attributes?.friendly_name || d.entity_id}): ${d.state}`).join(', ');
+                                    areaLines.push(`    * ${ar.name}: ${devList}`);
+                                }
+                            });
+                            if (areaLines.length > 0) {
+                                sections.push(`  - Verdieping '${f.name}':\n${areaLines.join('\n')}`);
+                            }
+                        }
+                    });
+                } else {
+                    topo.areas.forEach((ar: any) => {
+                        const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
+                        if (areaDevs.length > 0) {
+                            const devList = areaDevs.slice(0, 8).map((d: any) => `${d.entity_id} (${d.attributes?.friendly_name || d.entity_id}): ${d.state}`).join(', ');
+                            sections.push(`  - Ruimte '${ar.name}': ${devList}`);
+                        }
+                    });
+                }
+            }
+            if (sections.length > 0) {
+                topologyText = `\n### HUISINDELING (VERDIEPINGEN & RUIMTES):\n${sections.join('\n')}\n`;
+            }
+        }
+    } catch { }
 
     // Prioritize energy, price, climate, solar, battery and active entities in context
     const prioritizedDevices = [...devices].sort((a, b) => {
@@ -877,7 +1194,7 @@ Je draait direct op het apparaat van de gebruiker met state-of-the-art ReAct too
 - Datum & Tijd: ${dateStr}, ${timeStr}
 - Huidige Locatie: ${locationContext}
 - Taal van de gebruiker: ${language} (Antwoord ALTIJD in het Nederlands, behalve als de gebruiker expliciet in een andere taal spreekt)
-
+${topologyText}
 ### DYNAMISCH CORE GEHEUGEN (Letta / Memori):
 ${storedMems}
 
@@ -887,12 +1204,16 @@ ${relevantDevices || 'Geen actieve apparaten aangetroffen.'}
 ### STRIKTE REGELS VOOR HET GEBRUIK VAN TOOLS:
 1. **NOOIT GISSEN NAAR WEER OF DATA**: Als de gebruiker vraagt naar het weer, regen, temperatuur, windsnelheid, windstoten of dauwpunt, roep dan **ALTIJD** de tool \`get_weather\` aan.
 2. **DAUWPUNT & WINDSNELHEID**: Als \`get_weather\` terugkomt, geef een concreet, natuurlijk en accuraat antwoord. Vermeld bij vragen over wind expliciet de windsnelheid en eventuele windstoten in km/h. Vermeld bij vragen over luchtvochtigheid of comfort ook het dauwpunt.
-3. **STROOM- EN ENERGIEPRIJZEN / SPOTPRIJZEN**: Als de gebruiker vraagt naar de stroomprijs, energieprijzen, 24u-spotprijzen, dynamische tarieven of de goedkoopste uren om apparaten aan te zetten, roep dan **ALTIJD** \`get_energy_prices\` aan. Geef de huidige prijs en vermeld de goedkoopste uren.
-4. **SENSOR- OF APPARAATSTATUS**: Als de gebruiker vraagt naar de actuele status, sensorwaarde of attributen van een apparaat (bv. zonnepanelen, batterij, warmtepomp, meter), gebruik \`get_entity_state\`.
-5. **SMART HOME BEDIENING**: Gebruik de tool \`control_home_device\` om apparaten aan te sturen met het juiste domein, service en entity_id.
-6. **GEHEUGEN**: Als de gebruiker een voorkeur deelt (bv. "Onthoud dat ik thee drink zonder suiker" of "Mijn kantoor is de studeerkamer"), gebruik \`manage_core_memory(action='save', content=...)\`.
-7. **NAVIGATIE**: Gebruik \`get_navigation_eta\` voor afstanden, reistijden en routes.
-8. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
+3. **STROOM- EN SPOTPRIJZEN**: Vraagt de gebruiker naar stroomprijs, 24u-spotprijzen, dynamische tarieven of goedkope uren? Roep **ALTIJD** \`get_energy_prices\` aan.
+4. **HISTORIEK & STATISTIEKEN (ZONNEPANELEN, VERBRUIK, VERLEDEN)**: Als de gebruiker vraagt hoeveel stroom er gisteren/vorige week is opgewekt/verbruikt of wat de minimum/maximum temperatuur was, roep **ALTIJD** \`get_ha_history_and_statistics\` aan.
+5. **LOGBOEK & GEBEURTENISSEN**: Als de gebruiker vraagt wanneer iets gebeurde of wie iets deed (bv. "Hoe laat ging de deur open?", "Wanneer ging het alarm aan?"), gebruik \`get_ha_logbook\`.
+6. **CAMERABEELDEN & DEURBEL**: Vraagt de gebruiker wie er aan de deur staat, of er een pakketje ligt, of wat er op camera te zien is? Roep **ALTIJD** \`capture_camera_snapshot\` aan.
+7. **TO-DO & BOODSCHAPPEN**: Voor boodschappen en takenlijsten (bekijken, toevoegen, afvinken), gebruik \`manage_todo_list\`.
+8. **KALENDER & AFVALKALENDER**: Voor vragen over ophaaldagen van afval of afspraken, gebruik \`get_calendar_events\`.
+9. **AUTOMATISERINGEN ONTWERPEN**: Als de gebruiker een automatisering wil aanmaken, gebruik \`create_home_assistant_automation\`. Butler presenteert dit als interactieve kaart in de UI.
+10. **SENSORSTATUS & APPARAATBEDIENING**: Gebruik \`get_entity_state\` voor losse sensoren en \`control_home_device\` om apparaten aan te sturen.
+11. **VERDIEPINGEN & RUIMTES**: Gebruik de huisindeling hierboven om commando's als "alles beneden uit" of "boven lichten aandoen" direct te mappen naar de bijbehorende entity_id's.
+12. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
 }
 
 // -------------------------------------------------------------
@@ -1050,6 +1371,81 @@ export async function runClientReActOrchestrator(
                         service: 'navigation.eta',
                         data: toolResult,
                         result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'get_ha_history_and_statistics') {
+                    toolResult = await executeHistoryTool(fnArgs, {
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'history',
+                        entity_id: fnArgs.entity_id,
+                        service: 'history.period',
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'get_ha_logbook') {
+                    toolResult = await executeLogbookTool(fnArgs, {
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'logbook',
+                        entity_id: fnArgs.entity_id || 'logbook',
+                        service: 'logbook.get_events',
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'capture_camera_snapshot') {
+                    toolResult = await executeCameraSnapshotTool(fnArgs, {
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'camera',
+                        entity_id: fnArgs.camera_entity_id,
+                        service: 'camera.snapshot',
+                        data: toolResult,
+                        result: toolResult?.has_image ? 'success' : 'error',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'manage_todo_list') {
+                    toolResult = await executeTodoListTool(fnArgs, {
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'todo',
+                        entity_id: fnArgs.list_entity_id || 'todo.shopping_list',
+                        service: `todo.${fnArgs.action}`,
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'get_calendar_events') {
+                    toolResult = await executeCalendarEventsTool(fnArgs, {
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'calendar',
+                        entity_id: fnArgs.calendar_entity_id || 'calendar.default',
+                        service: 'calendar.get_events',
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'create_home_assistant_automation') {
+                    toolResult = executeCreateAutomationTool(fnArgs);
+                    actionsTaken.push({
+                        type: 'automation',
+                        entity_id: toolResult.id,
+                        service: 'automation.create',
+                        data: toolResult,
+                        result: 'pending',
                         executedLocally: true
                     });
                 } else {

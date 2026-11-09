@@ -206,7 +206,7 @@ export function useAIChatLogic() {
             if (
                 action.result === 'success' ||
                 action.executedLocally ||
-                ['weather', 'navigation', 'energy', 'info', 'query'].includes(action.type) ||
+                ['weather', 'navigation', 'energy', 'info', 'query', 'history', 'logbook', 'camera', 'todo', 'calendar', 'automation'].includes(action.type) ||
                 (typeof action.entity_id === 'string' && (
                     action.entity_id.startsWith('weather.open_meteo') ||
                     action.entity_id.startsWith('device.navigation') ||
