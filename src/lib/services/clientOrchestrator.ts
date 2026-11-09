@@ -257,6 +257,30 @@ const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
+            name: 'search_home_entities',
+            description: 'Zoekt gericht naar specifieke apparaten, sensoren of entiteiten in Home Assistant op basis van kamernaam, apparaattype of zoekterm. Gebruik dit als een gewenst apparaat niet in de initiële selectie staat of bij vragen zoals "welke lampen staan er in de hal?".',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Trefwoord of apparaatnaam (bv. "leeslamp", "ventilator", "warmtepomp", "deur").'
+                    },
+                    room: {
+                        type: 'string',
+                        description: 'Optionele kamernaam (bv. "woonkamer", "slaapkamer", "keuken", "gang", "tuin").'
+                    },
+                    domain: {
+                        type: 'string',
+                        description: 'Optioneel Home Assistant domein (bv. "light", "switch", "climate", "cover", "sensor", "media_player").'
+                    }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'get_entity_state',
             description: 'Leest de actuele status en alle attributen uit van een specifieke Home Assistant sensor, schakelaar of apparaat, of zoekt entiteiten op trefwoord (bv. "prijs", "stroom", "nordpool", "solar", "warmtepomp", "batterij", "temperatuur").',
             parameters: {
@@ -1115,70 +1139,210 @@ function executeCreateAutomationTool(args: any): any {
     };
 }
 
-// -------------------------------------------------------------
-// 8. Dynamic System Prompt Builder
-// -------------------------------------------------------------
-function buildSystemPrompt(options: ClientOrchestratorOptions): string {
-    const { language, location, devices } = options;
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+/** SOTA On-Demand Search Tool for Home Assistant Entities */
+async function executeSearchEntitiesTool(
+    args: any,
+    options: { devices: HADevice[]; haUrl?: string; haToken?: string }
+): Promise<any> {
+    const { query = '', room = '', domain = '' } = args;
+    const qLower = query.toLowerCase();
+    const rLower = room.toLowerCase();
+    const dLower = domain.toLowerCase();
 
-    // Format active entities compactly, grouped by Floor & Room if topology available
-    let topologyText = '';
+    let pool = options.devices;
+    if (pool.length === 0 && options.haUrl && options.haToken) {
+        try {
+            const { getHAStates } = await import('../../utils/home-assistant');
+            pool = await getHAStates(options.haUrl, options.haToken);
+        } catch { }
+    }
+
+    const matches = pool.filter(d => {
+        const eid = d.entity_id.toLowerCase();
+        const fname = (d.attributes?.friendly_name || '').toLowerCase();
+        const dDomain = eid.split('.')[0];
+
+        if (dLower && dDomain !== dLower) return false;
+        if (rLower && !eid.includes(rLower) && !fname.includes(rLower)) return false;
+        if (qLower && !eid.includes(qLower) && !fname.includes(qLower)) return false;
+
+        return true;
+    }).slice(0, 10);
+
+    if (matches.length > 0) {
+        return {
+            found_count: matches.length,
+            entities: matches.map(m => ({
+                entity_id: m.entity_id,
+                friendly_name: m.attributes?.friendly_name || m.entity_id,
+                state: m.state,
+                unit: m.attributes?.unit_of_measurement || null
+            }))
+        };
+    }
+
+    return { message: `Geen apparaten gevonden voor zoekcriteria (zoekterm: "${query}", ruimte: "${room}", domein: "${domain}").` };
+}
+
+// -------------------------------------------------------------
+// 8. SOTA Semantic & Spatial Context Pre-Filtering
+// -------------------------------------------------------------
+interface EntityFilterResult {
+    topologySummary: string;
+    relevantEntitiesSection: string;
+    matchedCount: number;
+}
+
+export function filterContextEntities(
+    userMessage: string,
+    devices: HADevice[]
+): EntityFilterResult {
+    const rawTopo = typeof localStorage !== 'undefined' ? localStorage.getItem('ha_topology_latest') : null;
+    let topo: any = null;
     try {
-        const rawTopo = localStorage.getItem('ha_topology_latest');
-        if (rawTopo) {
-            const topo = JSON.parse(rawTopo);
-            const deviceMap = new Map(devices.map(d => [d.entity_id, d]));
-            const sections: string[] = [];
-
-            if (Array.isArray(topo.areas)) {
-                if (Array.isArray(topo.floors) && topo.floors.length > 0) {
-                    topo.floors.forEach((f: any) => {
-                        const floorAreas = (f.areas || []).map((areaId: string) => topo.areas.find((a: any) => a.id === areaId)).filter(Boolean);
-                        if (floorAreas.length > 0) {
-                            const areaLines: string[] = [];
-                            floorAreas.forEach((ar: any) => {
-                                const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
-                                if (areaDevs.length > 0) {
-                                    const devList = areaDevs.slice(0, 8).map((d: any) => `${d.entity_id} (${d.attributes?.friendly_name || d.entity_id}): ${d.state}`).join(', ');
-                                    areaLines.push(`    * ${ar.name}: ${devList}`);
-                                }
-                            });
-                            if (areaLines.length > 0) {
-                                sections.push(`  - Verdieping '${f.name}':\n${areaLines.join('\n')}`);
-                            }
-                        }
-                    });
-                } else {
-                    topo.areas.forEach((ar: any) => {
-                        const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
-                        if (areaDevs.length > 0) {
-                            const devList = areaDevs.slice(0, 8).map((d: any) => `${d.entity_id} (${d.attributes?.friendly_name || d.entity_id}): ${d.state}`).join(', ');
-                            sections.push(`  - Ruimte '${ar.name}': ${devList}`);
-                        }
-                    });
-                }
-            }
-            if (sections.length > 0) {
-                topologyText = `\n### HUISINDELING (VERDIEPINGEN & RUIMTES):\n${sections.join('\n')}\n`;
-            }
-        }
+        if (rawTopo) topo = JSON.parse(rawTopo);
     } catch { }
 
-    // Prioritize energy, price, climate, solar, battery and active entities in context
-    const prioritizedDevices = [...devices].sort((a, b) => {
-        const aScore = /price|prijs|stroom|nordpool|entsoe|epex|energy|solar|power|battery|climate/i.test(a.entity_id) ? 2 : 1;
-        const bScore = /price|prijs|stroom|nordpool|entsoe|epex|energy|solar|power|battery|climate/i.test(b.entity_id) ? 2 : 1;
-        return bScore - aScore;
+    const deviceMap = new Map(devices.map(d => [d.entity_id, d]));
+    const roomToDevices = new Map<string, HADevice[]>();
+
+    // 1. Build a super-compact Tier 1 House Structure Map (Summary only, ZERO device bloat!)
+    let topologySummary = '';
+    if (topo && Array.isArray(topo.areas)) {
+        const floorLines: string[] = [];
+        if (Array.isArray(topo.floors) && topo.floors.length > 0) {
+            topo.floors.forEach((f: any) => {
+                const floorAreas = (f.areas || []).map((areaId: string) => topo.areas.find((a: any) => a.id === areaId)).filter(Boolean);
+                if (floorAreas.length > 0) {
+                    const areaSummary = floorAreas.map((ar: any) => {
+                        const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
+                        roomToDevices.set(ar.name.toLowerCase(), areaDevs);
+                        roomToDevices.set(ar.id.toLowerCase(), areaDevs);
+                        return `${ar.name} (${areaDevs.length} app)`;
+                    }).join(', ');
+                    floorLines.push(`  - Verdieping '${f.name}': ${areaSummary}`);
+                }
+            });
+        } else {
+            const areaSummary = topo.areas.map((ar: any) => {
+                const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
+                roomToDevices.set(ar.name.toLowerCase(), areaDevs);
+                roomToDevices.set(ar.id.toLowerCase(), areaDevs);
+                return `${ar.name} (${areaDevs.length} app)`;
+            }).join(', ');
+            floorLines.push(`  - Ruimtes: ${areaSummary}`);
+        }
+        if (floorLines.length > 0) {
+            topologySummary = `### HUISSTRUCTUUR (OVERZICHT RUIMTES & VERDIEPINGEN):\n${floorLines.join('\n')}\n`;
+        }
+    }
+
+    const lowerMsg = userMessage.toLowerCase();
+
+    // 2. Intent Detection: Pure external questions require ZERO devices in prompt!
+    const isPureWeather = /weer|regen|temperatuur buiten|wind|storm|zonnig|onweer|dauwpunt|paraplu/i.test(lowerMsg) &&
+        !/woon|living|slaap|keuken|bad|lamp|licht|thermostaat|verwarming|rolluik|stekker/i.test(lowerMsg);
+
+    const isPureNavigation = /hoe lang rijden|reistijd|route naar|afstand tot|navigeer/i.test(lowerMsg);
+    const isPureMemory = /onthoud dat|mijn voorkeur is|vergeet dat/i.test(lowerMsg);
+    const isPureTodo = /boodschappen|to-do|takenlijst|zet .* op .*lijst|vink .* af/i.test(lowerMsg) && !/lamp|licht|verwarming/i.test(lowerMsg);
+    const isPureCalendar = /afvalkalender|restafval|pmd|papier|wanneer.*opgehaald|agenda vandaag|afspraken/i.test(lowerMsg);
+    const isPureSpotPrices = /stroomprijs|energieprijs|spotprijs|dynamisch tarief|dynamische tarieven|uurprijs/i.test(lowerMsg) &&
+        !/wasmachine|droogkast|laden|auto|schakel|aan|uit/i.test(lowerMsg);
+
+    if (isPureWeather || isPureNavigation || isPureMemory || isPureTodo || isPureCalendar || isPureSpotPrices) {
+        return {
+            topologySummary,
+            relevantEntitiesSection: 'Geen apparaten nodig voor deze vraag.',
+            matchedCount: 0
+        };
+    }
+
+    // 3. Smart Home Query: Semantic Pre-Filtering
+    const matchedRooms: string[] = [];
+    roomToDevices.forEach((_, roomKey) => {
+        if (lowerMsg.includes(roomKey)) {
+            matchedRooms.push(roomKey);
+        }
     });
 
-    const relevantDevices = prioritizedDevices.slice(0, 120).map(d => {
+    const mentionsBoven = /boven|verdieping|1e verdieping|slaapkamer|badkamer/i.test(lowerMsg);
+    const mentionsBeneden = /beneden|gelijkvloers|keuken|living|woonkamer|salon/i.test(lowerMsg);
+
+    const domains: string[] = [];
+    if (/licht|lamp|spot|spots|verlichting|peertje|schemerlamp/i.test(lowerMsg)) domains.push('light');
+    if (/thermostaat|verwarm|temperatuur|graden|airco|koel|hvac/i.test(lowerMsg)) domains.push('climate');
+    if (/schakelaar|stopcontact|stekker|koffie|switch/i.test(lowerMsg)) domains.push('switch');
+    if (/rolluik|gordijn|zonwering|screen|blind|shutter|poort|garage/i.test(lowerMsg)) domains.push('cover');
+    if (/muziek|radio|speaker|box|tv|volume|spelen|sonos|media/i.test(lowerMsg)) domains.push('media_player');
+    if (/slot|deur|grendel|lock/i.test(lowerMsg)) domains.push('lock');
+    if (/stofzuiger|stofzuig|vacuum/i.test(lowerMsg)) domains.push('vacuum');
+    if (/batterij|accu|solar|zonnepaneel|zonnepanelen|opwek|verbruik|kwh/i.test(lowerMsg)) domains.push('sensor');
+
+    const scored = devices.map(d => {
+        let score = 0;
+        const eid = d.entity_id.toLowerCase();
+        const fname = (d.attributes?.friendly_name || '').toLowerCase();
+        const domain = eid.split('.')[0];
+
+        if (domains.includes(domain)) score += 8;
+
+        for (const room of matchedRooms) {
+            if (eid.includes(room) || fname.includes(room)) score += 15;
+            const devsInRoom = roomToDevices.get(room) || [];
+            if (devsInRoom.some(rDev => rDev.entity_id === d.entity_id)) score += 15;
+        }
+
+        if (mentionsBoven && (/slaap|bad|overloop|zolder|boven/i.test(eid) || /slaap|bad|overloop|zolder|boven/i.test(fname))) score += 10;
+        if (mentionsBeneden && (/woon|living|keuken|hal|gang|garage|tuin|beneden/i.test(eid) || /woon|living|keuken|hal|gang|garage|tuin|beneden/i.test(fname))) score += 10;
+
+        const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
+        for (const w of words) {
+            if (fname.includes(w) || eid.includes(w)) score += 12;
+        }
+
+        if (/wat staat.*aan|welke.*aan|wat brandt/i.test(lowerMsg) && d.state === 'on') score += 10;
+
+        return { device: d, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    let candidates = scored.filter(s => s.score > 0);
+
+    if (candidates.length === 0) {
+        if (/alles.*uit|alles.*aan/i.test(lowerMsg)) {
+            candidates = scored.filter(s => ['light', 'switch'].includes(s.device.entity_id.split('.')[0]));
+        } else {
+            candidates = scored.filter(s => s.device.state === 'on' || /climate|energy|solar/i.test(s.device.entity_id));
+        }
+    }
+
+    const selected = candidates.slice(0, 15).map(s => s.device);
+
+    const relevantDevicesText = selected.map(d => {
         const name = d.attributes?.friendly_name || d.entity_id;
         const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
         return `${d.entity_id} (${name}): ${d.state}${uom}`;
     }).join('\n');
+
+    return {
+        topologySummary,
+        relevantEntitiesSection: relevantDevicesText || 'Geen actieve apparaten direct gerelateerd aan de vraag. Gebruik search_home_entities om apparaten op te zoeken.',
+        matchedCount: selected.length
+    };
+}
+
+// -------------------------------------------------------------
+// 9. SOTA Dynamic System Prompt Builder
+// -------------------------------------------------------------
+function buildSystemPrompt(options: ClientOrchestratorOptions): string {
+    const { language, location, devices, userMessage } = options;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    // SOTA Pre-filtering: Only inject the 0-12 entities that actually matter
+    const filterRes = filterContextEntities(userMessage, devices);
 
     // Retrieve stored core memories
     const storedMems = getStoredMemories().map(m => `- ${m.content}`).join('\n') || '- Geen specifieke voorkeuren opgeslagen.';
@@ -1188,31 +1352,32 @@ function buildSystemPrompt(options: ClientOrchestratorOptions): string {
         : 'Locatie: Thuisbasis (zone.home)';
 
     return `Je bent Butler, de intelligente, betrouwbare persoonlijke AI-assistent voor Home Assistant en het dagelijks leven.
-Je draait direct op het apparaat van de gebruiker met state-of-the-art ReAct tool calling.
+Je draait direct op het apparaat van de gebruiker met state-of-the-art ReAct tool calling en minimale token-belasting.
 
 ### HUIDIGE CONTEXT:
 - Datum & Tijd: ${dateStr}, ${timeStr}
 - Huidige Locatie: ${locationContext}
 - Taal van de gebruiker: ${language} (Antwoord ALTIJD in het Nederlands, behalve als de gebruiker expliciet in een andere taal spreekt)
-${topologyText}
+
+${filterRes.topologySummary}
+### GESELECTEERDE RELEVANTE APPARATEN VOOR DEZE VRAAG (${filterRes.matchedCount} geselecteerd uit ${devices.length} totaal):
+${filterRes.relevantEntitiesSection}
+
 ### DYNAMISCH CORE GEHEUGEN (Letta / Memori):
 ${storedMems}
 
-### BESCHIKBARE APPARATEN EN SENSOREN IN HUIS:
-${relevantDevices || 'Geen actieve apparaten aangetroffen.'}
-
 ### STRIKTE REGELS VOOR HET GEBRUIK VAN TOOLS:
-1. **NOOIT GISSEN NAAR WEER OF DATA**: Als de gebruiker vraagt naar het weer, regen, temperatuur, windsnelheid, windstoten of dauwpunt, roep dan **ALTIJD** de tool \`get_weather\` aan.
-2. **DAUWPUNT & WINDSNELHEID**: Als \`get_weather\` terugkomt, geef een concreet, natuurlijk en accuraat antwoord. Vermeld bij vragen over wind expliciet de windsnelheid en eventuele windstoten in km/h. Vermeld bij vragen over luchtvochtigheid of comfort ook het dauwpunt.
+1. **NOOIT GISSEN NAAR WEER OF DATA**: Vraagt de gebruiker naar het weer, regen, temperatuur, wind of dauwpunt? Roep **ALTIJD** \`get_weather\` aan.
+2. **DAUWPUNT & WINDSNELHEID**: Vermeld bij wind de snelheid en stoten in km/h. Vermeld bij luchtvochtigheid ook het dauwpunt.
 3. **STROOM- EN SPOTPRIJZEN**: Vraagt de gebruiker naar stroomprijs, 24u-spotprijzen, dynamische tarieven of goedkope uren? Roep **ALTIJD** \`get_energy_prices\` aan.
-4. **HISTORIEK & STATISTIEKEN (ZONNEPANELEN, VERBRUIK, VERLEDEN)**: Als de gebruiker vraagt hoeveel stroom er gisteren/vorige week is opgewekt/verbruikt of wat de minimum/maximum temperatuur was, roep **ALTIJD** \`get_ha_history_and_statistics\` aan.
-5. **LOGBOEK & GEBEURTENISSEN**: Als de gebruiker vraagt wanneer iets gebeurde of wie iets deed (bv. "Hoe laat ging de deur open?", "Wanneer ging het alarm aan?"), gebruik \`get_ha_logbook\`.
-6. **CAMERABEELDEN & DEURBEL**: Vraagt de gebruiker wie er aan de deur staat, of er een pakketje ligt, of wat er op camera te zien is? Roep **ALTIJD** \`capture_camera_snapshot\` aan.
+4. **HISTORIEK & STATISTIEKEN (ZONNEPANELEN, VERBRUIK, VERLEDEN)**: Vraagt de gebruiker hoeveel stroom er gisteren/vorige week is opgewekt/verbruikt of wat de minimum/maximum temperatuur was? Roep **ALTIJD** \`get_ha_history_and_statistics\` aan.
+5. **LOGBOEK & GEBEURTENISSEN**: Vraagt de gebruiker wanneer iets gebeurde of wie iets deed? Gebruik \`get_ha_logbook\`.
+6. **CAMERABEELDEN & DEURBEL**: Vraagt de gebruiker wie er voor de deur staat of wat er op camera te zien is? Roep **ALTIJD** \`capture_camera_snapshot\` aan.
 7. **TO-DO & BOODSCHAPPEN**: Voor boodschappen en takenlijsten (bekijken, toevoegen, afvinken), gebruik \`manage_todo_list\`.
-8. **KALENDER & AFVALKALENDER**: Voor vragen over ophaaldagen van afval of afspraken, gebruik \`get_calendar_events\`.
-9. **AUTOMATISERINGEN ONTWERPEN**: Als de gebruiker een automatisering wil aanmaken, gebruik \`create_home_assistant_automation\`. Butler presenteert dit als interactieve kaart in de UI.
-10. **SENSORSTATUS & APPARAATBEDIENING**: Gebruik \`get_entity_state\` voor losse sensoren en \`control_home_device\` om apparaten aan te sturen.
-11. **VERDIEPINGEN & RUIMTES**: Gebruik de huisindeling hierboven om commando's als "alles beneden uit" of "boven lichten aandoen" direct te mappen naar de bijbehorende entity_id's.
+8. **KALENDER & AFVALKALENDER**: Voor afvalophaaldagen of afspraken, gebruik \`get_calendar_events\`.
+9. **AUTOMATISERINGEN ONTWERPEN**: Als de gebruiker een automatisering wil aanmaken, gebruik \`create_home_assistant_automation\`.
+10. **ON-DEMAND APPARATEN ZOEKEN**: Als een gewenst apparaat niet in de bovenstaande selectie staat of de vraag breed is (bv. "zoek de rolluiken"), roep dan \`search_home_entities\` aan om gericht entiteiten te vinden.
+11. **APPARAATBEDIENING**: Gebruik \`control_home_device\` om apparaten aan te sturen met domein, service en entity_id.
 12. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
 }
 
@@ -1437,6 +1602,12 @@ export async function runClientReActOrchestrator(
                         data: toolResult,
                         result: 'success',
                         executedLocally: true
+                    });
+                } else if (fnName === 'search_home_entities') {
+                    toolResult = await executeSearchEntitiesTool(fnArgs, {
+                        devices: options.devices,
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
                     });
                 } else if (fnName === 'create_home_assistant_automation') {
                     toolResult = executeCreateAutomationTool(fnArgs);
