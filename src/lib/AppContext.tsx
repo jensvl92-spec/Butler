@@ -114,6 +114,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     syncWidgetCredentials();
 
+    // 0. Instantly populate entityStates from local cache so app never starts with 0 devices
+    try {
+      const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnection.id}`);
+      if (cachedStatesRaw) {
+        setEntityStates(JSON.parse(cachedStatesRaw));
+      } else {
+        const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`) || localStorage.getItem('dashboard-tiles');
+        if (cachedTilesRaw) {
+          const tiles = JSON.parse(cachedTilesRaw);
+          const initialObj: Record<string, any> = {};
+          tiles.forEach((t: any) => {
+            if (Array.isArray(t.devices)) {
+              t.devices.forEach((d: any) => {
+                if (d.entity_id) initialObj[d.entity_id] = d;
+              });
+            }
+          });
+          if (Object.keys(initialObj).length > 0) {
+            setEntityStates(initialObj);
+          }
+        }
+      }
+    } catch { }
+
+    // Fast background REST states fetch (ensures entities exist even if WebSocket is connecting/lagging)
+    const fetchStatesViaRest = async () => {
+      const apiUrl = activeConnection.api_url;
+      const apiToken = activeConnection.api_token || (activeConnection as any).token;
+      if (!apiUrl || !apiToken) return;
+      try {
+        const cleanUrl = apiUrl.replace(/\/+$/, '');
+        const res = await fetch(`${cleanUrl}/api/states`, {
+          headers: {
+            'Authorization': `Bearer ${apiToken}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        if (res.ok) {
+          const states = await res.json();
+          if (Array.isArray(states) && states.length > 0) {
+            const statesObj: Record<string, any> = {};
+            states.forEach((s: any) => {
+              statesObj[s.entity_id] = s;
+            });
+            setEntityStates(prev => ({ ...statesObj, ...prev }));
+            localStorage.setItem(`ha_entity_states_${activeConnection.id}`, JSON.stringify(statesObj));
+          }
+        }
+      } catch { }
+    };
+    fetchStatesViaRest();
+
     const loadRooms = async () => {
       const { data } = await supabase
         .from('rooms')
@@ -153,6 +205,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               queueStateUpdate(state.entity_id, state);
             })
             setEntityStates(statesObj)
+            try {
+              localStorage.setItem(`ha_entity_states_${activeConnection.id}`, JSON.stringify(statesObj));
+            } catch { }
             logger.info(`✅ Loaded & Queued States: ${statesRes.result.length}`)
           } else {
             logger.warn('⚠️ Failed to get states:', statesRes)

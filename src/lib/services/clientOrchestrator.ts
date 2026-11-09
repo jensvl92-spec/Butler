@@ -229,6 +229,39 @@ const ORCHESTRATOR_TOOLS = [
                 required: ['destination']
             }
         }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_energy_prices',
+            description: 'Haalt de actuele stroomprijs, 24-uurs dynamische energie/spotprijzen per uur (vandaag en morgen), daggemiddelde, piek/daluren en het goedkoopste tijdslot op vanuit Home Assistant (Nordpool, ENTSO-E, EPEX Spot, Tibber, Frank Energie, etc.) of live marktprijzen. Gebruik dit ALTIJD bij vragen over stroomprijzen, dynamische tarieven of wanneer het goedkoop is om apparaten te gebruiken.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    device_or_sensor: {
+                        type: 'string',
+                        description: 'Optionele specifieke Home Assistant sensor entity_id (bv. sensor.nordpool_kwh_be_eur_3_10_0). Indien leeg zoekt Butler automatisch naar de actieve spotprijsintegratie.'
+                    }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_entity_state',
+            description: 'Leest de actuele status en alle attributen uit van een specifieke Home Assistant sensor, schakelaar of apparaat, of zoekt entiteiten op trefwoord (bv. "prijs", "stroom", "nordpool", "solar", "warmtepomp", "batterij", "temperatuur").',
+            parameters: {
+                type: 'object',
+                properties: {
+                    entity_id_or_search: {
+                        type: 'string',
+                        description: 'Exacte entity_id of zoekterm om te matchen.'
+                    }
+                },
+                required: ['entity_id_or_search']
+            }
+        }
     }
 ];
 
@@ -375,7 +408,7 @@ async function executeDeviceControl(
             return {
                 success: true,
                 message: `Actie succesvol uitgevoerd op ${entity_id} (${domain}.${service}).`,
-                action
+                action: { ...action, result: 'success', executedLocally: true } as any
             };
         } catch (wsErr: any) {
             logger.warn(`[ClientOrchestrator] WebSocket service call failed, trying REST fallback:`, wsErr);
@@ -390,7 +423,7 @@ async function executeDeviceControl(
             return {
                 success: true,
                 message: `Actie succesvol uitgevoerd op ${entity_id} via REST.`,
-                action
+                action: { ...action, result: 'success', executedLocally: true } as any
             };
         } catch (restErr: any) {
             logger.error(`[ClientOrchestrator] ❌ HA REST service call failed:`, restErr);
@@ -542,7 +575,274 @@ async function executeNavigationTool(args: any, userLoc?: { lat: number; lon: nu
 }
 
 // -------------------------------------------------------------
-// 6. Dynamic System Prompt Builder
+// 6. Energy & Spot Prices Tool Implementation
+// -------------------------------------------------------------
+async function executeEnergyPricesTool(
+    args: any,
+    options: { devices?: HADevice[]; haUrl?: string; haToken?: string }
+): Promise<any> {
+    let allStates: any[] = options.devices || [];
+
+    // If device list is empty, fetch directly via HA REST API if credentials exist
+    if (allStates.length === 0 && options.haUrl && options.haToken) {
+        try {
+            const res = await fetch(`${options.haUrl.replace(/\/+$/, '')}/api/states`, {
+                headers: {
+                    'Authorization': `Bearer ${options.haToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (res.ok) {
+                const fetched = await res.json();
+                if (Array.isArray(fetched)) allStates = fetched;
+            }
+        } catch (e: any) {
+            logger.warn('[ClientOrchestrator] HA REST states fetch error for energy prices:', e.message);
+        }
+    }
+
+    // 1. Check for active Home Assistant spot price sensors (Nordpool, ENTSO-E, EPEX Spot, Tibber, Frank Energie, etc.)
+    let priceSensor: any = null;
+    let detectedProvider = 'Home Assistant';
+
+    if (args.device_or_sensor) {
+        priceSensor = allStates.find(s => s.entity_id === args.device_or_sensor);
+    }
+
+    if (!priceSensor && allStates.length > 0) {
+        const candidates = allStates.filter(s => {
+            const id = (s.entity_id || '').toLowerCase();
+            const fn = (s.attributes?.friendly_name || '').toLowerCase();
+            const uom = (s.attributes?.unit_of_measurement || '').toLowerCase();
+            return (
+                id.includes('nordpool') ||
+                id.includes('entsoe') ||
+                id.includes('epex') ||
+                id.includes('tibber') ||
+                id.includes('frank_energie') ||
+                id.includes('energyzero') ||
+                id.includes('amber') ||
+                id.includes('stroomprijs') ||
+                id.includes('spotprijs') ||
+                id.includes('electricity_price') ||
+                fn.includes('stroomprijs') ||
+                fn.includes('nordpool') ||
+                fn.includes('spotprijs') ||
+                uom.includes('/kwh') ||
+                uom.includes('/mwh') ||
+                s.attributes?.today ||
+                s.attributes?.raw_today ||
+                s.attributes?.prices
+            );
+        });
+
+        priceSensor = candidates.find(s => s.entity_id.includes('nordpool')) ||
+            candidates.find(s => s.entity_id.includes('entsoe')) ||
+            candidates.find(s => s.entity_id.includes('epex')) ||
+            candidates.find(s => s.entity_id.includes('tibber')) ||
+            candidates.find(s => s.entity_id.includes('frank_energie')) ||
+            candidates.find(s => s.entity_id.includes('energyzero')) ||
+            candidates.find(s => s.entity_id.includes('price') || s.entity_id.includes('prijs')) ||
+            candidates[0];
+
+        if (priceSensor) {
+            if (priceSensor.entity_id.includes('nordpool')) detectedProvider = 'Nordpool';
+            else if (priceSensor.entity_id.includes('entsoe')) detectedProvider = 'ENTSO-E';
+            else if (priceSensor.entity_id.includes('epex')) detectedProvider = 'EPEX Spot';
+            else if (priceSensor.entity_id.includes('tibber')) detectedProvider = 'Tibber';
+            else if (priceSensor.entity_id.includes('frank_energie')) detectedProvider = 'Frank Energie';
+            else if (priceSensor.entity_id.includes('energyzero')) detectedProvider = 'EnergyZero';
+        }
+    }
+
+    if (priceSensor) {
+        const unit = priceSensor.attributes?.unit_of_measurement || '€/kWh';
+        const currentPrice = parseFloat(priceSensor.state);
+        const hourly: Array<{ hour: string; price: number }> = [];
+
+        if (Array.isArray(priceSensor.attributes?.today)) {
+            priceSensor.attributes.today.forEach((p: any, idx: number) => {
+                const val = typeof p === 'number' ? p : parseFloat(p);
+                if (!isNaN(val)) hourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+            });
+        } else if (Array.isArray(priceSensor.attributes?.raw_today)) {
+            priceSensor.attributes.raw_today.forEach((item: any) => {
+                const hour = item.start ? new Date(item.start).getHours() : hourly.length;
+                const val = typeof item.value === 'number' ? item.value : parseFloat(item.value);
+                if (!isNaN(val)) hourly.push({ hour: `${hour.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+            });
+        } else if (priceSensor.attributes?.prices && typeof priceSensor.attributes.prices === 'object') {
+            Object.entries(priceSensor.attributes.prices).forEach(([ts, p]: [string, any]) => {
+                const hour = new Date(ts).getHours();
+                const val = typeof p === 'number' ? p : parseFloat(p);
+                if (!isNaN(val)) hourly.push({ hour: `${hour.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+            });
+        }
+
+        const tomorrowHourly: Array<{ hour: string; price: number }> = [];
+        if (Array.isArray(priceSensor.attributes?.tomorrow)) {
+            priceSensor.attributes.tomorrow.forEach((p: any, idx: number) => {
+                const val = typeof p === 'number' ? p : parseFloat(p);
+                if (!isNaN(val)) tomorrowHourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+            });
+        }
+
+        const currentHour = new Date().getHours();
+        const effectiveCurrentPrice = !isNaN(currentPrice)
+            ? currentPrice
+            : (hourly[currentHour]?.price ?? priceSensor.attributes?.current_price ?? 0);
+
+        let average = priceSensor.attributes?.average;
+        if (typeof average !== 'number' && hourly.length > 0) {
+            average = Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4));
+        }
+
+        const sorted = [...hourly].sort((a, b) => a.price - b.price);
+
+        return {
+            source: `Home Assistant (${priceSensor.entity_id}) - ${detectedProvider}`,
+            entity_id: priceSensor.entity_id,
+            friendly_name: priceSensor.attributes?.friendly_name || priceSensor.entity_id,
+            unit,
+            current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
+            current_price: Number(effectiveCurrentPrice.toFixed(4)),
+            average_price_today: average,
+            min_price_today: priceSensor.attributes?.min ?? sorted[0]?.price,
+            max_price_today: priceSensor.attributes?.max ?? sorted[sorted.length - 1]?.price,
+            cheapest_hours_today: sorted.slice(0, 3),
+            most_expensive_hours_today: sorted.slice(-3).reverse(),
+            is_cheap_now: typeof average === 'number' ? effectiveCurrentPrice <= average : true,
+            hourly_prices_today: hourly,
+            tomorrow_prices_available: tomorrowHourly.length > 0,
+            hourly_prices_tomorrow: tomorrowHourly
+        };
+    }
+
+    // 2. Fallback: Live Day-Ahead EPEX Spot Market Feed (EnergyZero public API)
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const res = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${today}T00:00:00.000Z&tillDate=${today}T23:59:59.999Z&interval=4`);
+        if (res.ok) {
+            const data = await res.json();
+            const prices: any[] = data.Prices || [];
+            if (prices.length > 0) {
+                const currentHour = new Date().getHours();
+                const currentItem = prices.find(p => new Date(p.readingDate).getHours() === currentHour) || prices[0];
+                const hourly = prices.map(p => ({
+                    hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
+                    price: Number(p.price.toFixed(4))
+                }));
+
+                const sorted = [...hourly].sort((a, b) => a.price - b.price);
+                const avg = Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4));
+
+                let tomorrowPrices: any[] = [];
+                try {
+                    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+                    const tomRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${tomorrow}T00:00:00.000Z&tillDate=${tomorrow}T23:59:59.999Z&interval=4`);
+                    if (tomRes.ok) {
+                        const tomData = await tomRes.json();
+                        if (Array.isArray(tomData.Prices) && tomData.Prices.length > 0) {
+                            tomorrowPrices = tomData.Prices.map((p: any) => ({
+                                hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
+                                price: Number(p.price.toFixed(4))
+                            }));
+                        }
+                    }
+                } catch { }
+
+                return {
+                    source: 'Live Day-Ahead Spotmarkt (EPEX Spot)',
+                    note: 'Live spotprijzen opgehaald via de openbare EPEX Spotmarkt feed (BE/NL). Koppel eventueel Nordpool of ENTSO-E in Home Assistant voor leveranciers-specifieke toeslagen.',
+                    unit: '€/kWh',
+                    current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
+                    current_price: Number(currentItem?.price.toFixed(4)),
+                    average_price_today: avg,
+                    min_price_today: sorted[0]?.price,
+                    max_price_today: sorted[sorted.length - 1]?.price,
+                    cheapest_hours_today: sorted.slice(0, 3),
+                    most_expensive_hours_today: sorted.slice(-3).reverse(),
+                    is_cheap_now: currentItem?.price <= avg,
+                    hourly_prices_today: hourly,
+                    tomorrow_prices_available: tomorrowPrices.length > 0,
+                    hourly_prices_tomorrow: tomorrowPrices
+                };
+            }
+        }
+    } catch (e: any) {
+        logger.error('[ClientOrchestrator] Spot market fallback error:', e);
+    }
+
+    return {
+        error: 'Kon actuele stroomprijzen niet ophalen uit Home Assistant of live spotmarkt.',
+        hint: 'Installeer of activeer de Nordpool of ENTSO-E integratie in Home Assistant.'
+    };
+}
+
+// -------------------------------------------------------------
+// 7. Get Entity State & Attributes Tool Implementation
+// -------------------------------------------------------------
+async function executeGetEntityStateTool(
+    args: any,
+    options: { devices?: HADevice[]; haUrl?: string; haToken?: string }
+): Promise<any> {
+    const query = (args.entity_id_or_search || '').toLowerCase().trim();
+    let allStates: any[] = options.devices || [];
+
+    if (allStates.length === 0 && options.haUrl && options.haToken) {
+        try {
+            const res = await fetch(`${options.haUrl.replace(/\/+$/, '')}/api/states`, {
+                headers: {
+                    'Authorization': `Bearer ${options.haToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (res.ok) {
+                const fetched = await res.json();
+                if (Array.isArray(fetched)) allStates = fetched;
+            }
+        } catch { }
+    }
+
+    if (allStates.length === 0) {
+        return { error: 'Geen apparaten of sensoren gevonden in Home Assistant context.' };
+    }
+
+    const exact = allStates.find(s => s.entity_id.toLowerCase() === query);
+    if (exact) {
+        return {
+            entity_id: exact.entity_id,
+            friendly_name: exact.attributes?.friendly_name || exact.entity_id,
+            state: exact.state,
+            unit: exact.attributes?.unit_of_measurement || null,
+            attributes: exact.attributes,
+            last_changed: exact.last_changed
+        };
+    }
+
+    const matches = allStates.filter(s =>
+        s.entity_id.toLowerCase().includes(query) ||
+        (s.attributes?.friendly_name && s.attributes.friendly_name.toLowerCase().includes(query))
+    ).slice(0, 8);
+
+    if (matches.length > 0) {
+        return {
+            found_count: matches.length,
+            matches: matches.map(m => ({
+                entity_id: m.entity_id,
+                friendly_name: m.attributes?.friendly_name || m.entity_id,
+                state: m.state,
+                unit: m.attributes?.unit_of_measurement || null,
+                attributes: m.attributes
+            }))
+        };
+    }
+
+    return { message: `Geen entiteit gevonden in Home Assistant die overeenkomt met "${query}".` };
+}
+
+// -------------------------------------------------------------
+// 8. Dynamic System Prompt Builder
 // -------------------------------------------------------------
 function buildSystemPrompt(options: ClientOrchestratorOptions): string {
     const { language, location, devices } = options;
@@ -550,10 +850,17 @@ function buildSystemPrompt(options: ClientOrchestratorOptions): string {
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    // Format active entities compactly
-    const relevantDevices = devices.slice(0, 100).map(d => {
+    // Prioritize energy, price, climate, solar, battery and active entities in context
+    const prioritizedDevices = [...devices].sort((a, b) => {
+        const aScore = /price|prijs|stroom|nordpool|entsoe|epex|energy|solar|power|battery|climate/i.test(a.entity_id) ? 2 : 1;
+        const bScore = /price|prijs|stroom|nordpool|entsoe|epex|energy|solar|power|battery|climate/i.test(b.entity_id) ? 2 : 1;
+        return bScore - aScore;
+    });
+
+    const relevantDevices = prioritizedDevices.slice(0, 120).map(d => {
         const name = d.attributes?.friendly_name || d.entity_id;
-        return `${d.entity_id} (${name}): ${d.state}`;
+        const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
+        return `${d.entity_id} (${name}): ${d.state}${uom}`;
     }).join('\n');
 
     // Retrieve stored core memories
@@ -574,16 +881,18 @@ Je draait direct op het apparaat van de gebruiker met state-of-the-art ReAct too
 ### DYNAMISCH CORE GEHEUGEN (Letta / Memori):
 ${storedMems}
 
-### BESCHIKBARE APPARATEN IN HUIS:
+### BESCHIKBARE APPARATEN EN SENSOREN IN HUIS:
 ${relevantDevices || 'Geen actieve apparaten aangetroffen.'}
 
 ### STRIKTE REGELS VOOR HET GEBRUIK VAN TOOLS:
 1. **NOOIT GISSEN NAAR WEER OF DATA**: Als de gebruiker vraagt naar het weer, regen, temperatuur, windsnelheid, windstoten of dauwpunt, roep dan **ALTIJD** de tool \`get_weather\` aan.
 2. **DAUWPUNT & WINDSNELHEID**: Als \`get_weather\` terugkomt, geef een concreet, natuurlijk en accuraat antwoord. Vermeld bij vragen over wind expliciet de windsnelheid en eventuele windstoten in km/h. Vermeld bij vragen over luchtvochtigheid of comfort ook het dauwpunt.
-3. **SMART HOME BEDIENING**: Gebruik de tool \`control_home_device\` om apparaten aan te sturen met het juiste domein, service en entity_id.
-4. **GEHEUGEN**: Als de gebruiker een voorkeur deelt (bv. "Onthoud dat ik thee drink zonder suiker" of "Mijn kantoor is de studeerkamer"), gebruik \`manage_core_memory(action='save', content=...)\`.
-5. **NAVIGATIE**: Gebruik \`get_navigation_eta\` voor afstanden, reistijden en routes.
-6. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
+3. **STROOM- EN ENERGIEPRIJZEN / SPOTPRIJZEN**: Als de gebruiker vraagt naar de stroomprijs, energieprijzen, 24u-spotprijzen, dynamische tarieven of de goedkoopste uren om apparaten aan te zetten, roep dan **ALTIJD** \`get_energy_prices\` aan. Geef de huidige prijs en vermeld de goedkoopste uren.
+4. **SENSOR- OF APPARAATSTATUS**: Als de gebruiker vraagt naar de actuele status, sensorwaarde of attributen van een apparaat (bv. zonnepanelen, batterij, warmtepomp, meter), gebruik \`get_entity_state\`.
+5. **SMART HOME BEDIENING**: Gebruik de tool \`control_home_device\` om apparaten aan te sturen met het juiste domein, service en entity_id.
+6. **GEHEUGEN**: Als de gebruiker een voorkeur deelt (bv. "Onthoud dat ik thee drink zonder suiker" of "Mijn kantoor is de studeerkamer"), gebruik \`manage_core_memory(action='save', content=...)\`.
+7. **NAVIGATIE**: Gebruik \`get_navigation_eta\` voor afstanden, reistijden en routes.
+8. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
 }
 
 // -------------------------------------------------------------
@@ -695,7 +1004,29 @@ export async function runClientReActOrchestrator(
                         type: 'weather',
                         entity_id: 'weather.open_meteo',
                         service: 'weather.get_forecast',
-                        data: toolResult
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'get_energy_prices') {
+                    toolResult = await executeEnergyPricesTool(fnArgs, {
+                        devices: options.devices,
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
+                    });
+                    actionsTaken.push({
+                        type: 'energy',
+                        entity_id: 'sensor.energy_prices',
+                        service: 'energy.get_prices',
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
+                    });
+                } else if (fnName === 'get_entity_state') {
+                    toolResult = await executeGetEntityStateTool(fnArgs, {
+                        devices: options.devices,
+                        haUrl: options.haUrl,
+                        haToken: options.haToken
                     });
                 } else if (fnName === 'control_home_device') {
                     const devRes = await executeDeviceControl(fnArgs, {
@@ -704,7 +1035,11 @@ export async function runClientReActOrchestrator(
                         haToken: options.haToken
                     });
                     toolResult = devRes;
-                    actionsTaken.push(devRes.action);
+                    actionsTaken.push({
+                        ...devRes.action,
+                        result: devRes.success ? 'success' : 'error',
+                        executedLocally: true
+                    });
                 } else if (fnName === 'manage_core_memory') {
                     toolResult = executeCoreMemoryTool(fnArgs);
                 } else if (fnName === 'get_navigation_eta') {
@@ -713,7 +1048,9 @@ export async function runClientReActOrchestrator(
                         type: 'navigation',
                         entity_id: 'device.navigation',
                         service: 'navigation.eta',
-                        data: toolResult
+                        data: toolResult,
+                        result: 'success',
+                        executedLocally: true
                     });
                 } else {
                     toolResult = { error: `Onbekende tool: ${fnName}` };

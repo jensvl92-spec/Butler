@@ -42,6 +42,7 @@ export interface Action {
   data?: Record<string, any>;
   result?: 'success' | 'error' | 'pending';
   error_message?: string;
+  executedLocally?: boolean;
 }
 
 export interface UserSettings {

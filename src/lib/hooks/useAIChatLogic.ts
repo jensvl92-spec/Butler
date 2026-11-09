@@ -202,18 +202,23 @@ export function useAIChatLogic() {
                 }
             }
 
-            // If already executed by Client Orchestrator, do not re-execute
-            if (action.result === 'success') {
-                logger.info("✅ Action already executed during ReAct loop, skipping duplicate call", action);
+            // If already executed by Client Orchestrator or is an informational tool, do not call HA
+            if (
+                action.result === 'success' ||
+                action.executedLocally ||
+                ['weather', 'navigation', 'energy', 'info', 'query'].includes(action.type) ||
+                (typeof action.entity_id === 'string' && (
+                    action.entity_id.startsWith('weather.open_meteo') ||
+                    action.entity_id.startsWith('device.navigation') ||
+                    action.entity_id.startsWith('sensor.energy_prices')
+                ))
+            ) {
+                logger.info("ℹ️ Skipping HA service execution for local/completed action", action);
                 continue;
             }
 
             // Standard Service Call (Non-delayed)
             if (action.entity_id) {
-                if (!haWebSocket) {
-                    logger.warn("⚠️ Cannot execute HA service: WebSocket not connected", action);
-                    continue;
-                }
                 // Determine domain and service name
                 // FIX: Handle Array entity_ids (e.g. multiple devices)
                 const firstEntity = Array.isArray(action.entity_id) ? action.entity_id[0] : action.entity_id;
@@ -238,35 +243,43 @@ export function useAIChatLogic() {
                 delete serviceData.delay;
                 delete serviceData.seconds;
 
-                logger.info(`📡 Sending WS Message: ${domain}.${service}`, serviceData);
+                let executed = false;
 
-                try {
-                    // Attempt 1
-                    await haWebSocket.sendMessage({
-                        type: 'call_service',
-                        domain: domain,
-                        service: service,
-                        service_data: serviceData
-                    }, 5000); // Short timeout for first try
-                    logger.info(`✅ WS Message Sent`);
-                } catch (wsErr: any) {
-                    logger.warn(`⚠️ First attempt failed (${wsErr.message}). Status: ${haWebSocket.getStatus ? haWebSocket.getStatus() : 'Unknown'}. Retrying...`);
-
-                    // Wait 1s and Retry
-                    await new Promise(r => setTimeout(r, 1000));
-
+                // 1. WebSocket Call (only if connected and authenticated)
+                if (haWebSocket && typeof haWebSocket.isConnected === 'function' && haWebSocket.isConnected()) {
+                    logger.info(`📡 Sending WS Message: ${domain}.${service}`, serviceData);
                     try {
                         await haWebSocket.sendMessage({
                             type: 'call_service',
                             domain: domain,
                             service: service,
                             service_data: serviceData
-                        }, 10000); // Longer timeout
-                        logger.info(`✅ WS Message Sent (Retry)`);
-                    } catch (retryErr: any) {
-                        logger.error("❌ WS Send Failed after retry", retryErr);
+                        }, 3000);
+                        logger.info(`✅ WS Message Sent`);
+                        executed = true;
+                    } catch (wsErr: any) {
+                        logger.warn(`⚠️ WS service call failed, trying REST fallback:`, wsErr);
                     }
                 }
+
+                // 2. Direct REST API execution (Fast fallback if WS is not connected or timed out)
+                if (!executed) {
+                    const apiUrl = (activeConnection as any)?.api_url;
+                    const apiToken = (activeConnection as any)?.token || (activeConnection as any)?.api_token;
+                    if (apiUrl && apiToken) {
+                        try {
+                            const { callHAService } = await import('../../utils/home-assistant');
+                            await callHAService(domain, service, serviceData, apiUrl, apiToken);
+                            logger.info(`✅ HA Service executed via REST: ${domain}.${service}`);
+                            executed = true;
+                        } catch (restErr: any) {
+                            logger.error("❌ HA REST service execution failed", restErr);
+                        }
+                    } else {
+                        logger.warn("⚠️ Cannot execute HA service: WebSocket not connected and no REST credentials", action);
+                    }
+                }
+                continue;
             } else if (action.action === 'open_url' || action.type === 'open_url') {
                 const url = action.url || action.parameters?.url;
                 if (url) {
@@ -497,9 +510,39 @@ export function useAIChatLogic() {
             setMessages(prev => [...prev, optimisticMsg]);
 
             // 1. Gather Context
-            const devices = Object.values(entityStates).map((s: any) => ({
+            let devices = Object.values(entityStates || {}).map((s: any) => ({
                 entity_id: s.entity_id, ...s
             })).filter(d => d.entity_id);
+
+            // Fallback to cached dashboard tiles or cached states if entityStates is empty
+            if (devices.length === 0 && activeConnection) {
+                try {
+                    const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`) || localStorage.getItem('dashboard-tiles');
+                    if (cachedTilesRaw) {
+                        const tiles = JSON.parse(cachedTilesRaw);
+                        const extracted: any[] = [];
+                        tiles.forEach((t: any) => {
+                            if (Array.isArray(t.devices)) {
+                                extracted.push(...t.devices);
+                            }
+                        });
+                        if (extracted.length > 0) {
+                            devices = extracted;
+                            logger.info(`📦 Loaded ${devices.length} devices from cached dashboard tiles`);
+                        }
+                    }
+                    if (devices.length === 0) {
+                        const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnection.id}`);
+                        if (cachedStatesRaw) {
+                            const statesObj = JSON.parse(cachedStatesRaw);
+                            devices = Object.values(statesObj);
+                            logger.info(`📦 Loaded ${devices.length} devices from cached states`);
+                        }
+                    }
+                } catch (cacheErr) {
+                    logger.warn('Failed to parse cached devices:', cacheErr);
+                }
+            }
 
             // 2. Build payload for Supabase Edge Function
             logger.info("Posting to process-ai-command", { deviceCount: devices.length });
