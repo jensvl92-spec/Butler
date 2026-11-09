@@ -278,28 +278,38 @@ mode: ${autoData.mode || 'single'}`;
                       {actions?.map((a: any, i: number) => {
                         // A. Weather Widget Card
                         if (a.type === 'weather' && a.data?.current) {
+                          const cur = a.data.current;
+                          const temp = cur.temperature_c ?? cur.temperature;
+                          const desc = cur.condition_nl || cur.weather_description || 'Weersoverzicht';
+                          const wind = cur.wind_speed_kmh ?? cur.wind_speed;
+                          const gusts = cur.wind_gusts_kmh ?? cur.wind_gusts;
+                          const dew = cur.dew_point_c ?? cur.dew_point;
+                          const hum = cur.relative_humidity;
+                          const rain = cur.precipitation_mm ?? cur.precipitation;
+                          const isDay = cur.is_day ?? (new Date().getHours() >= 7 && new Date().getHours() < 22);
+
                           return (
                             <div key={i} className="chat-widget-card weather-widget">
                               <div className="weather-header">
                                 <div>
                                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                                    {a.data.location?.name || 'Huidige Locatie'}
+                                    {a.data.location?.requested_name || a.data.location?.name || 'Huidige Locatie'}
                                   </div>
-                                  <div className="weather-temp">{a.data.current.temperature_c}°C</div>
+                                  <div className="weather-temp">{temp !== undefined ? `${temp}°C` : '–'}</div>
                                 </div>
                                 <div style={{ fontSize: '2rem' }}>
-                                  {a.data.current.is_day ? '☀️' : '🌙'}
+                                  {isDay ? '☀️' : '🌙'}
                                 </div>
                               </div>
                               <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                                {a.data.current.condition_nl}
+                                {desc}
                               </div>
                               <div className="weather-badges">
-                                <span className="weather-chip">💨 {a.data.current.wind_speed_kmh} km/h (stoten {a.data.current.wind_gusts_kmh} km/h)</span>
-                                <span className="weather-chip">💧 Dauwpunt {a.data.current.dew_point_c}°C</span>
-                                <span className="weather-chip">💦 Vocht {a.data.current.relative_humidity}%</span>
-                                {a.data.current.precipitation_mm > 0 && (
-                                  <span className="weather-chip" style={{ color: '#60a5fa' }}>🌧️ {a.data.current.precipitation_mm} mm</span>
+                                {wind !== undefined && <span className="weather-chip">💨 {wind} km/h{gusts ? ` (stoten ${gusts} km/h)` : ''}</span>}
+                                {dew !== undefined && <span className="weather-chip">💧 Dauwpunt {dew}°C</span>}
+                                {hum !== undefined && <span className="weather-chip">💦 Vocht {hum}%</span>}
+                                {rain > 0 && (
+                                  <span className="weather-chip" style={{ color: '#60a5fa' }}>🌧️ {rain} mm</span>
                                 )}
                               </div>
                             </div>
@@ -307,47 +317,60 @@ mode: ${autoData.mode || 'single'}`;
                         }
 
                         // B. Energy Spot Price Widget Card
-                        if (a.type === 'energy' && a.data?.today_summary) {
+                        if (a.type === 'energy' && (a.data?.hourly_prices_today || a.data?.hourly_curve_today || a.data?.current_price !== undefined)) {
+                          const unit = a.data.unit || '€/kWh';
+                          const curPrice = a.data.current_price;
+                          const hourly = a.data.hourly_prices_today || a.data.hourly_curve_today || [];
+                          const cheapestObj = Array.isArray(a.data.cheapest_hours_today) && a.data.cheapest_hours_today.length > 0
+                            ? a.data.cheapest_hours_today[0]
+                            : a.data.cheapest_slot_today;
+                          const cheapestTime = cheapestObj?.hour || cheapestObj?.time;
+                          const cheapestPrice = cheapestObj?.price;
+                          const avgPrice = a.data.average_price_today ?? a.data.today_summary?.average;
+
                           return (
                             <div key={i} className="chat-widget-card energy-widget">
                               <div className="energy-summary-row">
                                 <div>
                                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                                    Stroomprijs ({a.data.provider || 'EPEX Spot'})
+                                    Stroomprijs ({a.data.source || a.data.provider || 'EPEX Spot'})
                                   </div>
                                   <div className="energy-current-price">
-                                    {a.data.current_price !== undefined ? a.data.current_price.toFixed(3) : '–'} {a.data.unit || '€/kWh'}
+                                    {curPrice !== undefined ? Number(curPrice).toFixed(3) : '–'} {unit}
                                   </div>
                                 </div>
-                                {a.data.cheapest_slot_today && (
+                                {cheapestTime && (
                                   <div className="energy-cheapest-pill">
-                                    🏷️ Goedkoopst: {a.data.cheapest_slot_today.time} ({a.data.cheapest_slot_today.price?.toFixed(3)} {a.data.unit})
+                                    🏷️ Goedkoopst: {cheapestTime} ({cheapestPrice !== undefined ? Number(cheapestPrice).toFixed(3) : ''} {unit})
                                   </div>
                                 )}
                               </div>
 
-                              {Array.isArray(a.data.hourly_curve_today) && a.data.hourly_curve_today.length > 0 && (
+                              {Array.isArray(hourly) && hourly.length > 0 && (
                                 <div>
                                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
                                     24-uurs prijscurve vandaag
                                   </div>
                                   <div className="energy-bars-container">
                                     {(() => {
-                                      const prices = a.data.hourly_curve_today.map((h: any) => h.price);
-                                      const minP = Math.min(...prices);
-                                      const maxP = Math.max(...prices);
+                                      const prices = hourly.map((h: any) => typeof h.price === 'number' ? h.price : parseFloat(h.price)).filter((p: number) => !isNaN(p));
+                                      const minP = prices.length > 0 ? Math.min(...prices) : 0;
+                                      const maxP = prices.length > 0 ? Math.max(...prices) : 0.5;
                                       const range = Math.max(0.01, maxP - minP);
                                       const currentHour = new Date().getHours();
 
-                                      return a.data.hourly_curve_today.map((h: any, idx: number) => {
-                                        const normalized = Math.max(0.15, (h.price - minP) / range);
+                                      return hourly.map((h: any, idx: number) => {
+                                        const hTime = h.hour || h.time || `${idx}:00`;
+                                        const hPrice = typeof h.price === 'number' ? h.price : parseFloat(h.price);
+                                        const normalized = Math.max(0.15, (hPrice - minP) / range);
                                         const heightPercent = Math.round(normalized * 100);
                                         const isCurrent = idx === currentHour;
-                                        const isCheapest = h.time === a.data.cheapest_slot_today?.time;
-                                        const bg = isCheapest ? '#10b981' : isCurrent ? '#6366f1' : h.price > a.data.today_summary.average ? '#ef4444' : '#3b82f6';
+                                        const isCheapest = hTime === cheapestTime;
+                                        const isAboveAvg = avgPrice !== undefined && hPrice > avgPrice;
+                                        const bg = isCheapest ? '#10b981' : isCurrent ? '#6366f1' : isAboveAvg ? '#ef4444' : '#3b82f6';
 
                                         return (
-                                          <div key={idx} className="energy-bar-col" title={`${h.time}: ${h.price.toFixed(3)} ${a.data.unit}`}>
+                                          <div key={idx} className="energy-bar-col" title={`${hTime}: ${hPrice.toFixed(3)} ${unit}`}>
                                             <div className="energy-bar-fill" style={{ height: `${heightPercent}%`, background: bg, opacity: isCurrent || isCheapest ? 1 : 0.65 }} />
                                           </div>
                                         );

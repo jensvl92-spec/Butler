@@ -1425,13 +1425,15 @@ export async function runClientReActOrchestrator(
         turn++;
         log(`🔄 Turn ${turn}/${MAX_TURNS}: Calling ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}...`);
 
-        const requestBody = {
+        const requestBody: any = {
             model,
             messages,
             tools: ORCHESTRATOR_TOOLS,
             tool_choice: 'auto',
-            temperature: 0.3,
-            max_tokens: 800
+            // Google recommends temperature 1.0 for Gemini 3 to prevent degraded/empty output
+            temperature: provider === 'gemini' ? 1.0 : 0.3,
+            // Allow ample tokens for Gemini thinking budget + completion tokens
+            max_tokens: 2500
         };
 
         const headers: Record<string, string> = {
@@ -1465,6 +1467,20 @@ export async function runClientReActOrchestrator(
         }
 
         const assistantMsg = choice.message;
+        // Ensure content is not null/undefined to prevent serialization issues
+        if (assistantMsg.content === null || assistantMsg.content === undefined) {
+            assistantMsg.content = '';
+        }
+
+        // Sanitize tool_calls if present (Gemini sometimes emits empty string IDs)
+        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+            assistantMsg.tool_calls.forEach((tc: any, idx: number) => {
+                if (!tc.id || tc.id.trim() === '') {
+                    tc.id = `call_${Date.now()}_${idx}`;
+                }
+            });
+        }
+
         messages.push(assistantMsg);
 
         // Check if the model made tool calls
@@ -1626,10 +1642,11 @@ export async function runClientReActOrchestrator(
                 log(`📤 Tool ${fnName} result: ${JSON.stringify(toolResult).substring(0, 200)}...`);
 
                 // Append tool response message
+                const callId = toolCall.id || `call_${Date.now()}`;
                 messages.push({
                     role: 'tool',
-                    tool_call_id: toolCall.id,
-                    content: JSON.stringify(toolResult)
+                    tool_call_id: callId,
+                    content: `${JSON.stringify(toolResult)}\n\n[Instructie: Geef nu direct een vriendelijk, volledig en gesproken antwoord in het Nederlands met de gevraagde gegevens aan de gebruiker.]`
                 });
             }
             // Loop back to send tool results to the model
@@ -1643,9 +1660,50 @@ export async function runClientReActOrchestrator(
     }
 
     if (!finalResponseText && actionsTaken.length > 0) {
-        finalResponseText = (options.language || 'nl').startsWith('nl')
-            ? 'De gewenste actie is uitgevoerd.'
-            : 'Action completed successfully.';
+        // Smart natural language fallback synthesizer for informational tools
+        const energyAction = actionsTaken.find(a => a.type === 'energy');
+        const weatherAction = actionsTaken.find(a => a.type === 'weather');
+        const calAction = actionsTaken.find(a => a.type === 'calendar');
+        const todoAction = actionsTaken.find(a => a.type === 'todo');
+        const histAction = actionsTaken.find(a => a.type === 'history');
+        const logAction = actionsTaken.find(a => a.type === 'logbook');
+
+        if (energyAction && energyAction.data) {
+            const d = energyAction.data;
+            const unit = d.unit || '€/kWh';
+            const cur = d.current_price !== undefined ? `${Number(d.current_price).toFixed(3)} ${unit}` : 'onbekend';
+            const avg = d.average_price_today !== undefined ? ` Het daggemiddelde ligt vandaag op ${Number(d.average_price_today).toFixed(3)} ${unit}.` : '';
+            const cheapestObj = Array.isArray(d.cheapest_hours_today) && d.cheapest_hours_today.length > 0
+                ? d.cheapest_hours_today[0]
+                : d.cheapest_slot_today;
+            const cheap = cheapestObj ? ` Het voordeligste moment is om ${cheapestObj.hour || cheapestObj.time} (${Number(cheapestObj.price).toFixed(3)} ${unit}).` : '';
+            finalResponseText = `De actuele stroomprijs is ${cur}.${avg}${cheap}`;
+        } else if (weatherAction && weatherAction.data?.current) {
+            const w = weatherAction.data.current;
+            const desc = w.weather_description || 'weeroverzicht';
+            const temp = w.temperature !== undefined ? `${w.temperature}°C` : '';
+            const wind = w.wind_speed !== undefined ? `, wind ${w.wind_speed} km/h` : '';
+            const dew = w.dew_point !== undefined ? `, dauwpunt ${w.dew_point}°C` : '';
+            finalResponseText = `Het is momenteel ${temp} (${desc}) met een luchtvochtigheid van ${w.relative_humidity}%${wind}${dew}.`;
+        } else if (calAction && Array.isArray(calAction.data?.events)) {
+            const evs = calAction.data.events;
+            if (evs.length > 0) {
+                const list = evs.slice(0, 3).map((e: any) => `${e.summary} (${new Date(e.start).toLocaleDateString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short' })})`).join(', ');
+                finalResponseText = `Geplande afspraken: ${list}.`;
+            } else {
+                finalResponseText = 'Er staan geen afspraken gepland in de komende periode.';
+            }
+        } else if (todoAction && todoAction.data) {
+            finalResponseText = todoAction.data.message || 'De to-do lijst is bijgewerkt.';
+        } else if (histAction && histAction.data) {
+            finalResponseText = histAction.data.summary || `Statistieken opgehaald voor ${histAction.entity_id}.`;
+        } else if (logAction && logAction.data) {
+            finalResponseText = logAction.data.summary || 'Gebeurtenissen opgehaald uit het logboek.';
+        } else {
+            finalResponseText = (options.language || 'nl').startsWith('nl')
+                ? 'De gewenste actie is uitgevoerd.'
+                : 'Action completed successfully.';
+        }
     }
 
     return {
