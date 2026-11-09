@@ -242,13 +242,18 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'get_energy_prices',
-            description: 'Haalt de actuele stroomprijs, 24-uurs dynamische energie/spotprijzen per uur (vandaag en morgen), daggemiddelde, piek/daluren en het goedkoopste tijdslot op vanuit Home Assistant (Nordpool, ENTSO-E, EPEX Spot, Tibber, Frank Energie, etc.) of live marktprijzen. Gebruik dit ALTIJD bij vragen over stroomprijzen, dynamische tarieven of wanneer het goedkoop is om apparaten te gebruiken.',
+            description: 'Haalt de actuele stroomprijs of gasprijs, dynamische energie/spotprijzen voor de komende uren (vandaag en morgen), daggemiddelde, piek/daluren en het goedkoopste tijdslot op vanuit Home Assistant (EnergyZero, Nordpool, ENTSO-E, EPEX Spot, etc.) of live marktprijzen. Gebruik dit ALTIJD bij vragen over stroomprijzen, elektriciteitstarieven of gas.',
             parameters: {
                 type: 'object',
                 properties: {
                     device_or_sensor: {
                         type: 'string',
-                        description: 'Optionele specifieke Home Assistant sensor entity_id (bv. sensor.nordpool_kwh_be_eur_3_10_0). Indien leeg zoekt Butler automatisch naar de actieve spotprijsintegratie.'
+                        description: 'Optionele specifieke Home Assistant sensor entity_id (bv. sensor.energyzero_today_energy_current_hour_price voor stroom, of sensor.energyzero_today_gas_current_hour_price voor gas). Indien leeg zoekt Butler automatisch naar de juiste sensor.'
+                    },
+                    energy_type: {
+                        type: 'string',
+                        enum: ['electricity', 'gas'],
+                        description: 'Geeft aan of de gebruiker naar elektriciteit/stroom vraagt (standaard: electricity) of naar gas (gas). Selecteer ALTIJD electricity voor stroomvragen!'
                     }
                 }
             }
@@ -782,7 +787,9 @@ async function executeEnergyPricesTool(
         }
     }
 
-    // 1. Check for active Home Assistant spot price sensors (Nordpool, ENTSO-E, EPEX Spot, Tibber, Frank Energie, etc.)
+    const isGasQuery = args.energy_type === 'gas' || /gas|gasprijs|kuub|m³|m3/i.test(args.device_or_sensor || '');
+
+    // 1. Check for active Home Assistant spot price sensors (EnergyZero, Nordpool, ENTSO-E, EPEX Spot, etc.)
     let priceSensor: any = null;
     let detectedProvider = 'Home Assistant';
 
@@ -795,6 +802,18 @@ async function executeEnergyPricesTool(
             const id = (s.entity_id || '').toLowerCase();
             const fn = (s.attributes?.friendly_name || '').toLowerCase();
             const uom = (s.attributes?.unit_of_measurement || '').toLowerCase();
+
+            // Strict separation: never mix gas and electricity!
+            if (!isGasQuery) {
+                if (id.includes('gas') || fn.includes('gas') || uom.includes('m³') || uom.includes('m3')) {
+                    return false;
+                }
+            } else {
+                if (!id.includes('gas') && !fn.includes('gas') && !uom.includes('m³') && !uom.includes('m3')) {
+                    return false;
+                }
+            }
+
             return (
                 id.includes('nordpool') ||
                 id.includes('entsoe') ||
@@ -806,25 +825,36 @@ async function executeEnergyPricesTool(
                 id.includes('stroomprijs') ||
                 id.includes('spotprijs') ||
                 id.includes('electricity_price') ||
+                id.includes('gasprijs') ||
                 fn.includes('stroomprijs') ||
+                fn.includes('gasprijs') ||
                 fn.includes('nordpool') ||
                 fn.includes('spotprijs') ||
                 uom.includes('/kwh') ||
                 uom.includes('/mwh') ||
+                uom.includes('/m³') ||
+                uom.includes('/m3') ||
                 s.attributes?.today ||
                 s.attributes?.raw_today ||
                 s.attributes?.prices
             );
         });
 
-        priceSensor = candidates.find(s => s.entity_id.includes('nordpool')) ||
-            candidates.find(s => s.entity_id.includes('entsoe')) ||
-            candidates.find(s => s.entity_id.includes('epex')) ||
-            candidates.find(s => s.entity_id.includes('tibber')) ||
-            candidates.find(s => s.entity_id.includes('frank_energie')) ||
-            candidates.find(s => s.entity_id.includes('energyzero')) ||
-            candidates.find(s => s.entity_id.includes('price') || s.entity_id.includes('prijs')) ||
-            candidates[0];
+        if (!isGasQuery) {
+            priceSensor = candidates.find(s => s.entity_id.includes('energyzero') && (s.entity_id.includes('energy') || s.entity_id.includes('current_hour_price'))) ||
+                candidates.find(s => s.entity_id.includes('nordpool')) ||
+                candidates.find(s => s.entity_id.includes('entsoe')) ||
+                candidates.find(s => s.entity_id.includes('epex')) ||
+                candidates.find(s => s.entity_id.includes('tibber')) ||
+                candidates.find(s => s.entity_id.includes('frank_energie')) ||
+                candidates.find(s => s.entity_id.includes('energyzero')) ||
+                candidates.find(s => s.entity_id.includes('price') || s.entity_id.includes('prijs')) ||
+                candidates[0];
+        } else {
+            priceSensor = candidates.find(s => s.entity_id.includes('energyzero') && s.entity_id.includes('gas')) ||
+                candidates.find(s => s.entity_id.includes('gas')) ||
+                candidates[0];
+        }
 
         if (priceSensor) {
             if (priceSensor.entity_id.includes('nordpool')) detectedProvider = 'Nordpool';
@@ -837,35 +867,89 @@ async function executeEnergyPricesTool(
     }
 
     if (priceSensor) {
-        const unit = priceSensor.attributes?.unit_of_measurement || '€/kWh';
+        const unit = priceSensor.attributes?.unit_of_measurement || (isGasQuery ? '€/m³' : '€/kWh');
         const currentPrice = parseFloat(priceSensor.state);
-        const hourly: Array<{ hour: string; price: number }> = [];
+        let hourly: Array<{ hour: string; price: number }> = [];
 
-        if (Array.isArray(priceSensor.attributes?.today)) {
+        // Parse attributes.prices (array or object)
+        if (Array.isArray(priceSensor.attributes?.prices)) {
+            priceSensor.attributes.prices.forEach((item: any, idx: number) => {
+                const val = typeof item === 'number' ? item : (item?.price ?? item?.value ?? parseFloat(item?.price));
+                const timeStr = item?.readingDate || item?.time || item?.start || item?.timestamp || item?.from;
+                let hourLabel = '';
+                if (timeStr) {
+                    const d = new Date(timeStr);
+                    if (!isNaN(d.getTime())) {
+                        hourLabel = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                    }
+                }
+                if (!hourLabel) hourLabel = `${idx.toString().padStart(2, '0')}:00`;
+                if (!isNaN(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
+            });
+        } else if (priceSensor.attributes?.prices && typeof priceSensor.attributes.prices === 'object') {
+            Object.entries(priceSensor.attributes.prices).forEach(([ts, p]: [string, any]) => {
+                const val = typeof p === 'number' ? p : (p?.price ?? p?.value ?? parseFloat(p));
+                const d = new Date(ts);
+                const hourLabel = !isNaN(d.getTime())
+                    ? `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                    : ts;
+                if (!isNaN(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
+            });
+        } else if (Array.isArray(priceSensor.attributes?.today)) {
             priceSensor.attributes.today.forEach((p: any, idx: number) => {
                 const val = typeof p === 'number' ? p : parseFloat(p);
                 if (!isNaN(val)) hourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
             });
         } else if (Array.isArray(priceSensor.attributes?.raw_today)) {
-            priceSensor.attributes.raw_today.forEach((item: any) => {
-                const hour = item.start ? new Date(item.start).getHours() : hourly.length;
+            priceSensor.attributes.raw_today.forEach((item: any, idx: number) => {
+                const hour = item.start ? new Date(item.start).getHours() : idx;
                 const val = typeof item.value === 'number' ? item.value : parseFloat(item.value);
-                if (!isNaN(val)) hourly.push({ hour: `${hour.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
-            });
-        } else if (priceSensor.attributes?.prices && typeof priceSensor.attributes.prices === 'object') {
-            Object.entries(priceSensor.attributes.prices).forEach(([ts, p]: [string, any]) => {
-                const hour = new Date(ts).getHours();
-                const val = typeof p === 'number' ? p : parseFloat(p);
                 if (!isNaN(val)) hourly.push({ hour: `${hour.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
             });
         }
 
-        const tomorrowHourly: Array<{ hour: string; price: number }> = [];
+        let tomorrowHourly: Array<{ hour: string; price: number }> = [];
         if (Array.isArray(priceSensor.attributes?.tomorrow)) {
             priceSensor.attributes.tomorrow.forEach((p: any, idx: number) => {
                 const val = typeof p === 'number' ? p : parseFloat(p);
                 if (!isNaN(val)) tomorrowHourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
             });
+        }
+
+        // If hourly list from sensor is empty and this is electricity, enrich via EnergyZero public API!
+        if (hourly.length === 0 && !isGasQuery) {
+            try {
+                const today = new Date().toISOString().slice(0, 10);
+                const ezRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${today}T00:00:00.000Z&tillDate=${today}T23:59:59.999Z&interval=4`);
+                if (ezRes.ok) {
+                    const ezData = await ezRes.json();
+                    if (Array.isArray(ezData.Prices) && ezData.Prices.length > 0) {
+                        hourly = ezData.Prices.map((p: any) => ({
+                            hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
+                            price: Number(p.price.toFixed(4))
+                        }));
+                    }
+                }
+            } catch (e: any) {
+                logger.warn('[ClientOrchestrator] EnergyZero public feed fallback error:', e.message);
+            }
+        }
+
+        // If tomorrowHourly is empty and after 14:00 UTC, attempt fetch
+        if (tomorrowHourly.length === 0 && !isGasQuery) {
+            try {
+                const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+                const tomRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${tomorrow}T00:00:00.000Z&tillDate=${tomorrow}T23:59:59.999Z&interval=4`);
+                if (tomRes.ok) {
+                    const tomData = await tomRes.json();
+                    if (Array.isArray(tomData.Prices) && tomData.Prices.length > 0) {
+                        tomorrowHourly = tomData.Prices.map((p: any) => ({
+                            hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
+                            price: Number(p.price.toFixed(4))
+                        }));
+                    }
+                }
+            } catch { }
         }
 
         const currentHour = new Date().getHours();
@@ -880,9 +964,25 @@ async function executeEnergyPricesTool(
 
         const sorted = [...hourly].sort((a, b) => a.price - b.price);
 
+        // Calculate upcoming prices for the rest of today + tomorrow (next 10-12 hours)
+        const upcomingPrices: Array<{ hour: string; price: number }> = [];
+        hourly.forEach(h => {
+            const hNum = parseInt(h.hour.split(':')[0], 10);
+            if (hNum >= currentHour) {
+                upcomingPrices.push(h);
+            }
+        });
+        if (upcomingPrices.length < 12 && tomorrowHourly.length > 0) {
+            const needed = 12 - upcomingPrices.length;
+            tomorrowHourly.slice(0, needed).forEach(h => {
+                upcomingPrices.push({ hour: `Morgen ${h.hour}`, price: h.price });
+            });
+        }
+
         return {
             source: `Home Assistant (${priceSensor.entity_id}) - ${detectedProvider}`,
             entity_id: priceSensor.entity_id,
+            energy_type: isGasQuery ? 'gas' : 'electricity',
             friendly_name: priceSensor.attributes?.friendly_name || priceSensor.entity_id,
             unit,
             current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
@@ -894,8 +994,12 @@ async function executeEnergyPricesTool(
             most_expensive_hours_today: sorted.slice(-3).reverse(),
             is_cheap_now: typeof average === 'number' ? effectiveCurrentPrice <= average : true,
             hourly_prices_today: hourly,
+            upcoming_prices_next_hours: upcomingPrices,
             tomorrow_prices_available: tomorrowHourly.length > 0,
-            hourly_prices_tomorrow: tomorrowHourly
+            hourly_prices_tomorrow: tomorrowHourly,
+            market_note: isGasQuery
+                ? 'Gasprijzen zijn dagtarieven en veranderen 1x per 24 uur (om 06:00 uur).'
+                : 'Day-ahead elektriciteitsprijzen op de Europese beurs (EPEX Spot / EnergyZero) worden per uur vastgesteld (ieder kwartier binnen dat uur geldt hetzelfde uurtarief).'
         };
     }
 
@@ -932,9 +1036,24 @@ async function executeEnergyPricesTool(
                     }
                 } catch { }
 
+                const upcomingPrices: Array<{ hour: string; price: number }> = [];
+                hourly.forEach(h => {
+                    const hNum = parseInt(h.hour.split(':')[0], 10);
+                    if (hNum >= currentHour) {
+                        upcomingPrices.push(h);
+                    }
+                });
+                if (upcomingPrices.length < 12 && tomorrowPrices.length > 0) {
+                    const needed = 12 - upcomingPrices.length;
+                    tomorrowPrices.slice(0, needed).forEach(h => {
+                        upcomingPrices.push({ hour: `Morgen ${h.hour}`, price: h.price });
+                    });
+                }
+
                 return {
                     source: 'Live Day-Ahead Spotmarkt (EPEX Spot)',
                     note: 'Live spotprijzen opgehaald via de openbare EPEX Spotmarkt feed (BE/NL). Koppel eventueel Nordpool of ENTSO-E in Home Assistant voor leveranciers-specifieke toeslagen.',
+                    energy_type: 'electricity',
                     unit: '€/kWh',
                     current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
                     current_price: Number(currentItem?.price.toFixed(4)),
@@ -945,8 +1064,10 @@ async function executeEnergyPricesTool(
                     most_expensive_hours_today: sorted.slice(-3).reverse(),
                     is_cheap_now: currentItem?.price <= avg,
                     hourly_prices_today: hourly,
+                    upcoming_prices_next_hours: upcomingPrices,
                     tomorrow_prices_available: tomorrowPrices.length > 0,
-                    hourly_prices_tomorrow: tomorrowPrices
+                    hourly_prices_tomorrow: tomorrowPrices,
+                    market_note: 'Day-ahead elektriciteitsprijzen op de Europese beurs (EPEX Spot / EnergyZero) worden per uur vastgesteld (ieder kwartier binnen dat uur geldt hetzelfde tarief).'
                 };
             }
         }
@@ -956,7 +1077,7 @@ async function executeEnergyPricesTool(
 
     return {
         error: 'Kon actuele stroomprijzen niet ophalen uit Home Assistant of live spotmarkt.',
-        hint: 'Installeer of activeer de Nordpool of ENTSO-E integratie in Home Assistant.'
+        hint: 'Installeer of activeer de EnergyZero, Nordpool of ENTSO-E integratie in Home Assistant.'
     };
 }
 
@@ -1646,6 +1767,7 @@ export async function runClientReActOrchestrator(
                 messages.push({
                     role: 'tool',
                     tool_call_id: callId,
+                    name: fnName,
                     content: `${JSON.stringify(toolResult)}\n\n[Instructie: Geef nu direct een vriendelijk, volledig en gesproken antwoord in het Nederlands met de gevraagde gegevens aan de gebruiker.]`
                 });
             }
@@ -1661,7 +1783,12 @@ export async function runClientReActOrchestrator(
 
     if (!finalResponseText && actionsTaken.length > 0) {
         // Smart natural language fallback synthesizer for informational tools
-        const energyAction = actionsTaken.find(a => a.type === 'energy');
+        // When electricity was requested, prioritize electricity over gas action
+        const energyAction = actionsTaken.filter(a => a.type === 'energy').reverse().find(a => {
+            const u = a.data?.unit || '';
+            const t = a.data?.energy_type || '';
+            return t === 'electricity' || u.includes('kWh') || (!u.includes('m³') && !u.includes('m3'));
+        }) || actionsTaken.filter(a => a.type === 'energy').pop();
         const weatherAction = actionsTaken.find(a => a.type === 'weather');
         const calAction = actionsTaken.find(a => a.type === 'calendar');
         const todoAction = actionsTaken.find(a => a.type === 'todo');
@@ -1671,13 +1798,22 @@ export async function runClientReActOrchestrator(
         if (energyAction && energyAction.data) {
             const d = energyAction.data;
             const unit = d.unit || '€/kWh';
+            const isGas = d.energy_type === 'gas' || unit.includes('m³') || unit.includes('m3') || (d.sensor_name && d.sensor_name.toLowerCase().includes('gas'));
+            const typeLabel = isGas ? 'gasprijs' : 'stroomprijs';
             const cur = d.current_price !== undefined ? `${Number(d.current_price).toFixed(3)} ${unit}` : 'onbekend';
             const avg = d.average_price_today !== undefined ? ` Het daggemiddelde ligt vandaag op ${Number(d.average_price_today).toFixed(3)} ${unit}.` : '';
             const cheapestObj = Array.isArray(d.cheapest_hours_today) && d.cheapest_hours_today.length > 0
                 ? d.cheapest_hours_today[0]
                 : d.cheapest_slot_today;
             const cheap = cheapestObj ? ` Het voordeligste moment is om ${cheapestObj.hour || cheapestObj.time} (${Number(cheapestObj.price).toFixed(3)} ${unit}).` : '';
-            finalResponseText = `De actuele stroomprijs is ${cur}.${avg}${cheap}`;
+
+            let upcomingText = '';
+            if (Array.isArray(d.upcoming_prices_next_hours) && d.upcoming_prices_next_hours.length > 0) {
+                const previewHours = d.upcoming_prices_next_hours.slice(0, 10).map((h: any) => `${h.hour}: ${Number(h.price).toFixed(3)} ${unit}`).join(', ');
+                upcomingText = `\n\nKomende uren: ${previewHours}.`;
+            }
+            const noteText = d.market_note ? `\n\n*${d.market_note}*` : '';
+            finalResponseText = `De actuele ${typeLabel} is ${cur}.${avg}${cheap}${upcomingText}${noteText}`;
         } else if (weatherAction && weatherAction.data?.current) {
             const w = weatherAction.data.current;
             const desc = w.weather_description || 'weeroverzicht';

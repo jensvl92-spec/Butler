@@ -273,9 +273,21 @@ mode: ${autoData.mode || 'single'}`;
 
                   if (!actions && !scheduled) return null;
 
+                  // Filter out gas energy cards if an electricity card is present in the same message
+                  const hasElectricityAction = actions?.some((act: any) => 
+                    act.type === 'energy' && (act.data?.energy_type === 'electricity' || act.data?.unit?.includes('kWh') || (!act.data?.unit?.includes('m³') && !act.data?.unit?.includes('m3')))
+                  );
+                  const displayActions = actions?.filter((act: any) => {
+                    if (act.type === 'energy' && hasElectricityAction) {
+                      const isGas = act.data?.energy_type === 'gas' || act.data?.unit?.includes('m³') || act.data?.unit?.includes('m3') || (act.data?.source && act.data?.source.toLowerCase().includes('gas'));
+                      if (isGas) return false;
+                    }
+                    return true;
+                  });
+
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-                      {actions?.map((a: any, i: number) => {
+                      {displayActions?.map((a: any, i: number) => {
                         // A. Weather Widget Card
                         if (a.type === 'weather' && a.data?.current) {
                           const cur = a.data.current;
@@ -319,6 +331,8 @@ mode: ${autoData.mode || 'single'}`;
                         // B. Energy Spot Price Widget Card
                         if (a.type === 'energy' && (a.data?.hourly_prices_today || a.data?.hourly_curve_today || a.data?.current_price !== undefined)) {
                           const unit = a.data.unit || '€/kWh';
+                          const isGas = a.data?.energy_type === 'gas' || unit.includes('m³') || unit.includes('m3') || (a.data.source && a.data.source.toLowerCase().includes('gas'));
+                          const priceTitle = isGas ? 'Gasprijs' : 'Stroomprijs';
                           const curPrice = a.data.current_price;
                           const hourly = a.data.hourly_prices_today || a.data.hourly_curve_today || [];
                           const cheapestObj = Array.isArray(a.data.cheapest_hours_today) && a.data.cheapest_hours_today.length > 0
@@ -333,7 +347,7 @@ mode: ${autoData.mode || 'single'}`;
                               <div className="energy-summary-row">
                                 <div>
                                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                                    Stroomprijs ({a.data.source || a.data.provider || 'EPEX Spot'})
+                                    {priceTitle} ({a.data.source || a.data.provider || 'EPEX Spot'})
                                   </div>
                                   <div className="energy-current-price">
                                     {curPrice !== undefined ? Number(curPrice).toFixed(3) : '–'} {unit}
