@@ -1368,10 +1368,8 @@ export function filterContextEntities(
     const isPureMemory = /onthoud dat|mijn voorkeur is|vergeet dat/i.test(lowerMsg);
     const isPureTodo = /boodschappen|to-do|takenlijst|zet .* op .*lijst|vink .* af/i.test(lowerMsg) && !/lamp|licht|verwarming/i.test(lowerMsg);
     const isPureCalendar = /afvalkalender|restafval|pmd|papier|wanneer.*opgehaald|agenda vandaag|afspraken/i.test(lowerMsg);
-    const isPureSpotPrices = /stroomprijs|energieprijs|spotprijs|dynamisch tarief|dynamische tarieven|uurprijs/i.test(lowerMsg) &&
-        !/wasmachine|droogkast|laden|auto|schakel|aan|uit/i.test(lowerMsg);
 
-    if (isPureWeather || isPureNavigation || isPureMemory || isPureTodo || isPureCalendar || isPureSpotPrices) {
+    if (isPureWeather || isPureNavigation || isPureMemory || isPureTodo || isPureCalendar) {
         return {
             topologySummary,
             relevantEntitiesSection: 'Geen apparaten nodig voor deze vraag.',
@@ -1398,7 +1396,7 @@ export function filterContextEntities(
     if (/muziek|radio|speaker|box|tv|volume|spelen|sonos|media/i.test(lowerMsg)) domains.push('media_player');
     if (/slot|deur|grendel|lock/i.test(lowerMsg)) domains.push('lock');
     if (/stofzuiger|stofzuig|vacuum/i.test(lowerMsg)) domains.push('vacuum');
-    if (/batterij|accu|solar|zonnepaneel|zonnepanelen|opwek|verbruik|kwh/i.test(lowerMsg)) domains.push('sensor');
+    if (/batterij|accu|solar|zonnepaneel|zonnepanelen|opwek|verbruik|kwh|stroom|elektriciteit|energie|prijs|tarief|gas|spot/i.test(lowerMsg)) domains.push('sensor');
 
     const scored = devices.map(d => {
         let score = 0;
@@ -1538,6 +1536,18 @@ export async function runClientReActOrchestrator(
 
     log(`🚀 ReAct Loop started [Provider: ${provider.toUpperCase()}] Model: ${model}`);
 
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+    };
+    if (provider === 'openrouter') {
+        headers['HTTP-Referer'] = 'https://aiha.app';
+        headers['X-Title'] = 'Butler AI App';
+    }
+    if (provider === 'gemini') {
+        headers['x-goog-api-key'] = apiKey;
+    }
+
     const MAX_TURNS = 5;
     let turn = 0;
     let finalResponseText = '';
@@ -1556,18 +1566,6 @@ export async function runClientReActOrchestrator(
             // Allow 10,000 tokens for Gemini thinking models (thinking tokens can consume 2,000-8,000 tokens)
             max_tokens: 10000
         };
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        };
-        if (provider === 'openrouter') {
-            headers['HTTP-Referer'] = 'https://aiha.app';
-            headers['X-Title'] = 'Butler AI App';
-        }
-        if (provider === 'gemini') {
-            headers['x-goog-api-key'] = apiKey;
-        }
 
         const res = await fetch(endpoint, {
             method: 'POST',
@@ -1782,63 +1780,29 @@ export async function runClientReActOrchestrator(
     }
 
     if (!finalResponseText && actionsTaken.length > 0) {
-        // Smart natural language fallback synthesizer for informational tools
-        // When electricity was requested, prioritize electricity over gas action
-        const energyAction = actionsTaken.filter(a => a.type === 'energy').reverse().find(a => {
-            const u = a.data?.unit || '';
-            const t = a.data?.energy_type || '';
-            return t === 'electricity' || u.includes('kWh') || (!u.includes('m³') && !u.includes('m3'));
-        }) || actionsTaken.filter(a => a.type === 'energy').pop();
-        const weatherAction = actionsTaken.find(a => a.type === 'weather');
-        const calAction = actionsTaken.find(a => a.type === 'calendar');
-        const todoAction = actionsTaken.find(a => a.type === 'todo');
-        const histAction = actionsTaken.find(a => a.type === 'history');
-        const logAction = actionsTaken.find(a => a.type === 'logbook');
-
-        if (energyAction && energyAction.data) {
-            const d = energyAction.data;
-            const unit = d.unit || '€/kWh';
-            const isGas = d.energy_type === 'gas' || unit.includes('m³') || unit.includes('m3') || (d.sensor_name && d.sensor_name.toLowerCase().includes('gas'));
-            const typeLabel = isGas ? 'gasprijs' : 'stroomprijs';
-            const cur = d.current_price !== undefined ? `${Number(d.current_price).toFixed(3)} ${unit}` : 'onbekend';
-            const avg = d.average_price_today !== undefined ? ` Het daggemiddelde ligt vandaag op ${Number(d.average_price_today).toFixed(3)} ${unit}.` : '';
-            const cheapestObj = Array.isArray(d.cheapest_hours_today) && d.cheapest_hours_today.length > 0
-                ? d.cheapest_hours_today[0]
-                : d.cheapest_slot_today;
-            const cheap = cheapestObj ? ` Het voordeligste moment is om ${cheapestObj.hour || cheapestObj.time} (${Number(cheapestObj.price).toFixed(3)} ${unit}).` : '';
-
-            let upcomingText = '';
-            if (Array.isArray(d.upcoming_prices_next_hours) && d.upcoming_prices_next_hours.length > 0) {
-                const previewHours = d.upcoming_prices_next_hours.slice(0, 10).map((h: any) => `${h.hour}: ${Number(h.price).toFixed(3)} ${unit}`).join(', ');
-                upcomingText = `\n\nKomende uren: ${previewHours}.`;
+        log('🤖 Requesting LLM to formulate conversational answer directly from tool results...');
+        messages.push({
+            role: 'user',
+            content: 'Formuleer nu direct je natuurlijke, gesproken antwoord aan de gebruiker in het Nederlands op basis van de opgehaalde tool-gegevens. Beantwoord direct en uitsluitend wat de gebruiker heeft gevraagd.'
+        });
+        try {
+            const finalRes = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    temperature: provider === 'gemini' ? 1.0 : 0.3,
+                    max_tokens: 4000
+                })
+            });
+            if (finalRes.ok) {
+                const finalData = await finalRes.json();
+                finalResponseText = finalData.choices?.[0]?.message?.content || '';
+                log(`✅ LLM formulated response length: ${finalResponseText.length}`);
             }
-            const noteText = d.market_note ? `\n\n*${d.market_note}*` : '';
-            finalResponseText = `De actuele ${typeLabel} is ${cur}.${avg}${cheap}${upcomingText}${noteText}`;
-        } else if (weatherAction && weatherAction.data?.current) {
-            const w = weatherAction.data.current;
-            const desc = w.weather_description || 'weeroverzicht';
-            const temp = w.temperature !== undefined ? `${w.temperature}°C` : '';
-            const wind = w.wind_speed !== undefined ? `, wind ${w.wind_speed} km/h` : '';
-            const dew = w.dew_point !== undefined ? `, dauwpunt ${w.dew_point}°C` : '';
-            finalResponseText = `Het is momenteel ${temp} (${desc}) met een luchtvochtigheid van ${w.relative_humidity}%${wind}${dew}.`;
-        } else if (calAction && Array.isArray(calAction.data?.events)) {
-            const evs = calAction.data.events;
-            if (evs.length > 0) {
-                const list = evs.slice(0, 3).map((e: any) => `${e.summary} (${new Date(e.start).toLocaleDateString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short' })})`).join(', ');
-                finalResponseText = `Geplande afspraken: ${list}.`;
-            } else {
-                finalResponseText = 'Er staan geen afspraken gepland in de komende periode.';
-            }
-        } else if (todoAction && todoAction.data) {
-            finalResponseText = todoAction.data.message || 'De to-do lijst is bijgewerkt.';
-        } else if (histAction && histAction.data) {
-            finalResponseText = histAction.data.summary || `Statistieken opgehaald voor ${histAction.entity_id}.`;
-        } else if (logAction && logAction.data) {
-            finalResponseText = logAction.data.summary || 'Gebeurtenissen opgehaald uit het logboek.';
-        } else {
-            finalResponseText = (options.language || 'nl').startsWith('nl')
-                ? 'De gewenste actie is uitgevoerd.'
-                : 'Action completed successfully.';
+        } catch (e: any) {
+            log(`❌ LLM synthesis call error: ${e.message}`);
         }
     }
 
