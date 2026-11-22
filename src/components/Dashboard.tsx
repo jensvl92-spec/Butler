@@ -21,16 +21,17 @@ interface RoomDevice {
     icon: string
     entityId?: string
     deviceId?: string
-    // Added for detailed matching
+    platform?: string
     isDiagnostic?: boolean
 }
 
-// NEW: Device Group (The actual "Device" in HA terms)
+// Device Group (The actual "Device" in HA terms)
 interface DeviceGroup {
     id: string
     name: string
     manufacturer?: string
     model?: string
+    platform?: string
     areaId?: string
     primaryEntity?: RoomDevice // The "Main" control
     entities: RoomDevice[]
@@ -43,7 +44,6 @@ interface DashboardTile {
     roomName?: string
     roomIcon?: string
     order: number
-    // CHANGE: Now holds DeviceGroups instead of flat Entities
     deviceGroups: DeviceGroup[]
 }
 
@@ -93,20 +93,37 @@ const DEVICE_TYPES = [
     { id: 'light', name: 'Light', icon: '💡', description: 'Control lights and brightness', domain: 'light' },
     { id: 'switch', name: 'Switch', icon: '🔌', description: 'Toggle switches on/off', domain: 'switch' },
     { id: 'climate', name: 'Climate', icon: '🌡️', description: 'Temperature and AC control', domain: 'climate' },
+    { id: 'water_heater', name: 'Boiler', icon: '🔥', description: 'Water heaters', domain: 'water_heater' },
+    { id: 'humidifier', name: 'Humidifier', icon: '💧', description: 'Humidifiers', domain: 'humidifier' },
     { id: 'media', name: 'Media', icon: '📺', description: 'TV and media players', domain: 'media_player' },
     { id: 'cover', name: 'Blinds/Cover', icon: '🪟', description: 'Curtains and blinds', domain: 'cover' },
     { id: 'lock', name: 'Lock', icon: '🔒', description: 'Smart locks', domain: 'lock' },
+    { id: 'valve', name: 'Valve', icon: '🚰', description: 'Smart valves', domain: 'valve' },
+    { id: 'alarm_control_panel', name: 'Alarm', icon: '🛡️', description: 'Alarm panels', domain: 'alarm_control_panel' },
+    { id: 'siren', name: 'Siren', icon: '🚨', description: 'Sirens', domain: 'siren' },
     { id: 'fan', name: 'Fan', icon: '🌀', description: 'Fans and ventilation', domain: 'fan' },
     { id: 'vacuum', name: 'Vacuum', icon: '🤖', description: 'Robot vacuums', domain: 'vacuum' },
+    { id: 'lawn_mower', name: 'Mower', icon: '🌿', description: 'Robot lawn mowers', domain: 'lawn_mower' },
+    { id: 'remote', name: 'Remote', icon: '📱', description: 'Remotes', domain: 'remote' },
     { id: 'camera', name: 'Camera', icon: '📷', description: 'Security cameras', domain: 'camera' },
     { id: 'button', name: 'Button', icon: '🔘', description: 'Action buttons', domain: 'button' },
+    { id: 'input_button', name: 'Input Button', icon: '🔘', description: 'Helper buttons', domain: 'input_button' },
     { id: 'select', name: 'Select', icon: '🎛️', description: 'Mode & program selectors', domain: 'select' },
+    { id: 'input_select', name: 'Input Select', icon: '🎛️', description: 'Helper selectors', domain: 'input_select' },
     { id: 'number', name: 'Number', icon: '🎚️', description: 'Numeric controls', domain: 'number' },
+    { id: 'input_number', name: 'Input Number', icon: '🎚️', description: 'Helper numbers', domain: 'input_number' },
     { id: 'input_boolean', name: 'Toggle', icon: '🔘', description: 'Helper toggles', domain: 'input_boolean' },
-    { id: 'water_heater', name: 'Boiler', icon: '🔥', description: 'Water heaters', domain: 'water_heater' },
-    { id: 'humidifier', name: 'Humidifier', icon: '💧', description: 'Humidifiers', domain: 'humidifier' },
+    { id: 'input_text', name: 'Text', icon: '📝', description: 'Helper text', domain: 'input_text' },
+    { id: 'input_datetime', name: 'Date/Time', icon: '🕒', description: 'Helper date/time', domain: 'input_datetime' },
     { id: 'scene', name: 'Scene', icon: '✨', description: 'Scenes', domain: 'scene' },
     { id: 'script', name: 'Script', icon: '⚡', description: 'Scripts', domain: 'script' },
+    { id: 'automation', name: 'Automation', icon: '🤖', description: 'Automations', domain: 'automation' },
+    { id: 'todo', name: 'To-Do', icon: '✅', description: 'To-do lists', domain: 'todo' },
+    { id: 'calendar', name: 'Calendar', icon: '📅', description: 'Calendars', domain: 'calendar' },
+    { id: 'weather', name: 'Weather', icon: '🌤️', description: 'Weather forecasts', domain: 'weather' },
+    { id: 'person', name: 'Person', icon: '👤', description: 'Presence', domain: 'person' },
+    { id: 'device_tracker', name: 'Tracker', icon: '📍', description: 'Device trackers', domain: 'device_tracker' },
+    { id: 'timer', name: 'Timer', icon: '⏱️', description: 'Timers', domain: 'timer' },
     { id: 'binary_sensor', name: 'Binary Sensor', icon: '📡', description: 'Status & contact sensors', domain: 'binary_sensor' },
     { id: 'sensor', name: 'Sensor', icon: '👁️', description: 'Read-only sensors', domain: 'sensor' },
 ]
@@ -117,10 +134,70 @@ function getApplianceIcon(name: string, fallbackIcon: string): string {
     if (n.includes('droogkast') || n.includes('droger') || n.includes('dryer') || n.includes('tumble')) return '💨'
     if (n.includes('vaatwasser') || n.includes('dishwasher')) return '🍽️'
     if (n.includes('koelkast') || n.includes('fridge') || n.includes('vriezer') || n.includes('freezer')) return '🧊'
-    if (n.includes('oven') || n.includes('kookplaat') || n.includes('fornuis')) return '🔥'
+    if (n.includes('oven') || n.includes('kookplaat') || n.includes('fornuis') || n.includes('microgolf') || n.includes('microwave')) return '🔥'
     if (n.includes('laadpaal') || n.includes('charger') || n.includes('wallbox') || n.includes('ev ')) return '🔋'
     if (n.includes('zonnepanelen') || n.includes('solar') || n.includes('omvormer') || n.includes('inverter')) return '☀️'
+    if (n.includes('warmtepomp') || n.includes('airco') || n.includes('hvac')) return '🌡️'
     return fallbackIcon
+}
+
+/** Strips redundant device-name prefix from a sub-entity label (e.g. "Droogkast Programma" -> "Programma") */
+function getCleanSubEntityName(entityName: string, deviceName: string): string {
+    const raw = (entityName || '').trim()
+    const dev = (deviceName || '').trim()
+    if (!raw || !dev || raw.toLowerCase() === dev.toLowerCase()) return raw || dev
+    const lowerRaw = raw.toLowerCase()
+    const lowerDev = dev.toLowerCase()
+    if (lowerRaw.startsWith(lowerDev)) {
+        const stripped = raw.slice(dev.length).replace(/^[\s\-_:–—]+/, '').trim()
+        if (stripped.length > 0) {
+            return stripped.charAt(0).toUpperCase() + stripped.slice(1)
+        }
+    }
+    return raw
+}
+
+/** Formats HA state strings cleanly for Dutch UI */
+function formatHAStateLabel(state: string, attributes?: Record<string, any>, entityId?: string): string {
+    if (state === undefined || state === null || state === '') return 'Onbekend'
+    const s = String(state)
+    const lower = s.toLowerCase()
+    if (lower === 'unavailable') return 'Niet beschikbaar'
+    if (lower === 'unknown') return 'Onbekend'
+
+    const eid = (entityId || '').toLowerCase()
+    const dc = (attributes?.device_class || '').toLowerCase()
+    if (dc === 'door' || dc === 'window' || dc === 'garage_door' || dc === 'opening' || eid.includes('door') || eid.includes('deur') || eid.includes('window') || eid.includes('raam')) {
+        if (lower === 'on') return 'Open'
+        if (lower === 'off') return 'Dicht'
+    }
+    if (dc === 'motion' || dc === 'occupancy' || dc === 'presence') {
+        if (lower === 'on') return 'Actief'
+        if (lower === 'off') return 'Rustig'
+    }
+    if (dc === 'running' || dc === 'power' || dc === 'plug') {
+        if (lower === 'on') return 'Actief'
+        if (lower === 'off') return 'Uit'
+    }
+    if (lower === 'on') return 'Aan'
+    if (lower === 'off') return 'Uit'
+    if (lower === 'open') return 'Open'
+    if (lower === 'closed') return 'Dicht'
+    if (lower === 'locked') return 'Vergrendeld'
+    if (lower === 'unlocked') return 'Ontgrendeld'
+    if (lower === 'idle' || lower === 'standby') return 'Stand-by'
+    if (lower === 'running' || lower === 'active') return 'Bezig'
+    if (lower === 'paused') return 'Gepauzeerd'
+    if (lower === 'finished' || lower === 'complete' || lower === 'completed') return 'Klaar'
+
+    let formatted = s.replace(/_/g, ' ')
+    if (attributes?.unit_of_measurement) {
+        return `${formatted} ${attributes.unit_of_measurement}`
+    }
+    if (formatted.length < 32 && /^[a-z]/.test(formatted)) {
+        formatted = formatted.charAt(0).toUpperCase() + formatted.slice(1)
+    }
+    return formatted
 }
 
 export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
@@ -140,8 +217,15 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
     const [editingDevice, setEditingDevice] = useState<RoomDevice | null>(null)
     const [selectedEntityId, setSelectedEntityId] = useState('')
 
-    // Detail Modal State
+    // 3-Tier Navigation State: Home -> Room (detailTileId) -> Device Control Sheet (selectedDevice)
     const [detailTileId, setDetailTileId] = useState<string | null>(null)
+    const [selectedDevice, setSelectedDevice] = useState<{
+        tileId: string | null
+        roomName: string
+        groupId: string
+        fallbackGroup?: DeviceGroup
+    } | null>(null)
+    const [showDiagnostics, setShowDiagnostics] = useState(false)
 
     const [inspectorData, setInspectorData] = useState<{ name: string, diagnostics: RoomDevice[] } | null>(null)
 
@@ -150,7 +234,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     // Track which connection's tiles are currently loaded to prevent cross-connection overwrite on switch
     const loadedConnectionIdRef = useRef<string | null>(null)
-    const autoImportedConnRef = useRef<string | null>(null)
+    const lastSyncedSigRef = useRef<string>('')
 
     // Derived State
     const availableEntities = Object.entries(entityStates).map(([id, state]) => ({
@@ -324,39 +408,38 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             let service = 'turn_on'
             let serviceData: any = { entity_id: entityId }
 
-            if (domain === 'light' || domain === 'switch' || domain === 'input_boolean' || domain === 'fan' || domain === 'humidifier') {
-                service = 'toggle' // Use toggle to avoid state sync mismatch
-            } else if (domain === 'button') {
+            if (domain === 'light' || domain === 'switch' || domain === 'input_boolean' || domain === 'fan' || domain === 'humidifier' || domain === 'siren' || domain === 'remote') {
+                service = 'toggle'
+            } else if (domain === 'button' || domain === 'input_button') {
                 service = 'press'
             } else if (domain === 'scene') {
                 service = 'turn_on'
             } else if (domain === 'vacuum') {
                 service = currentState === 'cleaning' ? 'return_to_base' : 'start'
+            } else if (domain === 'lawn_mower') {
+                service = currentState === 'mowing' ? 'dock' : 'start_mowing'
             } else if (domain === 'automation') {
-                service = 'trigger' // Automations are triggered, not toggled
+                service = 'trigger'
             } else if (domain === 'script') {
                 service = 'turn_on'
             } else if (domain === 'media_player') {
                 service = 'media_play_pause'
             } else if (domain === 'cover') {
-                if (currentState === 'closed') {
-                    service = 'open_cover'
-                } else {
-                    service = 'close_cover'
-                }
+                service = currentState === 'closed' ? 'open_cover' : 'close_cover'
+            } else if (domain === 'valve') {
+                service = currentState === 'closed' ? 'open_valve' : 'close_valve'
             } else if (domain === 'lock') {
                 service = currentState === 'locked' ? 'unlock' : 'lock'
             }
 
             await callHAService(domain, service, serviceData, activeConnection.api_url, activeConnection.api_token)
             console.log(`✅ Toggle Sent: ${domain}.${service}`)
-            setToastMsg(`Sent: ${service.replace('_', ' ')} to ${entityId}`) // Visual Feedback with ID
-            setTimeout(() => setToastMsg(null), 2000)
-
+            setToastMsg(`✅ ${service.replace(/_/g, ' ')}`)
+            setTimeout(() => setToastMsg(null), 1800)
 
         } catch (error: any) {
             console.error('Toggle Error:', error)
-            setToastMsg(`Error: ${error.message || 'Failed'}`) // Error Feedback
+            setToastMsg(`❌ ${error.message || 'Actie mislukt'}`)
             setTimeout(() => setToastMsg(null), 3000)
             logger.error(`Toggle Failure: ${error.message || error}`, {
                 entityId,
@@ -369,7 +452,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
     const handleBrightness = async (entityId: string, level: number) => {
         if (!entityId || !activeConnection) return
         try {
-            console.log(`🔆 Set Brightness ${entityId} -> ${level}%`)
             await callHAService('light', 'turn_on', {
                 entity_id: entityId,
                 brightness_pct: level
@@ -383,13 +465,60 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         if (!entityId || !activeConnection) return
         const service = action === 'open' ? 'open_cover' : action === 'close' ? 'close_cover' : 'stop_cover'
         try {
-            console.log(`🪟 Cover Action: ${service} -> ${entityId}`)
             await callHAService('cover', service, { entity_id: entityId }, activeConnection.api_url, activeConnection.api_token)
-            setToastMsg(`Sent: ${service} to ${entityId}`)
-            setTimeout(() => setToastMsg(null), 2000)
+            setToastMsg(`🪟 ${action === 'open' ? 'Openen' : action === 'close' ? 'Sluiten' : 'Gestopt'}`)
+            setTimeout(() => setToastMsg(null), 1800)
         } catch (error: any) {
-            console.error('Cover Error:', error)
-            setToastMsg(`Error: ${error.message}`)
+            setToastMsg(`❌ ${error.message}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
+    const handleSelectOption = async (entityId: string, option: string) => {
+        if (!entityId || !activeConnection) return
+        const domain = entityId.startsWith('input_select.') ? 'input_select' : 'select'
+        try {
+            await callHAService(domain, 'select_option', { entity_id: entityId, option }, activeConnection.api_url, activeConnection.api_token)
+            setToastMsg(`🎛️ Gekozen: ${option.replace(/_/g, ' ')}`)
+            setTimeout(() => setToastMsg(null), 1800)
+        } catch (error: any) {
+            setToastMsg(`❌ ${error.message || 'Selectie mislukt'}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
+    const handleNumberValue = async (entityId: string, value: number) => {
+        if (!entityId || !activeConnection) return
+        const domain = entityId.startsWith('input_number.') ? 'input_number' : 'number'
+        try {
+            await callHAService(domain, 'set_value', { entity_id: entityId, value }, activeConnection.api_url, activeConnection.api_token)
+            setToastMsg(`🎚️ Ingesteld op ${value}`)
+            setTimeout(() => setToastMsg(null), 1800)
+        } catch (error: any) {
+            setToastMsg(`❌ ${error.message || 'Instellen mislukt'}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
+    const handleClimateMode = async (entityId: string, hvacMode: string) => {
+        if (!entityId || !activeConnection) return
+        try {
+            await callHAService('climate', 'set_hvac_mode', { entity_id: entityId, hvac_mode: hvacMode }, activeConnection.api_url, activeConnection.api_token)
+            setToastMsg(`🌡️ Modus: ${hvacMode}`)
+            setTimeout(() => setToastMsg(null), 1800)
+        } catch (error: any) {
+            setToastMsg(`❌ ${error.message || 'Modus wijzigen mislukt'}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
+    const handleMediaAction = async (entityId: string, service: string, extraData?: Record<string, any>) => {
+        if (!entityId || !activeConnection) return
+        try {
+            await callHAService('media_player', service, { entity_id: entityId, ...(extraData || {}) }, activeConnection.api_url, activeConnection.api_token)
+        } catch (error: any) {
+            setToastMsg(`❌ ${error.message || 'Media actie mislukt'}`)
+            setTimeout(() => setToastMsg(null), 2500)
         }
     }
 
@@ -693,8 +822,11 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const coveredEntityIds = new Set<string>()
         const deviceMap = new Map<string, DeviceGroup>()
 
-        // PATH A: Rich HA WebSocket Registries available
+        // PATH A: Rich HA WebSocket / REST-Template Registries available
         if (Array.isArray(entitiesRegList) && entitiesRegList.length > 0) {
+            const devById = new Map<string, any>()
+            ;(devicesList || []).forEach(d => { if (d?.id) devById.set(d.id, d) })
+
             // NOTE: disabled_by may be null OR undefined — use !e.disabled_by!
             const activeRegistryEntities = entitiesRegList.filter(e => e?.entity_id && !e.hidden_by && !e.disabled_by)
             const orphans: any[] = []
@@ -707,18 +839,25 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 const friendlyName = regEntity.name || regEntity.original_name || liveState?.attributes?.friendly_name || regEntity.entity_id
 
                 if (regEntity.device_id) {
+                    const haDevice = devById.get(regEntity.device_id)
+                    const identPlat = Array.isArray(haDevice?.identifiers) && Array.isArray(haDevice.identifiers[0])
+                        ? haDevice.identifiers[0][0]
+                        : undefined
+                    const resolvedPlatform = regEntity.platform || haDevice?.platform || identPlat || undefined
+
                     if (!deviceMap.has(regEntity.device_id)) {
-                        const haDevice = (devicesList || []).find(d => d.id === regEntity.device_id)
                         deviceMap.set(regEntity.device_id, {
                             id: regEntity.device_id,
                             name: haDevice?.name_by_user || haDevice?.name || friendlyName,
                             manufacturer: haDevice?.manufacturer,
                             model: haDevice?.model,
+                            platform: resolvedPlatform,
                             areaId: haDevice?.area_id || regEntity.area_id,
                             entities: []
                         })
                     }
                     const group = deviceMap.get(regEntity.device_id)!
+                    if (!group.platform && resolvedPlatform) group.platform = resolvedPlatform
                     group.entities.push({
                         id: `ent-${regEntity.entity_id}`,
                         type: typeDef.id,
@@ -726,6 +865,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                         icon: getApplianceIcon(`${group.name} ${friendlyName}`, typeDef.icon),
                         entityId: regEntity.entity_id,
                         deviceId: regEntity.device_id,
+                        platform: resolvedPlatform,
                         isDiagnostic: isDiagEntity(regEntity.entity_id, regEntity.entity_category)
                     })
 
@@ -754,20 +894,23 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
             orphans.forEach(orp => {
                 const domain = orp.entity_id.split('.')[0]
-                if (domain === 'sun' || domain === 'weather' || domain === 'zone' || domain === 'person' || domain === 'update') return
+                if (domain === 'sun' || domain === 'zone' || domain === 'update' || domain === 'tts' || domain === 'stt' || domain === 'conversation' || domain === 'persistent_notification') return
                 const liveState = statesMap[orp.entity_id]
                 const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️', name: 'Sensor' }
                 const friendlyName = orp.name || orp.original_name || liveState?.attributes?.friendly_name || orp.entity_id
+                const resolvedPlatform = orp.platform || undefined
 
                 const virtualGroup: DeviceGroup = {
                     id: `orp-${orp.entity_id}`,
                     name: friendlyName,
+                    platform: resolvedPlatform,
                     entities: [{
                         id: `ent-${orp.entity_id}`,
                         type: typeDef.id,
                         name: friendlyName,
                         icon: getApplianceIcon(friendlyName, typeDef.icon),
                         entityId: orp.entity_id,
+                        platform: resolvedPlatform,
                         isDiagnostic: isDiagEntity(orp.entity_id, orp.entity_category)
                     }]
                 }
@@ -803,7 +946,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 }
             } catch { }
 
-            const skipDomains = new Set(['sun', 'weather', 'zone', 'person', 'update', 'tts', 'stt', 'conversation', 'persistent_notification', 'device_tracker'])
+            const skipDomains = new Set(['sun', 'zone', 'update', 'tts', 'stt', 'conversation', 'persistent_notification'])
             liveEntries.forEach((s: any) => {
                 const domain = s.entity_id.split('.')[0]
                 if (skipDomains.has(domain)) return
@@ -847,32 +990,69 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         return { newTiles, areasCreatedCount, devicesAddedCount }
     }
 
-    // Automatic first-load layout population:
-    // Whenever tiles are empty (or all rooms have 0 devices) and HA data arrives, populate automatically!
+    // Merge helper: preserves user's manual-group entries when auto-refreshing HA tiles
+    const mergeWithManualGroups = (freshTiles: DashboardTile[], previousTiles: DashboardTile[]): DashboardTile[] => {
+        const manualByRoom = new Map<string, DeviceGroup>()
+        previousTiles.forEach(t => {
+            const manual = (t.deviceGroups || []).find(g => g.id === 'manual-group')
+            if (manual && manual.entities.length > 0) {
+                manualByRoom.set((t.roomId || t.id).toLowerCase(), manual)
+            }
+        })
+        if (manualByRoom.size === 0) return freshTiles
+        return freshTiles.map(t => {
+            const manual = manualByRoom.get((t.roomId || t.id).toLowerCase())
+            if (!manual) return t
+            return { ...t, deviceGroups: [...t.deviceGroups, manual] }
+        })
+    }
+
+    // Automatic smart sync:
+    // 1. Populates when dashboard has 0 devices
+    // 2. Automatically updates stale localStorage caches whenever HA adds new integrations/devices (like LocalThings)
+    //    or when cached tiles from older versions lack integration `platform` metadata.
     useEffect(() => {
         if (!activeConnection?.id) return
         if (loadedConnectionIdRef.current !== activeConnection.id) return
 
-        const totalDevicesInTiles = tiles.reduce((sum, t) => sum + (t.deviceGroups?.length || 0), 0)
         const hasRegistryData = (haEntitiesRegistry?.length || 0) > 0
-        const hasStateData = Object.keys(entityStates || {}).length > 0
+        const stateCount = Object.keys(entityStates || {}).length
+        if (!hasRegistryData && stateCount === 0) return
 
-        if (!hasRegistryData && !hasStateData) return
+        const sig = `${activeConnection.id}:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
+        if (lastSyncedSigRef.current === sig) return
 
-        // Auto-populate if dashboard currently has 0 devices, OR upgrade REST-only auto-import once full HA registry arrives
-        const importKey = `${activeConnection.id}:${hasRegistryData ? 'reg' : 'states'}`
-        if (totalDevicesInTiles === 0 || (hasRegistryData && autoImportedConnRef.current === `${activeConnection.id}:states`)) {
-            if (autoImportedConnRef.current === importKey) return
+        const existingEntityIds = new Set<string>()
+        let hasAnyPlatformMeta = false
+        let totalDevicesInTiles = 0
+        tiles.forEach(t => {
+            (t.deviceGroups || []).forEach(g => {
+                totalDevicesInTiles++
+                if (g.platform) hasAnyPlatformMeta = true
+                ;(g.entities || []).forEach(e => {
+                    if (e.entityId) existingEntityIds.add(e.entityId)
+                })
+            })
+        })
+
+        const hasNewRegistryEntities = hasRegistryData && haEntitiesRegistry.some(
+            e => e?.entity_id && !e.hidden_by && !e.disabled_by && !existingEntityIds.has(e.entity_id)
+        )
+        const needsPlatformUpgrade = hasRegistryData && totalDevicesInTiles > 0 && !hasAnyPlatformMeta
+
+        if (totalDevicesInTiles === 0 || hasNewRegistryEntities || needsPlatformUpgrade) {
             const { newTiles, devicesAddedCount } = buildTilesFromHA(haAreas, haDevices, haEntitiesRegistry, entityStates)
             if (devicesAddedCount > 0) {
-                autoImportedConnRef.current = importKey
-                setTiles(newTiles)
-                logger.info(`✅ [Dashboard] Auto-populated ${newTiles.length} rooms & ${devicesAddedCount} devices from Home Assistant`)
+                lastSyncedSigRef.current = sig
+                setTiles(prev => mergeWithManualGroups(newTiles, prev))
+                logger.info(`✅ [Dashboard] Auto-synced ${newTiles.length} rooms & ${devicesAddedCount} devices from Home Assistant`)
             }
+        } else {
+            lastSyncedSigRef.current = sig
         }
     }, [activeConnection?.id, haAreas, haDevices, haEntitiesRegistry, entityStates, tiles.length])
 
-    // Manual HA Registry Import (with REST fallback if WS registries are still empty!)
+    // Manual HA Registry Import (with rich REST /api/template fallback if WS registries are empty!)
     const importLayoutFromHA = async () => {
         if (tiles.length > 0 && !window.confirm("Dit vernieuwt je dashboard met de actuele ruimtes en apparaten uit Home Assistant. Doorgaan?")) {
             return
@@ -881,12 +1061,24 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         setIsSyncingLayout(true)
         try {
             let statesToUse = entityStates
-            // If WebSocket registries aren't available yet, also fetch topology & states via REST
-            if ((!haEntitiesRegistry || haEntitiesRegistry.length === 0) && activeConnection?.api_url && activeConnection?.api_token) {
+            let areasToUse = haAreas || []
+            let devicesToUse = haDevices || []
+            let entitiesRegToUse = haEntitiesRegistry || []
+
+            // If WebSocket registries aren't available yet, fetch rich topology (areas + devices + integrations) via REST!
+            if (entitiesRegToUse.length === 0 && activeConnection?.api_url && activeConnection?.api_token) {
                 try {
-                    const { fetchSmartHASync } = await import('../utils/ha-api')
-                    await fetchSmartHASync(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
-                } catch { }
+                    const { fetchRichHATopology } = await import('../utils/ha-api')
+                    const rich = await fetchRichHATopology(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
+                    if (rich.areas.length > 0) areasToUse = rich.areas
+                    if (rich.devices.length > 0) devicesToUse = rich.devices
+                    if (rich.entities.length > 0) entitiesRegToUse = rich.entities
+                } catch {
+                    try {
+                        const { fetchSmartHASync } = await import('../utils/ha-api')
+                        await fetchSmartHASync(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
+                    } catch { }
+                }
             }
 
             if (Object.keys(statesToUse || {}).length === 0 && activeConnection?.api_url && activeConnection?.api_token) {
@@ -894,7 +1086,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                     const { buildHAUrl, sanitizeHAToken, fetchWithTimeout } = await import('../utils/home-assistant')
                     const res = await fetchWithTimeout(buildHAUrl('/api/states', activeConnection.api_url), {
                         headers: { Authorization: `Bearer ${sanitizeHAToken(activeConnection.api_token)}` }
-                    }, 15000)
+                    }, 18000)
                     if (res.ok) {
                         const arr = await res.json()
                         if (Array.isArray(arr)) {
@@ -907,15 +1099,15 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             }
 
             const { newTiles, areasCreatedCount, devicesAddedCount } = buildTilesFromHA(
-                haAreas || [],
-                haDevices || [],
-                haEntitiesRegistry || [],
+                areasToUse,
+                devicesToUse,
+                entitiesRegToUse,
                 statesToUse || {}
             )
 
             if (newTiles.length > 0 || devicesAddedCount > 0) {
-                autoImportedConnRef.current = `${activeConnection?.id || ''}:${(haEntitiesRegistry?.length || 0) > 0 ? 'reg' : 'states'}`
-                setTiles(newTiles)
+                lastSyncedSigRef.current = `${activeConnection?.id || ''}:reg=${entitiesRegToUse.length}:dev=${devicesToUse.length}:area=${areasToUse.length}:st=${Object.keys(statesToUse || {}).length}`
+                setTiles(prev => mergeWithManualGroups(newTiles, prev))
 
                 if (activeConnection) {
                     performToolSync(activeConnection, statesToUse)
@@ -939,54 +1131,27 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         setShowDevicePicker(false)
     }
 
-    // --- Render Helpers ---
-
-    const renderSlider = (entityId: string, currentBri: number) => {
-        // Simple click-to-set slider simulation
-        return (
-            <div className="slider-container"
-                onClick={(e) => {
-                    e.stopPropagation();
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const pct = Math.min(100, Math.max(0, Math.round((x / rect.width) * 100)));
-                    handleBrightness(entityId, pct);
-                }}
-            >
-                <div className="slider-fill" style={{ width: `${currentBri}%` }}></div>
-                <span className="slider-value">{currentBri}%</span>
-            </div>
-        )
-    }
-
     // --- UI Helpers ---
 
     const getDevicePriority = (type: string) => {
         // High priority: Controls that do things
-        if (['light', 'switch', 'lock', 'cover', 'climate', 'media', 'input_boolean', 'automation'].includes(type)) return 0
+        if (['light', 'switch', 'lock', 'cover', 'climate', 'media', 'input_boolean', 'automation', 'select', 'button'].includes(type)) return 0
         // Medium: Binary Sensors (often security/occupancy)
         if (type === 'binary_sensor') return 1
         // Low: Read-only sensors
         return 2
     }
 
-
-
-    // New: Render merged layout (Device List)
+    // Level 1: Home Room Card (1 clean summary row per physical device)
     const renderRoomCard = (tile: DashboardTile) => {
-        // 1. Flatten for "Header Sensors" check (Temp/Hum)
-        // We look for any entity in any group that matches
-
         let temp: { config: RoomDevice, ha: any } | undefined;
         let hum: { config: RoomDevice, ha: any } | undefined;
 
         if (tile.id !== 'unassigned') {
             const allEntities = tile.deviceGroups.flatMap(g => g.entities).map(d => ({ config: d, ha: entityStates[d.entityId || ''] }))
 
-            // Helper: Avoid batteries and non-relevant sensors
             const isValidEnv = (d: any) => {
                 const id = d.config.entityId?.toLowerCase() || '';
-                // Exclude battery, power, signal, and hardware/system temps (cpu, wifi, etc)
                 if (id.includes('battery') || id.includes('power') || id.includes('signal') ||
                     id.includes('cpu') || id.includes('processor') || id.includes('wifi') ||
                     id.includes('uptime') || id.includes('device_temp')) return false;
@@ -1020,7 +1185,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 <div className="room-header">
                     <div className="room-title">
                         <span style={{ fontSize: '1.5rem' }}>
-                            {/* Dynamic Weather Icon */}
                             {(tile.id.includes('weather') && entityStates['sun.sun']) ?
                                 (entityStates['sun.sun'].state === 'below_horizon' ? '🌙' : '☀️')
                                 : tile.roomIcon
@@ -1028,7 +1192,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                         </span>
                         <span style={{ fontSize: '1.2rem', fontWeight: 600 }}>{tile.roomName}</span>
 
-                        {/* Environmental Info */}
                         {(tempVal || humVal) && (
                             <span style={{ marginLeft: 12, fontSize: '0.9rem', opacity: 0.7, fontWeight: 400 }}>
                                 {tempVal && <span>{tempVal}{tempUnit}</span>}
@@ -1054,7 +1217,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                             .filter(g => {
                                 const primary = g.primaryEntity || g.entities[0];
                                 if (!primary) return false;
-                                // Only hide pure diagnostic-only items from the summary card (still visible in detail view!)
                                 if (primary.isDiagnostic && g.entities.every(e => e.isDiagnostic)) return false;
                                 return true;
                             })
@@ -1072,66 +1234,44 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
                                 const ha = entityStates[primary.entityId || '']
                                 const config = primary
+                                const summary = getDeviceGroupSummary(group)
 
-                                const isToggleable = ['light', 'switch', 'input_boolean', 'lock', 'media', 'cover', 'fan', 'vacuum', 'humidifier'].includes(config.type)
-                                const isActive = ha?.state === 'on' || ha?.state === 'playing' || ha?.state === 'open' || ha?.state === 'running' || ha?.state === 'cleaning'
+                                const isSimpleToggleable =
+                                    group.entities.length === 1 &&
+                                    ['light', 'switch', 'input_boolean', 'lock', 'media', 'cover', 'fan', 'vacuum', 'humidifier'].includes(config.type)
                                 const isWarm = (config.type === 'sensor' || config.type === 'climate') && (ha?.attributes?.device_class === 'temperature')
 
-                                let stateDisplay = ha?.state || 'Onbekend'
-
-                                if (config.entityId === 'sun.sun') {
-                                    stateDisplay = ha?.state === 'above_horizon' ? 'Dag' : 'Nacht'
-                                } else if ((config.type === 'binary_sensor' || config.entityId?.includes('door') || config.entityId?.includes('window')) && (
-                                    config.entityId?.includes('door') ||
-                                    config.entityId?.includes('window') ||
-                                    config.entityId?.includes('opening') ||
-                                    ha?.attributes?.device_class === 'door' ||
-                                    ha?.attributes?.device_class === 'window' ||
-                                    ha?.attributes?.device_class === 'garage_door'
-                                )) {
-                                    stateDisplay = ha?.state === 'on' ? 'Open' : 'Dicht'
-                                } else if (config.type === 'light') {
-                                    stateDisplay = isActive ? 'Aan' : 'Uit'
-                                } else if (config.type === 'cover') {
-                                    if (ha?.state === 'open' && ha.attributes?.current_position !== undefined) {
-                                        stateDisplay = `Open (${ha.attributes.current_position}%)`
-                                    } else {
-                                        stateDisplay = ha?.state === 'open' ? 'Open' : ha?.state === 'closed' ? 'Dicht' : ha?.state || 'Onbekend'
-                                    }
-                                }
-
-                                if (ha?.attributes?.unit_of_measurement) stateDisplay += ` ${ha.attributes.unit_of_measurement}`
-                                if (!ha?.attributes?.unit_of_measurement && stateDisplay.includes('_')) {
-                                    stateDisplay = stateDisplay.replace(/_/g, ' ')
-                                }
-                                if (!ha?.attributes?.unit_of_measurement && stateDisplay.length < 24 && !stateDisplay.includes('(')) {
-                                    stateDisplay = stateDisplay.charAt(0).toUpperCase() + stateDisplay.slice(1)
-                                }
-                                if (config.id.includes('motion')) stateDisplay = isActive ? 'Beweging' : 'Rustig'
-
-                                // For multi-entity HA devices (like Wasmachine / Droogkast), show the Device Name clearly!
                                 const displayName = (group.entities.length > 1 && group.name && group.name !== 'Unknown Device')
                                     ? group.name
                                     : (config.name || group.name)
 
                                 return (
-                                    <div key={group.id} className="entity-row">
+                                    <div
+                                        key={group.id}
+                                        className="entity-row"
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            setDetailTileId(tile.id)
+                                            openDeviceSheet(tile.id, tile.roomName || 'Kamer', group)
+                                        }}
+                                    >
                                         <div className="entity-main">
-                                            <div className={`entity-icon ${isActive ? 'active' : ''} ${isWarm ? 'warm' : ''}`}>
-                                                {config.icon}
+                                            <div className={`entity-icon ${summary.isActive ? 'active' : ''} ${isWarm ? 'warm' : ''}`}>
+                                                {getApplianceIcon(displayName, config.icon)}
                                             </div>
                                             <div className="entity-name">{displayName}</div>
                                         </div>
 
-                                        {isToggleable ? (
-                                            <div className={`toggle-switch compact ${isActive ? 'on' : ''}`}
+                                        {isSimpleToggleable ? (
+                                            <div className={`toggle-switch compact ${summary.isActive ? 'on' : ''}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     handleToggle(config.entityId!, ha?.state || 'off')
                                                 }}>
                                             </div>
                                         ) : (
-                                            <div className="entity-state">{stateDisplay}</div>
+                                            <div className="entity-state">{summary.statusText} ›</div>
                                         )}
                                     </div>
                                 )
@@ -1154,165 +1294,164 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         }
     }
 
-    // UPDATED: Inline Detail View (Not Modal)
+    // Helper: compute a clean, human-readable summary string for a DeviceGroup
+    const getDeviceGroupSummary = (group: DeviceGroup): { statusText: string; isActive: boolean; controlCount: number; nonDiagCount: number } => {
+        const nonDiag = group.entities.filter(e => !e.isDiagnostic)
+        const primary = group.primaryEntity || nonDiag[0] || group.entities[0]
+        const primaryHa = primary?.entityId ? entityStates[primary.entityId] : undefined
+
+        const controlDomains = new Set([
+            'light', 'switch', 'input_boolean', 'select', 'input_select', 'button', 'input_button',
+            'number', 'input_number', 'climate', 'water_heater', 'cover', 'lock', 'valve', 'fan',
+            'humidifier', 'vacuum', 'lawn_mower', 'media', 'siren', 'remote', 'scene', 'script'
+        ])
+        const controlCount = nonDiag.filter(e => controlDomains.has(e.type)).length
+
+        const isActiveState = (st?: string) => {
+            const s = (st || '').toLowerCase()
+            return s === 'on' || s === 'playing' || s === 'open' || s === 'running' || s === 'cleaning' || s === 'mowing' || s === 'active' || s === 'heating' || s === 'cooling' || s === 'auto'
+        }
+
+        const isActive = nonDiag.some(e => {
+            const ha = e.entityId ? entityStates[e.entityId] : undefined
+            return ha && controlDomains.has(e.type) && isActiveState(ha.state)
+        }) || (primaryHa ? isActiveState(primaryHa.state) : false)
+
+        if (!primary || !primaryHa) {
+            return { statusText: 'Onbekend', isActive: false, controlCount, nonDiagCount: nonDiag.length }
+        }
+
+        if (primary.type === 'light') {
+            const bri = primaryHa.attributes?.brightness ? Math.round((primaryHa.attributes.brightness / 255) * 100) : 0
+            return {
+                statusText: isActiveState(primaryHa.state) ? (bri > 0 ? `Aan • ${bri}%` : 'Aan') : 'Uit',
+                isActive: isActiveState(primaryHa.state),
+                controlCount,
+                nonDiagCount: nonDiag.length
+            }
+        }
+        if (primary.type === 'climate' || primary.type === 'water_heater') {
+            const cur = primaryHa.attributes?.current_temperature
+            const tgt = primaryHa.attributes?.temperature
+            const mode = formatHAStateLabel(primaryHa.state)
+            const parts = [mode]
+            if (cur !== undefined) parts.push(`${cur}°`)
+            if (tgt !== undefined) parts.push(`→ ${tgt}°`)
+            return { statusText: parts.join(' • '), isActive: primaryHa.state !== 'off', controlCount, nonDiagCount: nonDiag.length }
+        }
+        if (primary.type === 'cover') {
+            const pos = primaryHa.attributes?.current_position
+            const txt = primaryHa.state === 'open' && pos !== undefined
+                ? `Open (${pos}%)`
+                : formatHAStateLabel(primaryHa.state, primaryHa.attributes, primary.entityId)
+            return { statusText: txt, isActive: primaryHa.state === 'open', controlCount, nonDiagCount: nonDiag.length }
+        }
+        if (primary.type === 'media') {
+            const title = primaryHa.attributes?.media_title
+            const mode = formatHAStateLabel(primaryHa.state)
+            return { statusText: title ? `${mode} • ${title}` : mode, isActive: primaryHa.state === 'playing', controlCount, nonDiagCount: nonDiag.length }
+        }
+
+        // For multi-entity appliances (washer, dryer, dishwasher, etc.): combine primary status + remaining time if active!
+        const primaryText = formatHAStateLabel(primaryHa.state, primaryHa.attributes, primary.entityId)
+        if (nonDiag.length > 1) {
+            const remSensor = nonDiag.find(e =>
+                e.entityId &&
+                e.entityId !== primary.entityId &&
+                /remaining|resterend|time_left|completion|progress/.test(e.entityId.toLowerCase())
+            )
+            const remHa = remSensor?.entityId ? entityStates[remSensor.entityId] : undefined
+            if (remHa && remHa.state && !['unknown', 'unavailable', '0', '00:00', '0:00:00', 'none', 'idle'].includes(String(remHa.state).toLowerCase())) {
+                const remFormatted = formatHAStateLabel(remHa.state, remHa.attributes, remSensor?.entityId)
+                return { statusText: `${primaryText} • ${remFormatted}`, isActive, controlCount, nonDiagCount: nonDiag.length }
+            }
+        }
+
+        return { statusText: primaryText, isActive, controlCount, nonDiagCount: nonDiag.length }
+    }
+
+    const openDeviceSheet = (tileId: string | null, roomName: string, group: DeviceGroup) => {
+        setShowDiagnostics(false)
+        setSelectedDevice({
+            tileId,
+            roomName,
+            groupId: group.id,
+            fallbackGroup: group
+        })
+    }
+
+    // LEVEL 2: Room Detail View — 1 clean, tappable Device Card per Device (NO flat entity soup!)
     const renderDetailView = () => {
         const tile = tiles.find(t => t.id === detailTileId)
         if (!tile) return null
 
-        // 1. Flatten all entities from groups
-        const allEntities = tile.deviceGroups.flatMap(g => g.entities)
+        const visibleGroups = tile.deviceGroups.filter(g => g.entities && g.entities.length > 0)
 
-        // 2. Categorize
-        const primaryDevices = allEntities.filter(d => !d.isDiagnostic)
-        const diagnosticDevices = allEntities.filter(d => d.isDiagnostic)
+        const controlGroupTypes = new Set([
+            'light', 'switch', 'input_boolean', 'climate', 'water_heater', 'cover', 'lock', 'valve',
+            'media', 'fan', 'vacuum', 'lawn_mower', 'humidifier', 'select', 'input_select', 'button',
+            'input_button', 'number', 'input_number', 'siren', 'remote', 'scene', 'script', 'alarm_control_panel'
+        ])
 
-        const covers = primaryDevices.filter(e => e.type === 'cover')
-        const climateDevices = primaryDevices.filter(e => e.type === 'climate' || e.type === 'water_heater')
-        const controlTypes = new Set(['light', 'switch', 'input_boolean', 'lock', 'media', 'fan', 'vacuum', 'humidifier', 'button', 'scene', 'script'])
-        const controls = primaryDevices.filter(e => controlTypes.has(e.type))
-        const sensors = primaryDevices.filter(e => !controlTypes.has(e.type) && e.type !== 'cover' && e.type !== 'climate' && e.type !== 'water_heater')
+        const applianceAndControlGroups: DeviceGroup[] = []
+        const sensorOnlyGroups: DeviceGroup[] = []
 
-        const renderCard = (config: RoomDevice) => {
-            const ha = entityStates[config.entityId || '']
-            if (!ha) return null
-
-            const isOn = ha.state === 'on' || ha.state === 'playing' || ha.state === 'open' || ha.state === 'unlocked' || ha.state === 'cleaning'
-            const isLight = config.type === 'light'
-            const isCover = config.type === 'cover'
-            const isClimate = config.type === 'climate'
-            const isLock = config.type === 'lock'
-            const isMedia = config.type === 'media'
-            const isTriggerable = config.type === 'button' || config.type === 'scene' || config.type === 'script'
-            const isToggleControl = isLight || config.type === 'switch' || config.type === 'input_boolean' || isLock || isMedia || config.type === 'fan' || config.type === 'vacuum' || config.type === 'humidifier'
-            const isSensor = !isCover && !isClimate && !isToggleControl && !isTriggerable
-            const brightness = ha.attributes?.brightness ? Math.round((ha.attributes.brightness / 255) * 100) : 0
-
-            // Only match diagnostics when deviceId is actually defined
-            const myDiagnostics = config.deviceId
-                ? diagnosticDevices.filter(d => d.deviceId === config.deviceId)
-                : []
-
-            // Value Display
-            let valueDisplay = ha.state
-            if (isCover) {
-                valueDisplay = ha.state === 'open' ? 'Open' : ha.state === 'closed' ? 'Dicht' : ha.state
-            } else if (isClimate) {
-                const cur = ha.attributes?.current_temperature
-                const target = ha.attributes?.temperature
-                valueDisplay = `${ha.state}${cur !== undefined ? ` • ${cur}°` : ''}${target !== undefined ? ` → ${target}°` : ''}`
-            } else if (isLight) {
-                valueDisplay = isOn ? (brightness > 0 ? `Aan • ${brightness}%` : 'Aan') : 'Uit'
-            } else if (isLock) {
-                valueDisplay = ha.state === 'locked' ? 'Vergrendeld' : ha.state === 'unlocked' ? 'Ontgrendeld' : ha.state
-            } else if (isMedia) {
-                valueDisplay = ha.attributes?.media_title ? `${ha.state} • ${ha.attributes.media_title}` : ha.state
-            } else if (isTriggerable) {
-                valueDisplay = config.type === 'button' ? 'Druk om uit te voeren' : 'Activeer'
-            } else if (!isSensor) {
-                valueDisplay = isOn ? 'Aan' : 'Uit'
-            } else if (ha.attributes?.unit_of_measurement) {
-                valueDisplay += ` ${ha.attributes.unit_of_measurement}`
+        visibleGroups.forEach(group => {
+            const hasControl = group.entities.some(e => !e.isDiagnostic && controlGroupTypes.has(e.type))
+            if (hasControl || group.entities.length > 1) {
+                applianceAndControlGroups.push(group)
+            } else {
+                sensorOnlyGroups.push(group)
             }
+        })
 
-            const iconColor = isOn || (isCover && ha.state === 'open') || (isClimate && ha.state !== 'off') ? 'var(--accent)' : 'var(--text-secondary)'
-            const targetTemp = typeof ha.attributes?.temperature === 'number' ? ha.attributes.temperature : 20
+        const renderDeviceTileCard = (group: DeviceGroup) => {
+            const primary = group.primaryEntity || group.entities[0]
+            if (!primary) return null
+            const ha = primary.entityId ? entityStates[primary.entityId] : undefined
+            const summary = getDeviceGroupSummary(group)
+            const icon = getApplianceIcon(group.name, primary.icon)
+
+            const isSimpleToggle =
+                group.entities.length === 1 &&
+                ['light', 'switch', 'input_boolean', 'fan', 'humidifier', 'lock', 'valve', 'siren', 'remote'].includes(primary.type) &&
+                !!primary.entityId
+
+            const extraCount = summary.nonDiagCount
 
             return (
-                <div key={config.id} className="detail-card" style={{ position: 'relative' }}>
-                    <div className="detail-card-header">
-                        <div className="detail-icon" style={{ color: iconColor }}>
-                            {config.icon}
+                <div
+                    key={group.id}
+                    className={`device-tile-card ${summary.isActive ? 'is-active' : ''}`}
+                    onClick={() => openDeviceSheet(tile.id, tile.roomName || 'Kamer', group)}
+                >
+                    <div className="device-tile-icon">{icon}</div>
+                    <div className="device-tile-meta">
+                        <div className="device-tile-title">{group.name}</div>
+                        <div className="device-tile-sub">
+                            <span>{summary.statusText}</span>
+                            {group.platform && (
+                                <span className="integration-pill">{group.platform}</span>
+                            )}
                         </div>
-                        <div className="detail-info">
-                            <div className="detail-name">{config.name}</div>
-                            <div className="detail-state">{valueDisplay}</div>
-                        </div>
-
-                        {/* Toggle for controllable switches, lights, locks, fans, vacuums, media players */}
-                        {isToggleControl && (
-                            <div className={`toggle-switch compact ${isOn ? 'on' : ''} detail-toggle`}
-                                onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}>
-                            </div>
-                        )}
-
-                        {/* Action button for button/scene/script entities */}
-                        {isTriggerable && (
-                            <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}
-                                style={{
-                                    padding: '4px 10px',
-                                    borderRadius: '8px',
-                                    background: 'rgba(99, 102, 241, 0.2)',
-                                    border: '1px solid rgba(99, 102, 241, 0.4)',
-                                    color: '#a5b4fc',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer'
+                    </div>
+                    <div className="device-tile-right">
+                        {isSimpleToggle ? (
+                            <div
+                                className={`toggle-switch compact ${summary.isActive ? 'on' : ''}`}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleToggle(primary.entityId!, ha?.state || 'off')
                                 }}
-                            >
-                                ▶
-                            </button>
+                            />
+                        ) : extraCount > 1 ? (
+                            <span className="device-options-pill">
+                                {summary.controlCount > 0 ? `🎛️ ${summary.controlCount}` : `📊 ${extraCount}`} ›
+                            </span>
+                        ) : (
+                            <span style={{ opacity: 0.45, fontSize: '1.1rem', fontWeight: 600 }}>›</span>
                         )}
                     </div>
-
-                    {/* Climate Controls */}
-                    {isClimate && (
-                        <div className="detail-controls-row" style={{ paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
-                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleClimateTemp(config.entityId!, Math.round((targetTemp - 0.5) * 2) / 2) }}>
-                                −
-                            </div>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 44, textAlign: 'center' }}>{targetTemp}°</div>
-                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleClimateTemp(config.entityId!, Math.round((targetTemp + 0.5) * 2) / 2) }}>
-                                +
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Cover Controls Row */}
-                    {isCover && (
-                        <div className="detail-controls-row" style={{ paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
-                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleCoverAction(config.entityId!, 'open') }}>
-                                ⬆
-                            </div>
-                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleCoverAction(config.entityId!, 'stop') }}>
-                                ⏹
-                            </div>
-                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleCoverAction(config.entityId!, 'close') }}>
-                                ⬇
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Light Brightness Slider (if on) */}
-                    {isLight && isOn && (
-                        <div style={{ marginTop: 'auto', padding: '8px 0', paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
-                            {renderSlider(config.entityId!, brightness)}
-                        </div>
-                    )}
-
-                    {/* Diagnostics Button - Bottom Left */}
-                    {myDiagnostics.length > 0 && (
-                        <div style={{
-                            position: 'absolute',
-                            bottom: 2,
-                            left: 8,
-                            width: 24,
-                            height: 24,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer',
-                            opacity: 0.5,
-                            fontSize: '0.9rem'
-                        }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setInspectorData({ name: config.name, diagnostics: myDiagnostics })
-                            }}>
-                            ℹ️
-                        </div>
-                    )}
                 </div>
             )
         }
@@ -1327,68 +1466,468 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 flexDirection: 'column',
                 height: '100%',
                 flex: 1,
-                width: '100%'
+                width: '100%',
+                overflow: 'hidden'
             }}>
                 {/* Header */}
-                <div className="detail-header" style={{ display: 'flex', alignItems: 'center', marginBottom: '24px', gap: '16px' }}>
-                    <button onClick={() => setDetailTileId(null)} style={{ background: 'transparent', fontSize: '1.2rem', padding: 8, color: 'var(--text-primary)' }}>⬅</button>
-                    <h2 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-primary)' }}>{tile.roomIcon} {tile.roomName}</h2>
-                    <button className="configure-btn" onClick={() => { setDetailTileId(null); openRoomConfig(tile.id) }} style={{ marginLeft: 'auto' }}>⚙️ Config</button>
+                <div className="detail-header" style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', gap: '12px', flexShrink: 0 }}>
+                    <button
+                        className="device-back-btn"
+                        onClick={() => setDetailTileId(null)}
+                    >
+                        ⬅ Kamers
+                    </button>
+                    <h2 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {tile.roomIcon} {tile.roomName}
+                    </h2>
+                    <button className="configure-btn" onClick={() => { setDetailTileId(null); openRoomConfig(tile.id) }} style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                        ⚙️
+                    </button>
                 </div>
 
-                <div className="device-list-scroller" style={{ padding: '0 4px' }}>
-
-                    {/* Climate Section */}
-                    {climateDevices.length > 0 && (
+                <div className="device-list-scroller" style={{ padding: '0 2px 16px' }}>
+                    {applianceAndControlGroups.length > 0 && (
                         <div className="detail-section">
-                            <div className="detail-section-title">
-                                <span>🌡️</span> Climate
+                            <div className="control-section-header">
+                                <span>⚡</span> Apparaten & Bediening ({applianceAndControlGroups.length})
                             </div>
-                            <div className="detail-grid">
-                                {climateDevices.map(renderCard)}
+                            <div className="device-group-grid">
+                                {applianceAndControlGroups.map(renderDeviceTileCard)}
                             </div>
                         </div>
                     )}
 
-                    {/* Covers Section */}
-                    {covers.length > 0 && (
+                    {sensorOnlyGroups.length > 0 && (
                         <div className="detail-section">
-                            <div className="detail-section-title">
-                                <span>🪟</span> Coverings
+                            <div className="control-section-header">
+                                <span>📊</span> Losse Sensoren ({sensorOnlyGroups.length})
                             </div>
-                            <div className="detail-grid">
-                                {covers.map(renderCard)}
+                            <div className="device-group-grid">
+                                {sensorOnlyGroups.map(renderDeviceTileCard)}
                             </div>
                         </div>
                     )}
 
-                    {/* Controls Section (Lights/Switches/Locks/Media) */}
-                    {controls.length > 0 && (
-                        <div className="detail-section">
-                            <div className="detail-section-title">
-                                <span>⚡</span> Controls
-                            </div>
-                            <div className="detail-grid">
-                                {controls.map(renderCard)}
+                    {visibleGroups.length === 0 && (
+                        <div style={{ textAlign: 'center', opacity: 0.55, marginTop: 40 }}>
+                            Geen apparaten gevonden in deze kamer.
+                        </div>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
+    // LEVEL 3: SOTA Interactive Device Control Sheet (switches, pill selectors, action buttons, steppers, sensors & collapsible diagnostics)
+    const renderDeviceControlSheet = () => {
+        if (!selectedDevice) return null
+
+        // Resolve latest group from tiles (so live auto-sync updates reflect immediately) or fallbackGroup
+        const parentTile = selectedDevice.tileId ? tiles.find(t => t.id === selectedDevice.tileId) : undefined
+        const group = parentTile?.deviceGroups.find(g => g.id === selectedDevice.groupId) || selectedDevice.fallbackGroup
+        if (!group) return null
+
+        const summary = getDeviceGroupSummary(group)
+        const primary = group.primaryEntity || group.entities[0]
+        const heroIcon = getApplianceIcon(group.name, primary?.icon || '📦')
+
+        const nonDiag = group.entities.filter(e => !e.isDiagnostic)
+        const diagEntities = group.entities.filter(e => e.isDiagnostic)
+
+        const switchAndMainTypes = new Set([
+            'light', 'switch', 'input_boolean', 'climate', 'water_heater', 'cover', 'lock', 'valve',
+            'fan', 'humidifier', 'vacuum', 'lawn_mower', 'media', 'siren', 'remote', 'alarm_control_panel'
+        ])
+        const selectTypes = new Set(['select', 'input_select'])
+        const buttonTypes = new Set(['button', 'input_button', 'scene', 'script', 'automation'])
+        const numberTypes = new Set(['number', 'input_number'])
+
+        const mainControls = nonDiag.filter(e => switchAndMainTypes.has(e.type))
+        const selectControls = nonDiag.filter(e => selectTypes.has(e.type))
+        const actionControls = nonDiag.filter(e => buttonTypes.has(e.type))
+        const numberControls = nonDiag.filter(e => numberTypes.has(e.type))
+        const sensorEntities = nonDiag.filter(e =>
+            !switchAndMainTypes.has(e.type) &&
+            !selectTypes.has(e.type) &&
+            !buttonTypes.has(e.type) &&
+            !numberTypes.has(e.type)
+        )
+
+        const getActionIcon = (label: string, type: string) => {
+            const l = label.toLowerCase()
+            if (l.includes('start') || l.includes('play') || l.includes('begin')) return '▶'
+            if (l.includes('pauze') || l.includes('pause')) return '⏸'
+            if (l.includes('stop') || l.includes('cancel') || l.includes('annuleer')) return '⏹'
+            if (l.includes('reset') || l.includes('sync') || l.includes('vernieuw')) return '🔄'
+            if (type === 'scene') return '✨'
+            return '⚡'
+        }
+
+        return (
+            <div className="device-sheet">
+                {/* Top Navigation Bar */}
+                <div className="device-sheet-topbar">
+                    <button
+                        className="device-back-btn"
+                        onClick={() => setSelectedDevice(null)}
+                    >
+                        ⬅ {selectedDevice.roomName}
+                    </button>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+                        {group.entities.length} {group.entities.length === 1 ? 'entiteit' : 'entiteiten'}
+                    </span>
+                </div>
+
+                {/* Device Hero Banner */}
+                <div className="device-sheet-hero">
+                    <div className="device-hero-icon">{heroIcon}</div>
+                    <div className="device-hero-info">
+                        <div className="device-hero-name">{group.name}</div>
+                        <div className="device-hero-meta">
+                            {(group.manufacturer || group.model) && (
+                                <span>{[group.manufacturer, group.model].filter(Boolean).join(' • ')}</span>
+                            )}
+                            {group.platform && (
+                                <span className="integration-pill">{group.platform}</span>
+                            )}
+                        </div>
+                    </div>
+                    <div className={`device-hero-status ${summary.isActive ? 'active' : ''}`}>
+                        {summary.statusText}
+                    </div>
+                </div>
+
+                {/* Scrollable Control Sections */}
+                <div className="device-sheet-scroller">
+
+                    {/* 1. Primary Switches, Lights, Climate, Covers, Media */}
+                    {mainControls.length > 0 && (
+                        <div>
+                            <div className="control-section-header">⚡ Schakelaars & Bediening</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {mainControls.map(ent => {
+                                    const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                    if (!ent.entityId || !ha) return null
+                                    const label = getCleanSubEntityName(ent.name, group.name)
+                                    const isOn = ['on', 'playing', 'open', 'unlocked', 'cleaning', 'mowing', 'active'].includes((ha.state || '').toLowerCase())
+                                    const brightness = ha.attributes?.brightness ? Math.round((ha.attributes.brightness / 255) * 100) : 0
+
+                                    // Climate / Water Heater
+                                    if (ent.type === 'climate' || ent.type === 'water_heater') {
+                                        const targetTemp = typeof ha.attributes?.temperature === 'number' ? ha.attributes.temperature : 20
+                                        const curTemp = ha.attributes?.current_temperature
+                                        const hvacModes: string[] = Array.isArray(ha.attributes?.hvac_modes) ? ha.attributes.hvac_modes : []
+                                        return (
+                                            <div key={ent.id} className="control-block">
+                                                <div className="control-block-row">
+                                                    <div className="control-block-label">
+                                                        <span>{ent.icon}</span>
+                                                        <div>
+                                                            <div>{label}</div>
+                                                            {curTemp !== undefined && (
+                                                                <div className="control-block-value">Nu {curTemp}°C • {formatHAStateLabel(ha.state)}</div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="control-stepper">
+                                                        <button type="button" className="stepper-btn" onClick={() => handleClimateTemp(ent.entityId!, Math.round((targetTemp - 0.5) * 2) / 2)}>−</button>
+                                                        <span className="stepper-val">{targetTemp}°C</span>
+                                                        <button type="button" className="stepper-btn" onClick={() => handleClimateTemp(ent.entityId!, Math.round((targetTemp + 0.5) * 2) / 2)}>+</button>
+                                                    </div>
+                                                </div>
+                                                {hvacModes.length > 0 && ent.type === 'climate' && (
+                                                    <div className="control-pill-grid">
+                                                        {hvacModes.map(mode => (
+                                                            <button
+                                                                key={mode}
+                                                                type="button"
+                                                                className={`control-pill-btn ${ha.state === mode ? 'active' : ''}`}
+                                                                onClick={() => handleClimateMode(ent.entityId!, mode)}
+                                                            >
+                                                                {formatHAStateLabel(mode)}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    }
+
+                                    // Cover
+                                    if (ent.type === 'cover') {
+                                        const pos = ha.attributes?.current_position
+                                        return (
+                                            <div key={ent.id} className="control-block">
+                                                <div className="control-block-row">
+                                                    <div className="control-block-label"><span>{ent.icon}</span> {label}</div>
+                                                    <span className="control-block-value">
+                                                        {formatHAStateLabel(ha.state)}{pos !== undefined ? ` • ${pos}%` : ''}
+                                                    </span>
+                                                </div>
+                                                <div className="control-pill-grid">
+                                                    <button type="button" className={`control-pill-btn ${ha.state === 'open' ? 'active' : ''}`} style={{ flex: 1 }} onClick={() => handleCoverAction(ent.entityId!, 'open')}>⬆ Open</button>
+                                                    <button type="button" className="control-pill-btn" style={{ flex: 1 }} onClick={() => handleCoverAction(ent.entityId!, 'stop')}>⏹ Stop</button>
+                                                    <button type="button" className={`control-pill-btn ${ha.state === 'closed' ? 'active' : ''}`} style={{ flex: 1 }} onClick={() => handleCoverAction(ent.entityId!, 'close')}>⬇ Dicht</button>
+                                                </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Media Player
+                                    if (ent.type === 'media') {
+                                        const title = ha.attributes?.media_title
+                                        return (
+                                            <div key={ent.id} className="control-block">
+                                                <div className="control-block-row">
+                                                    <div className="control-block-label">
+                                                        <span>{ent.icon}</span>
+                                                        <div>
+                                                            <div>{label}</div>
+                                                            <div className="control-block-value">{title || formatHAStateLabel(ha.state)}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="control-pill-grid">
+                                                    <button type="button" className="control-pill-btn" style={{ flex: 1 }} onClick={() => handleMediaAction(ent.entityId!, 'media_previous_track')}>⏮</button>
+                                                    <button type="button" className={`control-pill-btn ${isOn ? 'active' : ''}`} style={{ flex: 1.4 }} onClick={() => handleMediaAction(ent.entityId!, 'media_play_pause')}>{isOn ? '⏸ Pauze' : '▶ Afspelen'}</button>
+                                                    <button type="button" className="control-pill-btn" style={{ flex: 1 }} onClick={() => handleMediaAction(ent.entityId!, 'media_next_track')}>⏭</button>
+                                                    <button type="button" className="control-pill-btn" onClick={() => handleMediaAction(ent.entityId!, 'volume_down')}>🔉</button>
+                                                    <button type="button" className="control-pill-btn" onClick={() => handleMediaAction(ent.entityId!, 'volume_up')}>🔊</button>
+                                                </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Light / Switch / Input Boolean / Fan / Humidifier / Lock / Valve / Vacuum / Mower / Siren / Remote
+                                    return (
+                                        <div key={ent.id} className="control-block">
+                                            <div className="control-block-row">
+                                                <div className="control-block-label">
+                                                    <span>{ent.icon}</span>
+                                                    <div>
+                                                        <div>{label}</div>
+                                                        <div className="control-block-value">
+                                                            {ent.type === 'light'
+                                                                ? (isOn ? (brightness > 0 ? `Aan • ${brightness}%` : 'Aan') : 'Uit')
+                                                                : formatHAStateLabel(ha.state, ha.attributes, ent.entityId)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    className={`toggle-switch ${isOn ? 'on' : ''}`}
+                                                    onClick={() => handleToggle(ent.entityId!, ha.state || 'off')}
+                                                />
+                                            </div>
+                                            {ent.type === 'light' && isOn && (
+                                                <div style={{ width: '100%' }}>
+                                                    <div style={{ width: '100%' }} className="slider-container"
+                                                        onClick={(e) => {
+                                                            const rect = e.currentTarget.getBoundingClientRect()
+                                                            const x = e.clientX - rect.left
+                                                            const pct = Math.min(100, Math.max(0, Math.round((x / rect.width) * 100)))
+                                                            handleBrightness(ent.entityId!, pct)
+                                                        }}
+                                                    >
+                                                        <div className="slider-fill" style={{ width: `${brightness}%` }}></div>
+                                                        <span className="slider-value">Helderheid: {brightness}%</span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                })}
                             </div>
                         </div>
                     )}
 
-                    {/* Sensors Section */}
-                    {sensors.length > 0 && (
-                        <div className="detail-section">
-                            <div className="detail-section-title">
-                                <span>👁️</span> Sensors
-                            </div>
-                            <div className="detail-grid">
-                                {sensors.map(renderCard)}
+                    {/* 2. Select & Input Select — Tactile Pill Buttons! */}
+                    {selectControls.length > 0 && (
+                        <div>
+                            <div className="control-section-header">🎛️ Keuzes & Programma&apos;s</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {selectControls.map(ent => {
+                                    const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                    if (!ent.entityId || !ha) return null
+                                    const label = getCleanSubEntityName(ent.name, group.name)
+                                    const options: string[] = Array.isArray(ha.attributes?.options) ? ha.attributes.options : []
+                                    const currentVal = ha.state
+
+                                    return (
+                                        <div key={ent.id} className="control-block">
+                                            <div className="control-block-row">
+                                                <div className="control-block-label"><span>🎛️</span> {label}</div>
+                                                <span className="control-block-value">{formatHAStateLabel(currentVal)}</span>
+                                            </div>
+                                            {options.length > 0 && options.length <= 10 ? (
+                                                <div className="control-pill-grid">
+                                                    {options.map(opt => (
+                                                        <button
+                                                            key={opt}
+                                                            type="button"
+                                                            className={`control-pill-btn ${currentVal === opt ? 'active' : ''}`}
+                                                            onClick={() => handleSelectOption(ent.entityId!, opt)}
+                                                        >
+                                                            {formatHAStateLabel(opt)}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ) : options.length > 10 ? (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    <select
+                                                        value={currentVal}
+                                                        onChange={(e) => handleSelectOption(ent.entityId!, e.target.value)}
+                                                        style={{
+                                                            width: '100%',
+                                                            padding: '10px 12px',
+                                                            borderRadius: '12px',
+                                                            border: '1px solid rgba(99, 102, 241, 0.4)',
+                                                            background: 'rgba(15, 23, 42, 0.7)',
+                                                            color: '#ffffff',
+                                                            fontSize: '0.88rem',
+                                                            fontWeight: 600,
+                                                            outline: 'none'
+                                                        }}
+                                                    >
+                                                        {options.map(opt => (
+                                                            <option key={opt} value={opt} style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                                                {formatHAStateLabel(opt)}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <div className="control-pill-grid">
+                                                        {options.slice(0, 6).map(opt => (
+                                                            <button
+                                                                key={opt}
+                                                                type="button"
+                                                                className={`control-pill-btn ${currentVal === opt ? 'active' : ''}`}
+                                                                onClick={() => handleSelectOption(ent.entityId!, opt)}
+                                                            >
+                                                                {formatHAStateLabel(opt)}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div style={{ fontSize: '0.78rem', opacity: 0.6 }}>Geen opties beschikbaar</div>
+                                            )}
+                                        </div>
+                                    )
+                                })}
                             </div>
                         </div>
                     )}
 
-                    {!climateDevices.length && !covers.length && !controls.length && !sensors.length && (
-                        <div style={{ textAlign: 'center', opacity: 0.5, marginTop: 40 }}>
-                            No devices found in this room.
+                    {/* 3. Action Buttons (button, input_button, scene, script, automation) */}
+                    {actionControls.length > 0 && (
+                        <div>
+                            <div className="control-section-header">▶️ Acties</div>
+                            <div className="control-action-grid">
+                                {actionControls.map(ent => {
+                                    if (!ent.entityId) return null
+                                    const ha = entityStates[ent.entityId]
+                                    const label = getCleanSubEntityName(ent.name, group.name)
+                                    return (
+                                        <button
+                                            key={ent.id}
+                                            type="button"
+                                            className="control-action-btn"
+                                            onClick={() => handleToggle(ent.entityId!, ha?.state || 'off')}
+                                        >
+                                            <span>{getActionIcon(label, ent.type)}</span>
+                                            <span>{label}</span>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 4. Numeric Steppers (number, input_number) */}
+                    {numberControls.length > 0 && (
+                        <div>
+                            <div className="control-section-header">🎚️ Instellingen</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {numberControls.map(ent => {
+                                    const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                    if (!ent.entityId || !ha) return null
+                                    const label = getCleanSubEntityName(ent.name, group.name)
+                                    const curVal = parseFloat(ha.state)
+                                    const minVal = typeof ha.attributes?.min === 'number' ? ha.attributes.min : 0
+                                    const maxVal = typeof ha.attributes?.max === 'number' ? ha.attributes.max : 100
+                                    const step = typeof ha.attributes?.step === 'number' && ha.attributes.step > 0 ? ha.attributes.step : 1
+                                    const unit = ha.attributes?.unit_of_measurement || ''
+                                    const safeCur = Number.isFinite(curVal) ? curVal : minVal
+
+                                    const adjust = (delta: number) => {
+                                        const next = Math.min(maxVal, Math.max(minVal, Math.round((safeCur + delta) * 100) / 100))
+                                        handleNumberValue(ent.entityId!, next)
+                                    }
+
+                                    return (
+                                        <div key={ent.id} className="control-block">
+                                            <div className="control-block-row">
+                                                <div className="control-block-label"><span>🎚️</span> {label}</div>
+                                                <div className="control-stepper">
+                                                    <button type="button" className="stepper-btn" onClick={() => adjust(-step)}>−</button>
+                                                    <span className="stepper-val">{safeCur}{unit ? ` ${unit}` : ''}</span>
+                                                    <button type="button" className="stepper-btn" onClick={() => adjust(step)}>+</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 5. Live Status & Sensors Grid (2-column glanceable tiles) */}
+                    {sensorEntities.length > 0 && (
+                        <div>
+                            <div className="control-section-header">📊 Live Status & Sensoren</div>
+                            <div className="device-sensor-grid">
+                                {sensorEntities.map(ent => {
+                                    const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                    if (!ha) return null
+                                    const label = getCleanSubEntityName(ent.name, group.name)
+                                    const formatted = formatHAStateLabel(ha.state, ha.attributes, ent.entityId)
+                                    return (
+                                        <div key={ent.id} className="device-sensor-tile">
+                                            <div className="device-sensor-label">{label}</div>
+                                            <div className="device-sensor-value">{formatted}</div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 6. Collapsible Diagnostics & Advanced Config */}
+                    {diagEntities.length > 0 && (
+                        <div>
+                            <button
+                                type="button"
+                                className="diag-accordion-btn"
+                                onClick={() => setShowDiagnostics(prev => !prev)}
+                            >
+                                <span>⚙️ Diagnostiek & Geavanceerd ({diagEntities.length})</span>
+                                <span>{showDiagnostics ? '▲' : '▼'}</span>
+                            </button>
+                            {showDiagnostics && (
+                                <div className="device-sensor-grid" style={{ marginTop: '10px' }}>
+                                    {diagEntities.map(ent => {
+                                        const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                        if (!ha) return null
+                                        const label = getCleanSubEntityName(ent.name, group.name)
+                                        const formatted = formatHAStateLabel(ha.state, ha.attributes, ent.entityId)
+                                        return (
+                                            <div key={ent.id} className="device-sensor-tile" style={{ opacity: 0.85 }}>
+                                                <div className="device-sensor-label">{label}</div>
+                                                <div className="device-sensor-value" style={{ fontSize: '0.86rem' }}>{formatted}</div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1400,13 +1939,27 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         importLayoutFromHA
     }))
 
+    // Level 3 takes priority when a device is selected
+    if (selectedDevice) {
+        return (
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', flex: 1, height: '100%', overflow: 'hidden' }}>
+                {renderDeviceControlSheet()}
+                {toastMsg && (
+                    <div className="toast-notification">
+                        {toastMsg}
+                    </div>
+                )}
+            </div>
+        )
+    }
 
+    // Level 2: Room Detail View (Device Cards)
     if (detailTileId) {
         return (
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', flex: 1, height: '100%', overflow: 'hidden' }}>
                 {renderDetailView()}
 
-                {/* Inspector Modal */}
+                {/* Inspector Modal (legacy fallback) */}
                 {inspectorData && (
                     <div className="modal-overlay" onClick={() => setInspectorData(null)}>
                         <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
@@ -1438,13 +1991,19 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                         </div>
                     </div>
                 )}
+
+                {toastMsg && (
+                    <div className="toast-notification">
+                        {toastMsg}
+                    </div>
+                )}
             </div>
         )
     }
 
-    // Live search across ALL Home Assistant devices & entities (with NL<->EN appliance matching!)
+    // Live search across ALL Home Assistant devices, entities & integrations (grouped by Device!)
     const normalizedSearch = searchQuery.trim().toLowerCase()
-    const searchMatches = normalizedSearch.length >= 2 ? (() => {
+    const searchDeviceMatches = normalizedSearch.length >= 2 ? (() => {
         const synonyms: Record<string, string[]> = {
             wasmachine: ['washer', 'washing', 'was'],
             droogkast: ['dryer', 'droger', 'tumble'],
@@ -1461,17 +2020,61 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             licht: ['light', 'lamp']
         }
         const terms = [normalizedSearch, ...(synonyms[normalizedSearch] || [])]
+        const results: Array<{ tileId: string | null; roomName: string; group: DeviceGroup }> = []
+        const seenGroupIds = new Set<string>()
+        const coveredEntityIds = new Set<string>()
+
+        tiles.forEach(tile => {
+            (tile.deviceGroups || []).forEach(group => {
+                group.entities.forEach(e => { if (e.entityId) coveredEntityIds.add(e.entityId) })
+                const entityHay = group.entities.map(e => `${e.entityId || ''} ${e.name || ''} ${e.platform || ''}`).join(' ')
+                const hay = `${group.name || ''} ${group.manufacturer || ''} ${group.model || ''} ${group.platform || ''} ${tile.roomName || ''} ${entityHay}`.toLowerCase()
+                if (terms.some(t => hay.includes(t)) && !seenGroupIds.has(group.id)) {
+                    seenGroupIds.add(group.id)
+                    results.push({ tileId: tile.id, roomName: tile.roomName || 'Home', group })
+                }
+            })
+        })
+
+        // Also scan any live entities not yet in tiles (e.g. brand-new integration before tile rebuild)
         const devById = new Map<string, any>()
         ;(haDevices || []).forEach((d: any) => { if (d?.id) devById.set(d.id, d) })
         const regByEid = new Map<string, any>()
         ;(haEntitiesRegistry || []).forEach((e: any) => { if (e?.entity_id) regByEid.set(e.entity_id, e) })
 
-        return availableEntities.filter(ent => {
+        availableEntities.forEach(ent => {
+            if (coveredEntityIds.has(ent.entity_id)) return
             const reg = regByEid.get(ent.entity_id)
             const dev = reg?.device_id ? devById.get(reg.device_id) : null
-            const haystack = `${ent.entity_id} ${ent.friendly_name} ${dev?.name_by_user || ''} ${dev?.name || ''} ${dev?.manufacturer || ''} ${dev?.model || ''}`.toLowerCase()
-            return terms.some(t => haystack.includes(t))
-        }).slice(0, 40)
+            const identPlat = Array.isArray(dev?.identifiers) && Array.isArray(dev.identifiers[0]) ? dev.identifiers[0][0] : ''
+            const plat = reg?.platform || dev?.platform || identPlat || ''
+            const hay = `${ent.entity_id} ${ent.friendly_name} ${dev?.name_by_user || ''} ${dev?.name || ''} ${dev?.manufacturer || ''} ${dev?.model || ''} ${plat}`.toLowerCase()
+            if (terms.some(t => hay.includes(t))) {
+                const domain = ent.entity_id.split('.')[0]
+                const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️' }
+                const roomDev: RoomDevice = {
+                    id: `ent-${ent.entity_id}`,
+                    type: typeDef.id,
+                    name: ent.friendly_name,
+                    icon: getApplianceIcon(`${ent.friendly_name} ${ent.entity_id}`, typeDef.icon),
+                    entityId: ent.entity_id,
+                    platform: plat || undefined
+                }
+                results.push({
+                    tileId: null,
+                    roomName: 'Zoeken',
+                    group: {
+                        id: `search-${ent.entity_id}`,
+                        name: ent.friendly_name,
+                        platform: plat || undefined,
+                        primaryEntity: roomDev,
+                        entities: [roomDev]
+                    }
+                })
+            }
+        })
+
+        return results.slice(0, 35)
     })() : []
 
     return (
@@ -1493,7 +2096,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="🔍 Zoek apparaat (bv. wasmachine, droogkast)..."
+                            placeholder="🔍 Zoek apparaat of integratie (bv. droogkast, localthings)..."
                             style={{
                                 width: '100%',
                                 padding: '8px 12px',
@@ -1518,67 +2121,51 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 )}
             </div>
 
-            {/* Instant Search Results */}
+            {/* Instant Grouped Device Search Results (tap any device to open its full Control Sheet!) */}
             {normalizedSearch.length >= 2 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '8px' }}>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0 4px' }}>
-                        {searchMatches.length} resultaten voor &ldquo;{searchQuery}&rdquo;
+                        {searchDeviceMatches.length} apparaten gevonden voor &ldquo;{searchQuery}&rdquo;
                     </div>
-                    {searchMatches.length === 0 ? (
+                    {searchDeviceMatches.length === 0 ? (
                         <div style={{ padding: '24px', textAlign: 'center', opacity: 0.65, fontSize: '0.88rem' }}>
-                            Geen apparaten of sensoren gevonden voor &ldquo;{searchQuery}&rdquo;.
+                            Geen apparaten of integraties gevonden voor &ldquo;{searchQuery}&rdquo;.
                         </div>
                     ) : (
-                        searchMatches.map(ent => {
-                            const domain = ent.entity_id.split('.')[0]
-                            const isToggleable = ['light', 'switch', 'input_boolean', 'lock', 'media_player', 'cover', 'fan', 'vacuum', 'humidifier'].includes(domain)
-                            const isTriggerable = ['button', 'scene', 'script'].includes(domain)
-                            const isActive = ent.state === 'on' || ent.state === 'playing' || ent.state === 'open' || ent.state === 'running'
-                            const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { icon: '👁️' }
-                            const icon = getApplianceIcon(`${ent.friendly_name} ${ent.entity_id}`, typeDef.icon)
-                            const val = ent.attributes?.unit_of_measurement ? `${ent.state} ${ent.attributes.unit_of_measurement}` : ent.state
-
-                            return (
-                                <div
-                                    key={ent.entity_id}
-                                    className="entity-row"
-                                    style={{
-                                        background: 'var(--bg-card)',
-                                        border: '1px solid var(--border)',
-                                        borderRadius: '12px',
-                                        padding: '10px 14px'
-                                    }}
-                                >
-                                    <div className="entity-main" style={{ minWidth: 0 }}>
-                                        <div className={`entity-icon ${isActive ? 'active' : ''}`}>{icon}</div>
-                                        <div style={{ minWidth: 0 }}>
-                                            <div className="entity-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                {ent.friendly_name}
-                                            </div>
-                                            <div style={{ fontSize: '0.72rem', opacity: 0.55, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                {ent.entity_id}
+                        <div className="device-group-grid">
+                            {searchDeviceMatches.map(({ tileId, roomName, group }) => {
+                                const primary = group.primaryEntity || group.entities[0]
+                                if (!primary) return null
+                                const summary = getDeviceGroupSummary(group)
+                                const icon = getApplianceIcon(group.name, primary.icon)
+                                return (
+                                    <div
+                                        key={`${tileId || 's'}-${group.id}`}
+                                        className={`device-tile-card ${summary.isActive ? 'is-active' : ''}`}
+                                        onClick={() => openDeviceSheet(tileId, 'Zoeken', group)}
+                                    >
+                                        <div className="device-tile-icon">{icon}</div>
+                                        <div className="device-tile-meta">
+                                            <div className="device-tile-title">{group.name}</div>
+                                            <div className="device-tile-sub">
+                                                <span>{summary.statusText}</span>
+                                                <span style={{ opacity: 0.6 }}>• {roomName}</span>
+                                                {group.platform && <span className="integration-pill">{group.platform}</span>}
                                             </div>
                                         </div>
+                                        <div className="device-tile-right">
+                                            {summary.nonDiagCount > 1 ? (
+                                                <span className="device-options-pill">
+                                                    {summary.controlCount > 0 ? `🎛️ ${summary.controlCount}` : `📊 ${summary.nonDiagCount}`} ›
+                                                </span>
+                                            ) : (
+                                                <span style={{ opacity: 0.45, fontSize: '1.1rem', fontWeight: 600 }}>›</span>
+                                            )}
+                                        </div>
                                     </div>
-                                    {isToggleable ? (
-                                        <div
-                                            className={`toggle-switch compact ${isActive ? 'on' : ''}`}
-                                            onClick={() => handleToggle(ent.entity_id, ent.state)}
-                                        />
-                                    ) : isTriggerable ? (
-                                        <button
-                                            type="button"
-                                            onClick={() => handleToggle(ent.entity_id, ent.state)}
-                                            style={{ padding: '4px 10px', borderRadius: '8px', background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.4)', color: '#a5b4fc', cursor: 'pointer', fontSize: '0.78rem' }}
-                                        >
-                                            ▶
-                                        </button>
-                                    ) : (
-                                        <div className="entity-state">{val}</div>
-                                    )}
-                                </div>
-                            )
-                        })
+                                )
+                            })}
+                        </div>
                     )}
                 </div>
             ) : tiles.length === 0 ? (

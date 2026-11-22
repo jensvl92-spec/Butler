@@ -59,6 +59,11 @@ export interface HADevice {
   entity_id: string;
   state: string;
   attributes: Record<string, any>;
+  device_name?: string;
+  manufacturer?: string;
+  model?: string;
+  area_name?: string;
+  platform?: string;
 }
 
 export interface HAService {

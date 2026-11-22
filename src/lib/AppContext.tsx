@@ -20,6 +20,7 @@ interface AppContextType {
   haAreas: any[]
   haDevices: any[]
   haEntitiesRegistry: any[]
+  haSyncSource: 'none' | 'cache' | 'rest' | 'websocket'
 
   activeSuggestion: Suggestion | null
   setActiveSuggestion: (suggestion: Suggestion | null) => void
@@ -55,6 +56,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [haAreas, setHaAreas] = useState<any[]>([])
   const [haDevices, setHaDevices] = useState<any[]>([])
   const [haEntitiesRegistry, setHaEntitiesRegistry] = useState<any[]>([])
+  const [haSyncSource, setHaSyncSource] = useState<'none' | 'cache' | 'rest' | 'websocket'>('none')
   const [activeSuggestion, setActiveSuggestion] = useState<Suggestion | null>(null)
   const [shouldTriggerVoice, setShouldTriggerVoice] = useState(false)
 
@@ -95,6 +97,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setHaAreas([])
         setHaDevices([])
         setHaEntitiesRegistry([])
+        setHaSyncSource('none')
         setActiveSuggestion(null)
         Preferences.remove({ key: 'ButlerWidget.ha_url' }).catch(() => {})
         Preferences.remove({ key: 'ButlerWidget.ha_token' }).catch(() => {})
@@ -139,7 +142,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const activeApiUrl = activeConnection?.api_url || ''
   const activeApiToken = activeConnection?.api_token || (activeConnection as any)?.token || ''
 
-  // Active connection lifecycle: cache hydration, REST states, Rooms, and WebSocket
+  // Active connection lifecycle: cache hydration, REST states + rich topology fallback, Rooms, and WebSocket
   useEffect(() => {
     if (!activeConnectionId) {
       setRooms([])
@@ -148,6 +151,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setHaAreas([])
       setHaDevices([])
       setHaEntitiesRegistry([])
+      setHaSyncSource('none')
       setActiveSuggestion(null)
       return
     }
@@ -155,6 +159,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let isCancelled = false
     let ws: HAWebSocket | null = null
     let syncTimer: ReturnType<typeof setTimeout> | null = null
+    let restTopologyTimer: ReturnType<typeof setTimeout> | null = null
+    let initialSyncTimer: ReturnType<typeof setTimeout> | null = null
+    let wsRegistriesLoaded = false
+    let initialSnapshotSynced = false
 
     // Sync HA credentials to native widget SharedPreferences
     const syncWidgetCredentials = async () => {
@@ -167,6 +175,73 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     syncWidgetCredentials()
 
+    // Helper: schedule a gentle chunked initial snapshot sync so idle/powered-off appliances
+    // (like washers/dryers) are always known to proactive backend workers
+    const scheduleInitialStateSnapshotSync = (statesObj: Record<string, any>) => {
+      if (initialSnapshotSynced || isCancelled) return
+      const entries = Object.entries(statesObj)
+      if (entries.length === 0) return
+      initialSnapshotSynced = true
+
+      initialSyncTimer = setTimeout(async () => {
+        if (isCancelled) return
+        const chunkSize = 150
+        try {
+          for (let i = 0; i < entries.length; i += chunkSize) {
+            if (isCancelled) break
+            const chunk = entries.slice(i, i + chunkSize).map(([entity_id, state]) => ({
+              entity_id,
+              state: state?.state,
+              attributes: state?.attributes
+            }))
+            await supabase.functions.invoke('mcp-librarian/sync-states', {
+              body: {
+                connection_id: activeConnectionId,
+                states: chunk
+              }
+            }).catch(() => {})
+          }
+        } catch { }
+      }, 5000)
+    }
+
+    // Helper: persist enriched topology cache
+    const persistTopologyCache = (loadedAreas: any[], loadedDevices: any[], loadedEntities: any[]) => {
+      if (loadedAreas.length === 0 && loadedEntities.length === 0) return
+      try {
+        const devAreaMap = new Map<string, string>()
+        loadedDevices.forEach((d: any) => {
+          if (d?.id && d?.area_id) devAreaMap.set(d.id, d.area_id)
+        })
+        const areaEntityMap = new Map<string, string[]>()
+        loadedAreas.forEach((a: any) => {
+          if (a?.area_id) areaEntityMap.set(a.area_id, [])
+        })
+        const orphans: string[] = []
+        loadedEntities.forEach((e: any) => {
+          if (!e?.entity_id || e.hidden_by || e.disabled_by) return
+          const aid = e.area_id || (e.device_id ? devAreaMap.get(e.device_id) : undefined)
+          if (aid && areaEntityMap.has(aid)) {
+            areaEntityMap.get(aid)!.push(e.entity_id)
+          } else {
+            orphans.push(e.entity_id)
+          }
+        })
+        const topologyObj = {
+          floors: [],
+          areas: loadedAreas.map((a: any) => ({
+            id: a.area_id,
+            name: a.name,
+            entities: areaEntityMap.get(a.area_id) || []
+          })),
+          orphans
+        }
+        const serialized = JSON.stringify(topologyObj)
+        localStorage.setItem(`ha_topology_${activeConnectionId}`, serialized)
+        localStorage.setItem('ha_topology_latest', serialized)
+      } catch { }
+    }
+
     // 0. Instant hydration from connection-scoped local cache
     try {
       const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnectionId}`)
@@ -174,6 +249,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const parsed = JSON.parse(cachedStatesRaw)
         if (parsed && typeof parsed === 'object') {
           setEntityStates(parsed)
+          setHaSyncSource('cache')
         }
       } else {
         const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnectionId}`)
@@ -199,6 +275,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
           if (Object.keys(initialObj).length > 0) {
             setEntityStates(initialObj)
+            setHaSyncSource('cache')
           }
         }
       }
@@ -213,7 +290,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             Authorization: `Bearer ${sanitizeHAToken(activeApiToken)}`,
             'Content-Type': 'application/json'
           }
-        }, 15000)
+        }, 18000)
         if (isCancelled || !res.ok) return
         const states = await res.json()
         if (isCancelled || !Array.isArray(states) || states.length === 0) return
@@ -222,14 +299,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         states.forEach((s: any) => {
           if (s?.entity_id) statesObj[s.entity_id] = s
         })
-        // Fresh states override old cache entries
         setEntityStates(prev => ({ ...prev, ...statesObj }))
+        setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
         try {
           localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
         } catch { }
+        scheduleInitialStateSnapshotSync(statesObj)
       } catch { }
     }
     fetchStatesViaRest()
+
+    // 1b. Automatic REST /api/template rich topology fallback (runs if WS hasn't delivered registries within 4.5s)
+    const runRestTopologyFallback = async () => {
+      if (isCancelled || wsRegistriesLoaded || !activeApiUrl || !activeApiToken) return
+      try {
+        const { fetchRichHATopology } = await import('../utils/ha-api')
+        const rich = await fetchRichHATopology(activeApiUrl, activeApiToken, activeConnectionId)
+        if (isCancelled || wsRegistriesLoaded) return
+        if (rich.areas.length > 0) setHaAreas(rich.areas)
+        if (rich.devices.length > 0) setHaDevices(rich.devices)
+        if (rich.entities.length > 0) setHaEntitiesRegistry(rich.entities)
+        setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
+      } catch (err: any) {
+        if (!isCancelled) {
+          console.warn('⚠️ REST rich topology fallback skipped:', err?.message || err)
+        }
+      }
+    }
+
+    restTopologyTimer = setTimeout(() => {
+      if (!wsRegistriesLoaded && !isCancelled) {
+        runRestTopologyFallback()
+      }
+    }, 4500)
 
     // 2. Load Supabase rooms
     const loadRooms = async () => {
@@ -302,12 +404,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const fetchHAData = async () => {
         if (isCancelled || !ws) return
         try {
-          logger.info('🔄 Fetching HA Data (States & Registries)...')
+          logger.info('🔄 Fetching HA Data (States & Registries, 25s timeout)...')
           const [statesSettled, areasSettled, devicesSettled, entitiesSettled] = await Promise.allSettled([
-            ws.sendMessage({ type: 'get_states' }),
-            ws.sendMessage({ type: 'config/area_registry/list' }),
-            ws.sendMessage({ type: 'config/device_registry/list' }),
-            ws.sendMessage({ type: 'config/entity_registry/list' })
+            ws.sendMessage({ type: 'get_states' }, 25000),
+            ws.sendMessage({ type: 'config/area_registry/list' }, 25000),
+            ws.sendMessage({ type: 'config/device_registry/list' }, 25000),
+            ws.sendMessage({ type: 'config/entity_registry/list' }, 25000)
           ])
 
           if (isCancelled) return
@@ -323,58 +425,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               if (state?.entity_id) statesObj[state.entity_id] = state
             })
             setEntityStates(statesObj)
+            setHaSyncSource('websocket')
             try {
               localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
             } catch { }
             logger.info(`✅ Loaded States via WS: ${statesRes.result.length}`)
+            scheduleInitialStateSnapshotSync(statesObj)
           }
 
           const loadedAreas = areasRes?.success && Array.isArray(areasRes.result) ? areasRes.result : []
-          const loadedDevices = devicesRes?.success && Array.isArray(devicesRes.result) ? devicesRes.result : []
+          const rawDevices = devicesRes?.success && Array.isArray(devicesRes.result) ? devicesRes.result : []
+          const loadedDevices = rawDevices.map((d: any) => {
+            const identPlatform = Array.isArray(d?.identifiers) && Array.isArray(d.identifiers[0])
+              ? d.identifiers[0][0]
+              : undefined
+            return {
+              ...d,
+              platform: d?.platform || identPlatform || undefined
+            }
+          })
           const loadedEntities = entitiesRes?.success && Array.isArray(entitiesRes.result) ? entitiesRes.result : []
 
           if (loadedAreas.length > 0) setHaAreas(loadedAreas)
           if (loadedDevices.length > 0) setHaDevices(loadedDevices)
-          if (loadedEntities.length > 0) setHaEntitiesRegistry(loadedEntities)
-
-          // Build & persist topology cache for Butler AI (rooms -> entities & device names)
-          if (loadedAreas.length > 0 || loadedEntities.length > 0) {
-            try {
-              const devAreaMap = new Map<string, string>()
-              loadedDevices.forEach((d: any) => {
-                if (d?.id && d?.area_id) devAreaMap.set(d.id, d.area_id)
-              })
-              const areaEntityMap = new Map<string, string[]>()
-              loadedAreas.forEach((a: any) => {
-                if (a?.area_id) areaEntityMap.set(a.area_id, [])
-              })
-              const orphans: string[] = []
-              loadedEntities.forEach((e: any) => {
-                if (!e?.entity_id || e.hidden_by || e.disabled_by) return
-                const aid = e.area_id || (e.device_id ? devAreaMap.get(e.device_id) : undefined)
-                if (aid && areaEntityMap.has(aid)) {
-                  areaEntityMap.get(aid)!.push(e.entity_id)
-                } else {
-                  orphans.push(e.entity_id)
-                }
-              })
-              const topologyObj = {
-                floors: [],
-                areas: loadedAreas.map((a: any) => ({
-                  id: a.area_id,
-                  name: a.name,
-                  entities: areaEntityMap.get(a.area_id) || []
-                })),
-                orphans
-              }
-              const serialized = JSON.stringify(topologyObj)
-              localStorage.setItem(`ha_topology_${activeConnectionId}`, serialized)
-              localStorage.setItem('ha_topology_latest', serialized)
-            } catch { }
+          if (loadedEntities.length > 0) {
+            wsRegistriesLoaded = true
+            setHaEntitiesRegistry(loadedEntities)
+            setHaSyncSource('websocket')
+            logger.info(`✅ Loaded Registries via WS: ${loadedAreas.length} areas, ${loadedDevices.length} devices, ${loadedEntities.length} entities`)
+          } else {
+            // WS entity_registry failed or timed out -> trigger REST rich topology fallback immediately!
+            logger.warn('⚠️ WS entity_registry empty/failed — invoking REST rich topology fallback')
+            runRestTopologyFallback()
           }
+
+          persistTopologyCache(loadedAreas, loadedDevices, loadedEntities)
         } catch (err: any) {
           if (!isCancelled) {
-            logger.error('❌ Error fetching HA data:', { message: err?.message || String(err) })
+            logger.error('❌ Error fetching HA data via WS (triggering REST fallback):', { message: err?.message || String(err) })
+            runRestTopologyFallback()
           }
         }
       }
@@ -406,7 +495,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (!isCancelled) logger.info('✅ AppContext WS Connected')
         })
         .catch(err => {
-          if (!isCancelled) console.warn('⚠️ AppContext WS initial connect error (REST fallback active):', err)
+          if (!isCancelled) {
+            console.warn('⚠️ AppContext WS initial connect error (REST fallback active):', err)
+            runRestTopologyFallback()
+          }
         })
     }
 
@@ -417,6 +509,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (syncTimer) {
         clearTimeout(syncTimer)
         syncTimer = null
+      }
+      if (restTopologyTimer) {
+        clearTimeout(restTopologyTimer)
+        restTopologyTimer = null
+      }
+      if (initialSyncTimer) {
+        clearTimeout(initialSyncTimer)
+        initialSyncTimer = null
       }
       if (ws) {
         ws.close()
@@ -538,6 +638,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     haAreas,
     haDevices,
     haEntitiesRegistry,
+    haSyncSource,
     activeSuggestion,
     setActiveSuggestion,
     setActiveConnection,
@@ -553,7 +654,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }), [
     user, loading, connections, activeConnection, rooms, chatHistory,
     uiState, entityStates, haWebSocket, haAreas, haDevices, haEntitiesRegistry,
-    activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
+    haSyncSource, activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
     updateRoom, updateUIState, addChatMessage, shouldTriggerVoice
   ])
 

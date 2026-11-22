@@ -737,13 +737,18 @@ export function useAIChatLogic() {
                 const areaId = dev?.area_id || reg?.area_id;
                 const areaName = areaId ? areaById.get(areaId) : undefined;
                 const deviceName = dev?.name_by_user || dev?.name || undefined;
+                const devIdentPlatform = Array.isArray(dev?.identifiers) && Array.isArray(dev.identifiers[0])
+                    ? dev.identifiers[0][0]
+                    : undefined;
+                const platform = reg?.platform || dev?.platform || devIdentPlatform || undefined;
                 return {
                     entity_id: s.entity_id,
                     ...s,
                     device_name: deviceName,
                     manufacturer: dev?.manufacturer || undefined,
                     model: dev?.model || undefined,
-                    area_name: areaName
+                    area_name: areaName,
+                    platform
                 };
             };
 

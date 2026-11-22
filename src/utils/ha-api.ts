@@ -140,6 +140,131 @@ export async function fetchSmartHASync(url: string, token: string, connectionId?
 }
 
 /**
+ * Rich REST Fallback via /api/template:
+ * Retrieves Areas, Devices (name, manufacturer, model, area_id, platform) and Entity Registry metadata
+ * (device_id, area_id, platform/integration domain) even when WebSocket registry calls time out or fail.
+ */
+export async function fetchRichHATopology(url: string, token: string, connectionId?: string): Promise<{
+    areas: HAArea[];
+    devices: Array<HADeviceRegistryEntry & { platform?: string; identifiers?: any[] }>;
+    entities: HAEntityRegistryEntry[];
+    topology: { floors: any[]; areas: Array<{ id: string; name: string; entities: string[] }>; orphans: string[] };
+}> {
+    logger.info(`fetchRichHATopology: Requesting full areas/devices/integrations via REST template from ${url}`);
+
+    const template = `
+    {% set out_areas = namespace(items=[]) %}
+    {% for aid in areas() %}
+      {% set out_areas.items = out_areas.items + [{
+        "area_id": aid,
+        "name": area_name(aid),
+        "entities": area_entities(aid)
+      }] %}
+    {% endfor %}
+
+    {% set out_devices = namespace(seen=[], items=[]) %}
+    {% set out_entities = namespace(items=[]) %}
+    {% set out_orphans = namespace(items=[]) %}
+    {% set has_ce = (config_entry_id is defined and config_entry_attr is defined) %}
+
+    {% for s in states %}
+      {% set eid = s.entity_id %}
+      {% set did = device_id(eid) %}
+      {% set aid = area_id(eid) %}
+      {% set plat = '' %}
+      {% if has_ce %}
+        {% set cid = config_entry_id(eid) %}
+        {% if cid %}
+          {% set plat = config_entry_attr(cid, 'domain') or '' %}
+        {% endif %}
+      {% endif %}
+      {% if not plat and did %}
+        {% set idents = device_attr(did, 'identifiers') %}
+        {% if idents %}
+          {% set ident_list = idents | list %}
+          {% if ident_list | length > 0 and ident_list[0] | length > 0 %}
+            {% set plat = ident_list[0][0] %}
+          {% endif %}
+        {% endif %}
+      {% endif %}
+
+      {% if did and did not in out_devices.seen %}
+        {% set out_devices.seen = out_devices.seen + [did] %}
+        {% set out_devices.items = out_devices.items + [{
+          "id": did,
+          "area_id": device_attr(did, 'area_id'),
+          "name": device_attr(did, 'name'),
+          "name_by_user": device_attr(did, 'name_by_user'),
+          "manufacturer": device_attr(did, 'manufacturer'),
+          "model": device_attr(did, 'model'),
+          "platform": plat
+        }] %}
+      {% endif %}
+
+      {% set out_entities.items = out_entities.items + [{
+        "entity_id": eid,
+        "device_id": did,
+        "area_id": aid,
+        "disabled_by": none,
+        "config_entry_id": none,
+        "name": s.attributes.friendly_name | default(none),
+        "original_name": s.attributes.friendly_name | default(eid),
+        "platform": plat
+      }] %}
+
+      {% if aid == none %}
+        {% set out_orphans.items = out_orphans.items + [eid] %}
+      {% endif %}
+    {% endfor %}
+
+    {{ {
+      "areas": out_areas.items,
+      "devices": out_devices.items,
+      "entities": out_entities.items,
+      "orphans": out_orphans.items
+    } | to_json }}
+    `;
+
+    const response = await fetchWithTimeout(getUrl('/api/template', url), {
+        method: 'POST',
+        headers: getHeaders(token),
+        body: JSON.stringify({ template })
+    }, 25000);
+
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.error(`fetchRichHATopology: Failed ${response.status}`, errorText);
+        throw new Error(`Failed to fetch rich topology (${response.status})`);
+    }
+
+    const text = await response.text();
+    const parsed = JSON.parse(text);
+    const areasList: HAArea[] = Array.isArray(parsed.areas)
+        ? parsed.areas.map((a: any) => ({ area_id: a.area_id, name: a.name }))
+        : [];
+    const devicesList = Array.isArray(parsed.devices) ? parsed.devices : [];
+    const entitiesList: HAEntityRegistryEntry[] = Array.isArray(parsed.entities) ? parsed.entities : [];
+    const topology = {
+        floors: [],
+        areas: Array.isArray(parsed.areas)
+            ? parsed.areas.map((a: any) => ({ id: a.area_id, name: a.name, entities: a.entities || [] }))
+            : [],
+        orphans: Array.isArray(parsed.orphans) ? parsed.orphans : []
+    };
+
+    try {
+        const serialized = JSON.stringify(topology);
+        if (connectionId) {
+            localStorage.setItem(`ha_topology_${connectionId}`, serialized);
+        }
+        localStorage.setItem('ha_topology_latest', serialized);
+    } catch { }
+
+    logger.info(`✅ fetchRichHATopology: ${areasList.length} areas, ${devicesList.length} devices, ${entitiesList.length} entities`);
+    return { areas: areasList, devices: devicesList, entities: entitiesList, topology };
+}
+
+/**
  * Orchestrator: Syncs Home Assistant areas and entities to Dashboard tiles & Supabase rooms
  */
 export async function processHASync(
@@ -183,24 +308,52 @@ export async function processHASync(
     // 3. Build Tiles matching Dashboard.tsx DashboardTile / DeviceGroup schema
     const tiles: any[] = []
 
+    const IGNORED_SYSTEM_DOMAINS = new Set(['sun', 'zone', 'tts', 'stt', 'conversation', 'persistent_notification'])
+
     const getDeviceType = (domain: string): string | null => {
+        if (IGNORED_SYSTEM_DOMAINS.has(domain)) return null
         const types: Record<string, string> = {
             light: 'light',
             switch: 'switch',
             media_player: 'media',
             climate: 'climate',
+            water_heater: 'water_heater',
+            humidifier: 'humidifier',
             fan: 'fan',
             cover: 'cover',
             lock: 'lock',
+            valve: 'valve',
+            alarm_control_panel: 'alarm_control_panel',
+            siren: 'siren',
             vacuum: 'vacuum',
+            lawn_mower: 'lawn_mower',
+            remote: 'remote',
+            button: 'button',
+            input_button: 'input_button',
+            select: 'select',
+            input_select: 'input_select',
+            number: 'number',
+            input_number: 'input_number',
+            input_boolean: 'input_boolean',
+            input_text: 'input_text',
+            input_datetime: 'input_datetime',
             sensor: 'sensor',
             binary_sensor: 'binary_sensor',
             camera: 'camera',
             scene: 'scene',
             script: 'script',
-            automation: 'automation'
+            automation: 'automation',
+            todo: 'todo',
+            calendar: 'calendar',
+            weather: 'weather',
+            person: 'person',
+            device_tracker: 'device_tracker',
+            timer: 'timer',
+            counter: 'counter',
+            event: 'event',
+            image: 'image'
         }
-        return types[domain] || null
+        return types[domain] || 'sensor'
     }
 
     const getIcon = (domain: string): string => {
@@ -209,16 +362,41 @@ export async function processHASync(
             switch: '🔌',
             media_player: '📺',
             climate: '🌡️',
+            water_heater: '🔥',
+            humidifier: '💧',
             fan: '🌀',
             cover: '🪟',
             lock: '🔒',
+            valve: '🚰',
+            alarm_control_panel: '🛡️',
+            siren: '🚨',
             vacuum: '🧹',
+            lawn_mower: '🌿',
+            remote: '📱',
+            button: '🔘',
+            input_button: '🔘',
+            select: '🎛️',
+            input_select: '🎛️',
+            number: '🎚️',
+            input_number: '🎚️',
+            input_boolean: '🔘',
+            input_text: '📝',
+            input_datetime: '🕒',
             sensor: '👁️',
-            binary_sensor: '🔘',
+            binary_sensor: '📡',
             camera: '📷',
-            scene: '🎬',
-            script: '📜',
-            automation: '🤖'
+            scene: '✨',
+            script: '⚡',
+            automation: '🤖',
+            todo: '✅',
+            calendar: '📅',
+            weather: '🌤️',
+            person: '👤',
+            device_tracker: '📍',
+            timer: '⏱️',
+            counter: '🔢',
+            event: '⚡',
+            image: '🖼️'
         }
         return icons[domain] || '📦'
     }

@@ -85,16 +85,16 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'control_home_device',
-            description: 'Bestuurt een apparaat of entiteit in Home Assistant (light, switch, climate, media_player, cover, lock, fan, vacuum, scene, script).',
+            description: 'Bestuurt een apparaat, entiteit of integratie-service in Home Assistant (light, switch, select, button, number, climate, media_player, cover, lock, fan, vacuum, scene, script, of aangepaste integraties zoals localthings).',
             parameters: {
                 type: 'object',
                 properties: {
-                    domain: { type: 'string', description: 'Home Assistant domein (bv. light, switch, climate, media_player, cover, lock, scene, script).' },
-                    service: { type: 'string', description: 'Service naam zonder domeinprefix (bv. turn_on, turn_off, toggle, set_temperature, open_cover).' },
-                    entity_id: { type: 'string', description: 'Exacte Home Assistant entity_id (bv. light.woonkamer).' },
-                    parameters: { type: 'object', description: 'Optionele service parameters (bv. brightness_pct, temperature, color_name).' }
+                    domain: { type: 'string', description: 'Home Assistant domein of integratie (bv. light, switch, select, button, number, climate, media_player, cover, lock, scene, script, localthings).' },
+                    service: { type: 'string', description: 'Service naam zonder domeinprefix (bv. turn_on, turn_off, toggle, select_option, press, set_value, set_temperature, open_cover).' },
+                    entity_id: { type: 'string', description: 'Optionele exacte Home Assistant entity_id (bv. light.woonkamer). Laat weg bij integratie-brede services zonder target entity.' },
+                    parameters: { type: 'object', description: 'Optionele service parameters (bv. brightness_pct, option, value, temperature, color_name).' }
                 },
-                required: ['domain', 'service', 'entity_id']
+                required: ['domain', 'service']
             }
         }
     },
@@ -102,13 +102,14 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'search_home_entities',
-            description: 'Zoekt gericht naar apparaten, sensoren of entiteiten in Home Assistant op trefwoord, kamernaam of domein. Gebruik dit wanneer een gewenst apparaat niet in de initiële selectie staat.',
+            description: 'Zoekt gericht naar apparaten, sensoren, keuzes of knoppen in Home Assistant op trefwoord, kamernaam, domein of integratie (bv. "localthings", "hue", "zigbee2mqtt", "shelly"). Roep met lege filters aan voor een volledig overzicht van alle integraties en apparaten.',
             parameters: {
                 type: 'object',
                 properties: {
-                    query: { type: 'string', description: 'Zoekterm of naam (bv. "leeslamp", "warmtepomp", "deur", "stroomprijs").' },
-                    room: { type: 'string', description: 'Optionele kamernaam (bv. "woonkamer", "keuken", "slaapkamer").' },
-                    domain: { type: 'string', description: 'Optioneel HA-domein (bv. "light", "sensor", "climate", "cover", "camera", "todo").' }
+                    query: { type: 'string', description: 'Zoekterm of naam (bv. "leeslamp", "droogkast", "wasmachine", "localthings", "stroomprijs").' },
+                    room: { type: 'string', description: 'Optionele kamernaam (bv. "woonkamer", "keuken", "wasplaats").' },
+                    domain: { type: 'string', description: 'Optioneel HA-domein (bv. "light", "switch", "select", "button", "number", "sensor", "climate", "cover", "camera", "todo").' },
+                    integration: { type: 'string', description: 'Optionele HA-integratie / platform (bv. "localthings", "hue", "esphome", "zigbee2mqtt", "shelly").' }
                 }
             }
         }
@@ -480,14 +481,16 @@ async function executeDeviceControl(
         domain = entity_id.split('.')[0];
     }
 
-    const serviceData = {
-        entity_id,
-        ...parameters
+    const serviceData: Record<string, any> = {
+        ...parameters,
+        ...(entity_id ? { entity_id } : {})
     };
+
+    const targetLabel = entity_id || `${domain}.${service}`;
 
     const actionRecord: Action = {
         type: domain || 'homeassistant',
-        entity_id,
+        entity_id: entity_id || undefined,
         service: `${domain}.${service}`,
         data: parameters,
         executedLocally: true
@@ -504,7 +507,7 @@ async function executeDeviceControl(
             }, 6000);
             return {
                 success: true,
-                message: `Service ${domain}.${service} uitgevoerd op ${entity_id} via WebSocket.`,
+                message: `Service ${domain}.${service} uitgevoerd op ${targetLabel} via WebSocket.`,
                 action: { ...actionRecord, result: 'success' }
             };
         } catch (wsErr: any) {
@@ -517,13 +520,13 @@ async function executeDeviceControl(
             await callHAService(domain, service, serviceData, options.haUrl, options.haToken);
             return {
                 success: true,
-                message: `Service ${domain}.${service} uitgevoerd op ${entity_id} via REST.`,
+                message: `Service ${domain}.${service} uitgevoerd op ${targetLabel} via REST.`,
                 action: { ...actionRecord, result: 'success' }
             };
         } catch (restErr: any) {
             return {
                 success: false,
-                message: `Fout bij uitvoeren van ${domain}.${service} op ${entity_id}: ${restErr?.message || restErr}`,
+                message: `Fout bij uitvoeren van ${domain}.${service} op ${targetLabel}: ${restErr?.message || restErr}`,
                 action: { ...actionRecord, result: 'error', error_message: restErr?.message }
             };
         }
@@ -1006,7 +1009,7 @@ function expandSearchTerms(rawQuery: string): string[] {
 }
 
 function buildDeviceSearchHaystack(d: any): string {
-    return `${d.entity_id || ''} ${d.attributes?.friendly_name || ''} ${d.device_name || ''} ${d.area_name || ''} ${d.manufacturer || ''} ${d.model || ''}`.toLowerCase();
+    return `${d.entity_id || ''} ${d.attributes?.friendly_name || ''} ${d.device_name || ''} ${d.area_name || ''} ${d.manufacturer || ''} ${d.model || ''} ${d.platform || ''}`.toLowerCase();
 }
 
 async function executeGetEntityStateTool(
@@ -1039,6 +1042,7 @@ async function executeGetEntityStateTool(
             friendly_name: exact.attributes?.friendly_name || exact.entity_id,
             device_name: exact.device_name || undefined,
             area_name: exact.area_name || undefined,
+            integration: exact.platform || undefined,
             state: exact.state,
             unit: exact.attributes?.unit_of_measurement || null,
             attributes: exact.attributes,
@@ -1052,7 +1056,7 @@ async function executeGetEntityStateTool(
             const hay = buildDeviceSearchHaystack(s);
             return terms.some(t => hay.includes(t));
         })
-        .slice(0, 15);
+        .slice(0, 20);
 
     if (matches.length > 0) {
         return {
@@ -1062,6 +1066,7 @@ async function executeGetEntityStateTool(
                 friendly_name: m.attributes?.friendly_name || m.entity_id,
                 device_name: m.device_name || undefined,
                 area_name: m.area_name || undefined,
+                integration: m.platform || undefined,
                 state: m.state,
                 unit: m.attributes?.unit_of_measurement || null,
                 attributes: m.attributes
@@ -1079,6 +1084,7 @@ async function executeSearchEntitiesTool(
     const query = (args.query || '').toLowerCase().trim();
     const room = (args.room || '').toLowerCase().trim();
     const domain = (args.domain || '').toLowerCase().trim();
+    const integration = (args.integration || '').toLowerCase().trim();
 
     let allDevices: any[] = options.devices || [];
     if (allDevices.length === 0 && options.haUrl && options.haToken) {
@@ -1107,9 +1113,35 @@ async function executeSearchEntitiesTool(
         } catch { }
     }
 
-    // If user asks for a general inventory (no query, no room, no domain), return a clean deduplicated device summary!
-    if (!query && !room && !domain) {
-        const groupedByDevice = new Map<string, { device_name: string; area_name?: string; sample_entities: Array<{ entity_id: string; name: string; state: string }> }>();
+    // Build active integrations summary across all entities
+    const integrationStats = new Map<string, { integration: string; entity_count: number; device_names: Set<string> }>();
+    for (const d of allDevices) {
+        const plat = (d.platform || '').toLowerCase().trim();
+        if (!plat) continue;
+        if (!integrationStats.has(plat)) {
+            integrationStats.set(plat, { integration: plat, entity_count: 0, device_names: new Set() });
+        }
+        const entry = integrationStats.get(plat)!;
+        entry.entity_count += 1;
+        if (d.device_name) entry.device_names.add(d.device_name);
+    }
+    const integrationsSummary = Array.from(integrationStats.values())
+        .sort((a, b) => b.entity_count - a.entity_count)
+        .map(item => ({
+            integration: item.integration,
+            devices: item.device_names.size,
+            entities: item.entity_count
+        }));
+
+    // If user asks for a general inventory (no query, no room, no domain, no integration), return ALL integrations + up to 150 devices!
+    if (!query && !room && !domain && !integration) {
+        const groupedByDevice = new Map<string, {
+            device_name: string;
+            area_name?: string;
+            integration?: string;
+            entity_count: number;
+            sample_entities: Array<{ entity_id: string; name: string; state: string }>;
+        }>();
         const standalone: any[] = [];
         const skipDomains = new Set(['update', 'zone', 'sun', 'persistent_notification', 'tts', 'stt', 'conversation']);
 
@@ -1117,15 +1149,18 @@ async function executeSearchEntitiesTool(
             const dom = (d.entity_id || '').split('.')[0];
             if (skipDomains.has(dom)) continue;
             if (d.device_name) {
-                const key = d.device_name.toLowerCase();
+                const key = `${d.device_name.toLowerCase()}::${(d.platform || '').toLowerCase()}`;
                 if (!groupedByDevice.has(key)) {
                     groupedByDevice.set(key, {
                         device_name: d.device_name,
                         area_name: d.area_name,
+                        integration: d.platform || undefined,
+                        entity_count: 0,
                         sample_entities: []
                     });
                 }
                 const entry = groupedByDevice.get(key)!;
+                entry.entity_count += 1;
                 if (entry.sample_entities.length < 3) {
                     entry.sample_entities.push({
                         entity_id: d.entity_id,
@@ -1133,20 +1168,24 @@ async function executeSearchEntitiesTool(
                         state: d.state
                     });
                 }
-            } else if (/^(light|switch|climate|cover|lock|media_player|fan|vacuum|camera|water_heater|sensor)\./.test(d.entity_id)) {
+            } else {
                 standalone.push({
                     entity_id: d.entity_id,
                     name: d.attributes?.friendly_name || d.entity_id,
                     area_name: d.area_name,
+                    integration: d.platform || undefined,
                     state: d.state
                 });
             }
         }
 
+        const allGroupedDevices = Array.from(groupedByDevice.values());
         return {
             total_entities: allDevices.length,
-            devices: Array.from(groupedByDevice.values()).slice(0, 50),
-            standalone_entities: standalone.slice(0, 25)
+            total_devices: allGroupedDevices.length,
+            integrations_summary: integrationsSummary,
+            devices: allGroupedDevices.slice(0, 150),
+            standalone_entities: standalone.slice(0, 50)
         };
     }
 
@@ -1156,8 +1195,10 @@ async function executeSearchEntitiesTool(
         const eid = (d.entity_id || '').toLowerCase();
         const hay = buildDeviceSearchHaystack(d);
         const dDomain = eid.split('.')[0];
+        const dPlat = (d.platform || '').toLowerCase();
 
         if (domain && dDomain !== domain) return false;
+        if (integration && !dPlat.includes(integration) && !eid.includes(integration)) return false;
         if (room) {
             const inTopo = topoEntitiesForRoom ? topoEntitiesForRoom.has(d.entity_id) : false;
             const inArea = (d.area_name || '').toLowerCase().includes(room);
@@ -1165,10 +1206,13 @@ async function executeSearchEntitiesTool(
         }
         if (searchTerms.length > 0 && !searchTerms.some(t => hay.includes(t))) return false;
         return true;
-    }).slice(0, 35);
+    }).slice(0, 60);
 
     if (matches.length === 0) {
-        return { message: `Geen apparaten gevonden voor query="${query}", room="${room}", domain="${domain}".` };
+        return {
+            message: `Geen apparaten gevonden voor query="${query}", room="${room}", domain="${domain}", integration="${integration}".`,
+            available_integrations: integrationsSummary.map(i => i.integration)
+        };
     }
 
     return {
@@ -1178,8 +1222,10 @@ async function executeSearchEntitiesTool(
             name: m.attributes?.friendly_name || m.entity_id,
             device_name: m.device_name || undefined,
             area_name: m.area_name || undefined,
+            integration: m.platform || undefined,
             state: m.state,
-            unit: m.attributes?.unit_of_measurement || undefined
+            unit: m.attributes?.unit_of_measurement || undefined,
+            options: Array.isArray(m.attributes?.options) ? m.attributes.options : undefined
         }))
     };
 }

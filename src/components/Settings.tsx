@@ -44,7 +44,7 @@ interface SettingsProps {
 }
 
 export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
-    const { activeConnection } = useApp();
+    const { activeConnection, entityStates, haDevices, haEntitiesRegistry, haSyncSource } = useApp();
     const [floatingEnabled, setFloatingEnabled] = useState(false);
     const [hasPermission, setHasPermission] = useState(false);
     const [snoozeUntil, setSnoozeUntil] = useState<number | null>(null);
@@ -678,6 +678,100 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     </div>
                 )}
             </div>
+
+            {/* Home Assistant Integrations & Sync Diagnostics */}
+            {activeConnection && (() => {
+                const entityCount = Object.keys(entityStates || {}).length;
+                const devById = new Map<string, any>();
+                (haDevices || []).forEach((d: any) => { if (d?.id) devById.set(d.id, d); });
+
+                const integrationMap = new Map<string, { name: string; entities: number; deviceIds: Set<string> }>();
+                (haEntitiesRegistry || []).forEach((e: any) => {
+                    if (!e?.entity_id || e.disabled_by || e.hidden_by) return;
+                    const dev = e.device_id ? devById.get(e.device_id) : null;
+                    const identPlat = Array.isArray(dev?.identifiers) && Array.isArray(dev.identifiers[0])
+                        ? dev.identifiers[0][0]
+                        : '';
+                    const plat = (e.platform || dev?.platform || identPlat || '').toLowerCase().trim();
+                    if (!plat) return;
+                    if (!integrationMap.has(plat)) {
+                        integrationMap.set(plat, { name: plat, entities: 0, deviceIds: new Set() });
+                    }
+                    const entry = integrationMap.get(plat)!;
+                    entry.entities += 1;
+                    if (e.device_id) entry.deviceIds.add(e.device_id);
+                });
+
+                const integrations = Array.from(integrationMap.values()).sort((a, b) => b.entities - a.entities);
+                const syncBadge =
+                    haSyncSource === 'websocket' ? { text: '🟢 WebSocket Live', bg: '#dcfce7', color: '#15803d' } :
+                    haSyncSource === 'rest' ? { text: '🔵 REST Fallback', bg: '#dbeafe', color: '#1d4ed8' } :
+                    haSyncSource === 'cache' ? { text: '🟡 Cache', bg: '#fef9c3', color: '#854d0e' } :
+                    { text: '⚪ Wachten...', bg: '#e5e7eb', color: '#374151' };
+
+                return (
+                    <div style={{
+                        marginBottom: '24px',
+                        padding: '16px',
+                        background: 'rgba(59, 130, 246, 0.07)',
+                        borderRadius: '12px',
+                        border: '1px solid rgba(59, 130, 246, 0.25)'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', gap: '8px' }}>
+                            <h3 style={{ margin: 0 }}>🔌 Home Assistant Integraties</h3>
+                            <span style={{
+                                fontSize: '0.72rem',
+                                fontWeight: 600,
+                                padding: '2px 8px',
+                                borderRadius: '999px',
+                                background: syncBadge.bg,
+                                color: syncBadge.color,
+                                whiteSpace: 'nowrap'
+                            }}>
+                                {syncBadge.text}
+                            </span>
+                        </div>
+                        <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.4 }}>
+                            <strong>{entityCount}</strong> entiteiten • <strong>{haDevices?.length || 0}</strong> apparaten • <strong>{integrations.length}</strong> actieve integraties gevonden.
+                        </p>
+                        {integrations.length > 0 ? (
+                            <div style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '6px',
+                                maxHeight: '140px',
+                                overflowY: 'auto',
+                                padding: '4px 0'
+                            }}>
+                                {integrations.map((intg) => (
+                                    <span
+                                        key={intg.name}
+                                        style={{
+                                            fontSize: '0.74rem',
+                                            padding: '4px 9px',
+                                            borderRadius: '999px',
+                                            background: intg.name.includes('localthings')
+                                                ? 'rgba(16, 185, 129, 0.22)'
+                                                : 'rgba(255, 255, 255, 0.06)',
+                                            border: intg.name.includes('localthings')
+                                                ? '1px solid rgba(16, 185, 129, 0.5)'
+                                                : '1px solid var(--border, rgba(255,255,255,0.12))',
+                                            color: intg.name.includes('localthings') ? '#6ee7b7' : 'var(--text-primary, #ffffff)',
+                                            fontWeight: intg.name.includes('localthings') ? 600 : 500
+                                        }}
+                                    >
+                                        {intg.name} ({intg.deviceIds.size > 0 ? `${intg.deviceIds.size} app · ` : ''}{intg.entities})
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                                Integratie-metadata wordt opgehaald vanuit Home Assistant...
+                            </p>
+                        )}
+                    </div>
+                );
+            })()}
 
             {/* Proactive Backend Workers (On-Demand Control) */}
             <div style={{
