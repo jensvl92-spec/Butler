@@ -303,7 +303,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (isCancelled || !ws) return
         try {
           logger.info('🔄 Fetching HA Data (States & Registries)...')
-          const [statesRes, areasRes, devicesRes, entitiesRes] = await Promise.all([
+          const [statesSettled, areasSettled, devicesSettled, entitiesSettled] = await Promise.allSettled([
             ws.sendMessage({ type: 'get_states' }),
             ws.sendMessage({ type: 'config/area_registry/list' }),
             ws.sendMessage({ type: 'config/device_registry/list' }),
@@ -312,7 +312,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           if (isCancelled) return
 
-          if (statesRes.success && Array.isArray(statesRes.result)) {
+          const statesRes = statesSettled.status === 'fulfilled' ? statesSettled.value : null
+          const areasRes = areasSettled.status === 'fulfilled' ? areasSettled.value : null
+          const devicesRes = devicesSettled.status === 'fulfilled' ? devicesSettled.value : null
+          const entitiesRes = entitiesSettled.status === 'fulfilled' ? entitiesSettled.value : null
+
+          if (statesRes?.success && Array.isArray(statesRes.result)) {
             const statesObj: Record<string, any> = {}
             statesRes.result.forEach((state: any) => {
               if (state?.entity_id) statesObj[state.entity_id] = state
@@ -324,14 +329,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             logger.info(`✅ Loaded States via WS: ${statesRes.result.length}`)
           }
 
-          if (areasRes.success && Array.isArray(areasRes.result)) {
-            setHaAreas(areasRes.result)
-          }
-          if (devicesRes.success && Array.isArray(devicesRes.result)) {
-            setHaDevices(devicesRes.result)
-          }
-          if (entitiesRes.success && Array.isArray(entitiesRes.result)) {
-            setHaEntitiesRegistry(entitiesRes.result)
+          const loadedAreas = areasRes?.success && Array.isArray(areasRes.result) ? areasRes.result : []
+          const loadedDevices = devicesRes?.success && Array.isArray(devicesRes.result) ? devicesRes.result : []
+          const loadedEntities = entitiesRes?.success && Array.isArray(entitiesRes.result) ? entitiesRes.result : []
+
+          if (loadedAreas.length > 0) setHaAreas(loadedAreas)
+          if (loadedDevices.length > 0) setHaDevices(loadedDevices)
+          if (loadedEntities.length > 0) setHaEntitiesRegistry(loadedEntities)
+
+          // Build & persist topology cache for Butler AI (rooms -> entities & device names)
+          if (loadedAreas.length > 0 || loadedEntities.length > 0) {
+            try {
+              const devAreaMap = new Map<string, string>()
+              loadedDevices.forEach((d: any) => {
+                if (d?.id && d?.area_id) devAreaMap.set(d.id, d.area_id)
+              })
+              const areaEntityMap = new Map<string, string[]>()
+              loadedAreas.forEach((a: any) => {
+                if (a?.area_id) areaEntityMap.set(a.area_id, [])
+              })
+              const orphans: string[] = []
+              loadedEntities.forEach((e: any) => {
+                if (!e?.entity_id || e.hidden_by || e.disabled_by) return
+                const aid = e.area_id || (e.device_id ? devAreaMap.get(e.device_id) : undefined)
+                if (aid && areaEntityMap.has(aid)) {
+                  areaEntityMap.get(aid)!.push(e.entity_id)
+                } else {
+                  orphans.push(e.entity_id)
+                }
+              })
+              const topologyObj = {
+                floors: [],
+                areas: loadedAreas.map((a: any) => ({
+                  id: a.area_id,
+                  name: a.name,
+                  entities: areaEntityMap.get(a.area_id) || []
+                })),
+                orphans
+              }
+              const serialized = JSON.stringify(topologyObj)
+              localStorage.setItem(`ha_topology_${activeConnectionId}`, serialized)
+              localStorage.setItem('ha_topology_latest', serialized)
+            } catch { }
           }
         } catch (err: any) {
           if (!isCancelled) {

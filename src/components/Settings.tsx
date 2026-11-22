@@ -15,6 +15,15 @@ import {
     supportsReasoningEffort
 } from '../lib/services/modelRegistry';
 import { PROACTIVE_WORKERS, triggerProactiveWorker, ProactiveWorkerId } from '../lib/services/proactiveWorkers';
+import {
+    GEMINI_TTS_VOICES,
+    DEEPGRAM_TTS_VOICES_NL,
+    TTSProviderPreference,
+    getTTSConfig,
+    saveTTSConfig,
+    synthesizeGeminiTTS,
+    synthesizeDeepgramTTS
+} from '../utils/speechUtils';
 import { logger } from '../utils/logger';
 
 interface FloatingButtonPlugin {
@@ -41,6 +50,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [snoozeUntil, setSnoozeUntil] = useState<number | null>(null);
     const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
     const [clearingHistory, setClearingHistory] = useState(false);
+
+    // Neural TTS Voice Settings
+    const initialTts = getTTSConfig();
+    const [ttsEnabled, setTtsEnabled] = useState<boolean>(initialTts.enabled);
+    const [ttsProvider, setTtsProvider] = useState<TTSProviderPreference>(initialTts.provider);
+    const [ttsGeminiVoice, setTtsGeminiVoice] = useState<string>(initialTts.geminiVoice);
+    const [ttsDeepgramVoiceNl, setTtsDeepgramVoiceNl] = useState<string>(initialTts.deepgramVoiceNl);
+    const [testingVoice, setTestingVoice] = useState<boolean>(false);
+    const [voiceTestStatus, setVoiceTestStatus] = useState<string | null>(null);
 
     // AI Brain Settings (Client-Side Google Gemini / OpenRouter)
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
@@ -859,6 +877,202 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 >
                     Log Out
                 </button>
+            </div>
+
+            {/* Neural Voice & TTS Section */}
+            <div style={{
+                marginBottom: '24px',
+                padding: '16px',
+                background: 'rgba(16, 185, 129, 0.08)',
+                borderRadius: '12px',
+                border: '1px solid rgba(16, 185, 129, 0.25)'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                    <h3 style={{ margin: 0 }}>🗣️ Stem & Spraak (Neural TTS)</h3>
+                    <label className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={ttsEnabled}
+                            onChange={() => {
+                                const next = !ttsEnabled;
+                                setTtsEnabled(next);
+                                saveTTSConfig({ enabled: next });
+                            }}
+                        />
+                        <span className="toggle-slider"></span>
+                    </label>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: 1.4 }}>
+                    Butler spreekt antwoorden uit met een natuurlijke AI-stem (zonder sterretjes of opmaaktekens voor te lezen).
+                </p>
+
+                {ttsEnabled && (
+                    <>
+                        <div style={{ marginBottom: '10px' }}>
+                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '4px', color: 'var(--text-primary, #ffffff)' }}>
+                                Stem-engine
+                            </label>
+                            <select
+                                value={ttsProvider}
+                                onChange={(e) => {
+                                    const val = e.target.value as TTSProviderPreference;
+                                    setTtsProvider(val);
+                                    saveTTSConfig({ provider: val });
+                                }}
+                                style={{
+                                    width: '100%',
+                                    padding: '9px 12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--border, #3a3a4a)',
+                                    background: 'var(--bg-elevated, #252532)',
+                                    color: 'var(--text-primary, #ffffff)',
+                                    fontSize: '0.84rem'
+                                }}
+                            >
+                                <option value="auto" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                    ✨ Automatisch (Gemini Neural → Deepgram Aura-2 → Android)
+                                </option>
+                                <option value="gemini" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                    🔵 Google Gemini Neural (Studio Nederlands/Vlaams)
+                                </option>
+                                <option value="deepgram" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                    🟢 Deepgram Aura-2 (Ultrasnel Nederlands)
+                                </option>
+                                <option value="native" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                    📱 Apparaatstem (Offline, beste Android stem)
+                                </option>
+                            </select>
+                        </div>
+
+                        {(ttsProvider === 'auto' || ttsProvider === 'gemini') && (
+                            <div style={{ marginBottom: '10px' }}>
+                                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '4px', color: 'var(--text-primary, #ffffff)' }}>
+                                    Gemini Studio Stem
+                                </label>
+                                <select
+                                    value={ttsGeminiVoice}
+                                    onChange={(e) => {
+                                        setTtsGeminiVoice(e.target.value);
+                                        saveTTSConfig({ geminiVoice: e.target.value });
+                                    }}
+                                    style={{
+                                        width: '100%',
+                                        padding: '9px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border, #3a3a4a)',
+                                        background: 'var(--bg-elevated, #252532)',
+                                        color: 'var(--text-primary, #ffffff)',
+                                        fontSize: '0.84rem'
+                                    }}
+                                >
+                                    {GEMINI_TTS_VOICES.map((v) => (
+                                        <option key={v.id} value={v.id} style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                            {v.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        {(ttsProvider === 'auto' || ttsProvider === 'deepgram') && (
+                            <div style={{ marginBottom: '12px' }}>
+                                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '4px', color: 'var(--text-primary, #ffffff)' }}>
+                                    Deepgram Aura-2 Nederlandse Stem
+                                </label>
+                                <select
+                                    value={ttsDeepgramVoiceNl}
+                                    onChange={(e) => {
+                                        setTtsDeepgramVoiceNl(e.target.value);
+                                        saveTTSConfig({ deepgramVoiceNl: e.target.value });
+                                    }}
+                                    style={{
+                                        width: '100%',
+                                        padding: '9px 12px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border, #3a3a4a)',
+                                        background: 'var(--bg-elevated, #252532)',
+                                        color: 'var(--text-primary, #ffffff)',
+                                        fontSize: '0.84rem'
+                                    }}
+                                >
+                                    {DEEPGRAM_TTS_VOICES_NL.map((v) => (
+                                        <option key={v.id} value={v.id} style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                            {v.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        <button
+                            type="button"
+                            disabled={testingVoice}
+                            onClick={async () => {
+                                setTestingVoice(true);
+                                setVoiceTestStatus(null);
+                                const sample = 'Hallo, ik ben Butler. Mijn stem klinkt nu een stuk natuurlijker en ik lees geen sterretjes meer voor.';
+                                try {
+                                    const gKey = (localStorage.getItem('butler.gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '').trim();
+                                    let blob: Blob | null = null;
+                                    let usedEngine = '';
+
+                                    if ((ttsProvider === 'auto' || ttsProvider === 'gemini') && gKey) {
+                                        const res = await synthesizeGeminiTTS(sample, gKey, ttsGeminiVoice, { language: 'nl-BE' });
+                                        if (res) {
+                                            blob = res.blob;
+                                            usedEngine = `Gemini (${ttsGeminiVoice})`;
+                                        }
+                                    }
+
+                                    if (!blob && (ttsProvider === 'auto' || ttsProvider === 'deepgram')) {
+                                        const sbUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+                                        const { data: sessionData } = await supabase.auth.getSession();
+                                        const jwt = sessionData?.session?.access_token;
+                                        if (sbUrl && jwt) {
+                                            const res = await synthesizeDeepgramTTS(sample, sbUrl, jwt, 'nl-BE', ttsDeepgramVoiceNl);
+                                            if (res) {
+                                                blob = res.blob;
+                                                usedEngine = `Deepgram (${res.voice})`;
+                                            }
+                                        }
+                                    }
+
+                                    if (blob) {
+                                        const url = URL.createObjectURL(blob);
+                                        const audio = new Audio(url);
+                                        audio.onended = () => URL.revokeObjectURL(url);
+                                        await audio.play();
+                                        setVoiceTestStatus(`✅ Actief via ${usedEngine}`);
+                                    } else {
+                                        setVoiceTestStatus('ℹ️ Cloud-stem niet bereikbaar — apparaatstem wordt gebruikt.');
+                                    }
+                                } catch (err: any) {
+                                    setVoiceTestStatus(`⚠️ Test mislukt: ${err?.message || 'Onbekende fout'}`);
+                                } finally {
+                                    setTestingVoice(false);
+                                }
+                            }}
+                            style={{
+                                width: '100%',
+                                padding: '9px 12px',
+                                borderRadius: '8px',
+                                background: 'rgba(16, 185, 129, 0.2)',
+                                color: '#6ee7b7',
+                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                fontWeight: 600,
+                                cursor: testingVoice ? 'wait' : 'pointer',
+                                fontSize: '0.84rem'
+                            }}
+                        >
+                            {testingVoice ? '⏳ Stem genereren...' : '🔊 Test Stem'}
+                        </button>
+                        {voiceTestStatus && (
+                            <p style={{ margin: '8px 0 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                                {voiceTestStatus}
+                            </p>
+                        )}
+                    </>
+                )}
             </div>
 
             {/* Voice Alerts Section */}

@@ -962,6 +962,53 @@ async function executeEnergyPricesTool(
 // -------------------------------------------------------------
 // 7. Entity Lookup & Search Tools
 // -------------------------------------------------------------
+// Bilingual NL <-> EN smart-home search expansion (only expands search recall, never hides anything)
+const ENTITY_SEARCH_SYNONYMS: Record<string, string[]> = {
+    wasmachine: ['washer', 'washing', 'was'],
+    washer: ['wasmachine', 'washing'],
+    droogkast: ['dryer', 'droger', 'tumble'],
+    droger: ['dryer', 'droogkast', 'tumble'],
+    dryer: ['droogkast', 'droger', 'tumble'],
+    vaatwasser: ['dishwasher'],
+    dishwasher: ['vaatwasser'],
+    koelkast: ['fridge', 'refrigerator'],
+    vriezer: ['freezer'],
+    verwarming: ['climate', 'thermostat', 'heat'],
+    thermostaat: ['climate', 'thermostat'],
+    rolluik: ['cover', 'shutter', 'blind'],
+    rolluiken: ['cover', 'shutter', 'blind'],
+    gordijn: ['cover', 'curtain', 'blind'],
+    gordijnen: ['cover', 'curtain', 'blind'],
+    laadpaal: ['charger', 'wallbox', 'ev'],
+    zonnepanelen: ['solar', 'inverter', 'omvormer', 'pv'],
+    omvormer: ['inverter', 'solar'],
+    deur: ['door'],
+    raam: ['window'],
+    lamp: ['light', 'licht'],
+    lampen: ['light', 'licht'],
+    licht: ['light', 'lamp'],
+    lichten: ['light', 'lamp']
+};
+
+function expandSearchTerms(rawQuery: string): string[] {
+    const clean = (rawQuery || '').toLowerCase().trim();
+    if (!clean) return [];
+    const tokens = clean.split(/\s+/).filter(Boolean);
+    const expanded = new Set<string>([clean, ...tokens]);
+    for (const t of tokens) {
+        const syns = ENTITY_SEARCH_SYNONYMS[t];
+        if (syns) syns.forEach(s => expanded.add(s));
+    }
+    if (ENTITY_SEARCH_SYNONYMS[clean]) {
+        ENTITY_SEARCH_SYNONYMS[clean].forEach(s => expanded.add(s));
+    }
+    return Array.from(expanded);
+}
+
+function buildDeviceSearchHaystack(d: any): string {
+    return `${d.entity_id || ''} ${d.attributes?.friendly_name || ''} ${d.device_name || ''} ${d.area_name || ''} ${d.manufacturer || ''} ${d.model || ''}`.toLowerCase();
+}
+
 async function executeGetEntityStateTool(
     args: any,
     options: { devices?: HADevice[]; haUrl?: string; haToken?: string }
@@ -990,6 +1037,8 @@ async function executeGetEntityStateTool(
         return {
             entity_id: exact.entity_id,
             friendly_name: exact.attributes?.friendly_name || exact.entity_id,
+            device_name: exact.device_name || undefined,
+            area_name: exact.area_name || undefined,
             state: exact.state,
             unit: exact.attributes?.unit_of_measurement || null,
             attributes: exact.attributes,
@@ -997,12 +1046,13 @@ async function executeGetEntityStateTool(
         };
     }
 
+    const terms = expandSearchTerms(query);
     const matches = allStates
-        .filter(s =>
-            s.entity_id.toLowerCase().includes(query) ||
-            (s.attributes?.friendly_name && s.attributes.friendly_name.toLowerCase().includes(query))
-        )
-        .slice(0, 10);
+        .filter(s => {
+            const hay = buildDeviceSearchHaystack(s);
+            return terms.some(t => hay.includes(t));
+        })
+        .slice(0, 15);
 
     if (matches.length > 0) {
         return {
@@ -1010,6 +1060,8 @@ async function executeGetEntityStateTool(
             matches: matches.map(m => ({
                 entity_id: m.entity_id,
                 friendly_name: m.attributes?.friendly_name || m.entity_id,
+                device_name: m.device_name || undefined,
+                area_name: m.area_name || undefined,
                 state: m.state,
                 unit: m.attributes?.unit_of_measurement || null,
                 attributes: m.attributes
@@ -1028,7 +1080,7 @@ async function executeSearchEntitiesTool(
     const room = (args.room || '').toLowerCase().trim();
     const domain = (args.domain || '').toLowerCase().trim();
 
-    let allDevices = options.devices || [];
+    let allDevices: any[] = options.devices || [];
     if (allDevices.length === 0 && options.haUrl && options.haToken) {
         try {
             const res = await fetchWithTimeout(buildHAUrl('/api/states', options.haUrl), {
@@ -1055,19 +1107,65 @@ async function executeSearchEntitiesTool(
         } catch { }
     }
 
+    // If user asks for a general inventory (no query, no room, no domain), return a clean deduplicated device summary!
+    if (!query && !room && !domain) {
+        const groupedByDevice = new Map<string, { device_name: string; area_name?: string; sample_entities: Array<{ entity_id: string; name: string; state: string }> }>();
+        const standalone: any[] = [];
+        const skipDomains = new Set(['update', 'zone', 'sun', 'persistent_notification', 'tts', 'stt', 'conversation']);
+
+        for (const d of allDevices) {
+            const dom = (d.entity_id || '').split('.')[0];
+            if (skipDomains.has(dom)) continue;
+            if (d.device_name) {
+                const key = d.device_name.toLowerCase();
+                if (!groupedByDevice.has(key)) {
+                    groupedByDevice.set(key, {
+                        device_name: d.device_name,
+                        area_name: d.area_name,
+                        sample_entities: []
+                    });
+                }
+                const entry = groupedByDevice.get(key)!;
+                if (entry.sample_entities.length < 3) {
+                    entry.sample_entities.push({
+                        entity_id: d.entity_id,
+                        name: d.attributes?.friendly_name || d.entity_id,
+                        state: d.state
+                    });
+                }
+            } else if (/^(light|switch|climate|cover|lock|media_player|fan|vacuum|camera|water_heater|sensor)\./.test(d.entity_id)) {
+                standalone.push({
+                    entity_id: d.entity_id,
+                    name: d.attributes?.friendly_name || d.entity_id,
+                    area_name: d.area_name,
+                    state: d.state
+                });
+            }
+        }
+
+        return {
+            total_entities: allDevices.length,
+            devices: Array.from(groupedByDevice.values()).slice(0, 50),
+            standalone_entities: standalone.slice(0, 25)
+        };
+    }
+
+    const searchTerms = expandSearchTerms(query);
+
     const matches = allDevices.filter(d => {
-        const eid = d.entity_id.toLowerCase();
-        const fname = (d.attributes?.friendly_name || '').toLowerCase();
+        const eid = (d.entity_id || '').toLowerCase();
+        const hay = buildDeviceSearchHaystack(d);
         const dDomain = eid.split('.')[0];
 
         if (domain && dDomain !== domain) return false;
         if (room) {
             const inTopo = topoEntitiesForRoom ? topoEntitiesForRoom.has(d.entity_id) : false;
-            if (!inTopo && !eid.includes(room) && !fname.includes(room)) return false;
+            const inArea = (d.area_name || '').toLowerCase().includes(room);
+            if (!inTopo && !inArea && !hay.includes(room)) return false;
         }
-        if (query && !eid.includes(query) && !fname.includes(query)) return false;
+        if (searchTerms.length > 0 && !searchTerms.some(t => hay.includes(t))) return false;
         return true;
-    }).slice(0, 25);
+    }).slice(0, 35);
 
     if (matches.length === 0) {
         return { message: `Geen apparaten gevonden voor query="${query}", room="${room}", domain="${domain}".` };
@@ -1078,6 +1176,8 @@ async function executeSearchEntitiesTool(
         entities: matches.map(m => ({
             entity_id: m.entity_id,
             name: m.attributes?.friendly_name || m.entity_id,
+            device_name: m.device_name || undefined,
+            area_name: m.area_name || undefined,
             state: m.state,
             unit: m.attributes?.unit_of_measurement || undefined
         }))
@@ -1154,12 +1254,18 @@ function selectInitialContextEntities(
         };
     }
 
-    // Tokenize cleanly (strip punctuation & filter stop-words)
+    // Tokenize cleanly (strip punctuation, filter stop-words, and expand NL<->EN appliance synonyms)
     const lowerMsg = userMessage.toLowerCase();
-    const tokens = lowerMsg
+    const rawTokens = lowerMsg
         .replace(/[^\p{L}\p{N}\s_-]/gu, ' ')
         .split(/\s+/)
         .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+    const expandedTokens = new Set<string>(rawTokens);
+    for (const t of rawTokens) {
+        const syns = ENTITY_SEARCH_SYNONYMS[t];
+        if (syns) syns.forEach(s => expandedTokens.add(s));
+    }
+    const tokens = Array.from(expandedTokens);
 
     const matchedRooms: string[] = [];
     roomToDevices.forEach((_, roomKey) => {
@@ -1168,20 +1274,20 @@ function selectInitialContextEntities(
         }
     });
 
-    const scored = devices.map(d => {
+    const scored = devices.map((d: any) => {
         let score = 0;
         const eid = d.entity_id.toLowerCase();
-        const fname = (d.attributes?.friendly_name || '').toLowerCase();
+        const hay = buildDeviceSearchHaystack(d);
         const uom = (d.attributes?.unit_of_measurement || '').toLowerCase();
 
         for (const room of matchedRooms) {
-            if (eid.includes(room) || fname.includes(room)) score += 16;
+            if (hay.includes(room)) score += 16;
             const devsInRoom = roomToDevices.get(room) || [];
             if (devsInRoom.some(rDev => rDev.entity_id === d.entity_id)) score += 16;
         }
 
         for (const w of tokens) {
-            if (fname.includes(w) || eid.includes(w)) score += 12;
+            if (hay.includes(w)) score += 12;
             if (uom && uom.includes(w)) score += 8;
         }
 
@@ -1199,7 +1305,7 @@ function selectInitialContextEntities(
     });
 
     scored.sort((a, b) => b.score - a.score);
-    let selected = scored.filter(s => s.score > 0).slice(0, 18).map(s => s.device);
+    let selected = scored.filter(s => s.score > 0).slice(0, 22).map(s => s.device);
 
     if (selected.length === 0) {
         selected = devices
@@ -1207,10 +1313,14 @@ function selectInitialContextEntities(
             .slice(0, 12);
     }
 
-    const relevantDevicesText = selected.map(d => {
+    const relevantDevicesText = selected.map((d: any) => {
         const name = d.attributes?.friendly_name || d.entity_id;
+        const devLabel = d.device_name && !name.toLowerCase().includes(d.device_name.toLowerCase())
+            ? `${d.device_name} — ${name}`
+            : name;
+        const areaTag = d.area_name ? ` [${d.area_name}]` : '';
         const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
-        return `- ${d.entity_id} (${name}): ${d.state}${uom}`;
+        return `- ${d.entity_id} (${devLabel}${areaTag}): ${d.state}${uom}`;
     }).join('\n');
 
     return {

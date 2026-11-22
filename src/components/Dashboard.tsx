@@ -76,8 +76,17 @@ function normalizeStoredTiles(raw: any): DashboardTile[] {
 const DEFAULT_TILES: DashboardTile[] = []
 
 const ROOM_ICONS: Record<string, string> = {
-    bedroom: '🛏️', living: '🛋️', kitchen: '🍳', bathroom: '🚿',
-    office: '💻', garage: '🚗', garden: '🌱', default: '🏠'
+    bedroom: '🛏️', slaapkamer: '🛏️',
+    living: '🛋️', woonkamer: '🛋️', salon: '🛋️',
+    kitchen: '🍳', keuken: '🍳',
+    bathroom: '🚿', badkamer: '🚿',
+    office: '💻', bureau: '💻', kantoor: '💻',
+    garage: '🚗',
+    garden: '🌱', tuin: '🌱',
+    laundry: '🧺', wasplaats: '🧺', berging: '🧺', bijkeuken: '🧺',
+    hall: '🚪', hal: '🚪', inkom: '🚪', gang: '🚪',
+    attic: '🏠', zolder: '🏠', kelder: '🏚️',
+    default: '🏠'
 }
 
 const DEVICE_TYPES = [
@@ -86,8 +95,33 @@ const DEVICE_TYPES = [
     { id: 'climate', name: 'Climate', icon: '🌡️', description: 'Temperature and AC control', domain: 'climate' },
     { id: 'media', name: 'Media', icon: '📺', description: 'TV and media players', domain: 'media_player' },
     { id: 'cover', name: 'Blinds/Cover', icon: '🪟', description: 'Curtains and blinds', domain: 'cover' },
+    { id: 'lock', name: 'Lock', icon: '🔒', description: 'Smart locks', domain: 'lock' },
+    { id: 'fan', name: 'Fan', icon: '🌀', description: 'Fans and ventilation', domain: 'fan' },
+    { id: 'vacuum', name: 'Vacuum', icon: '🤖', description: 'Robot vacuums', domain: 'vacuum' },
+    { id: 'camera', name: 'Camera', icon: '📷', description: 'Security cameras', domain: 'camera' },
+    { id: 'button', name: 'Button', icon: '🔘', description: 'Action buttons', domain: 'button' },
+    { id: 'select', name: 'Select', icon: '🎛️', description: 'Mode & program selectors', domain: 'select' },
+    { id: 'number', name: 'Number', icon: '🎚️', description: 'Numeric controls', domain: 'number' },
+    { id: 'input_boolean', name: 'Toggle', icon: '🔘', description: 'Helper toggles', domain: 'input_boolean' },
+    { id: 'water_heater', name: 'Boiler', icon: '🔥', description: 'Water heaters', domain: 'water_heater' },
+    { id: 'humidifier', name: 'Humidifier', icon: '💧', description: 'Humidifiers', domain: 'humidifier' },
+    { id: 'scene', name: 'Scene', icon: '✨', description: 'Scenes', domain: 'scene' },
+    { id: 'script', name: 'Script', icon: '⚡', description: 'Scripts', domain: 'script' },
+    { id: 'binary_sensor', name: 'Binary Sensor', icon: '📡', description: 'Status & contact sensors', domain: 'binary_sensor' },
     { id: 'sensor', name: 'Sensor', icon: '👁️', description: 'Read-only sensors', domain: 'sensor' },
 ]
+
+function getApplianceIcon(name: string, fallbackIcon: string): string {
+    const n = (name || '').toLowerCase()
+    if (n.includes('wasmachine') || n.includes('washer') || n.includes('washing')) return '🫧'
+    if (n.includes('droogkast') || n.includes('droger') || n.includes('dryer') || n.includes('tumble')) return '💨'
+    if (n.includes('vaatwasser') || n.includes('dishwasher')) return '🍽️'
+    if (n.includes('koelkast') || n.includes('fridge') || n.includes('vriezer') || n.includes('freezer')) return '🧊'
+    if (n.includes('oven') || n.includes('kookplaat') || n.includes('fornuis')) return '🔥'
+    if (n.includes('laadpaal') || n.includes('charger') || n.includes('wallbox') || n.includes('ev ')) return '🔋'
+    if (n.includes('zonnepanelen') || n.includes('solar') || n.includes('omvormer') || n.includes('inverter')) return '☀️'
+    return fallbackIcon
+}
 
 export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
     const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry } = useApp()
@@ -97,6 +131,8 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
     const [editMode] = useState(false)
     const [showAddRoomModal, setShowAddRoomModal] = useState(false)
     const [newRoomName, setNewRoomName] = useState('')
+    const [searchQuery, setSearchQuery] = useState('')
+    const [isSyncingLayout, setIsSyncingLayout] = useState(false)
 
     const [toastMsg, setToastMsg] = useState<string | null>(null)
     const [configTileId, setConfigTileId] = useState<string | null>(null)
@@ -114,13 +150,14 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     // Track which connection's tiles are currently loaded to prevent cross-connection overwrite on switch
     const loadedConnectionIdRef = useRef<string | null>(null)
+    const autoImportedConnRef = useRef<string | null>(null)
 
     // Derived State
     const availableEntities = Object.entries(entityStates).map(([id, state]) => ({
         entity_id: id,
         state: state.state,
         attributes: state.attributes,
-        friendly_name: state.attributes.friendly_name || id
+        friendly_name: state.attributes?.friendly_name || id
     }))
 
     // Load tiles on mount and Sync with DB Rooms
@@ -287,8 +324,14 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             let service = 'turn_on'
             let serviceData: any = { entity_id: entityId }
 
-            if (domain === 'light' || domain === 'switch' || domain === 'input_boolean') {
+            if (domain === 'light' || domain === 'switch' || domain === 'input_boolean' || domain === 'fan' || domain === 'humidifier') {
                 service = 'toggle' // Use toggle to avoid state sync mismatch
+            } else if (domain === 'button') {
+                service = 'press'
+            } else if (domain === 'scene') {
+                service = 'turn_on'
+            } else if (domain === 'vacuum') {
+                service = currentState === 'cleaning' ? 'return_to_base' : 'start'
             } else if (domain === 'automation') {
                 service = 'trigger' // Automations are triggered, not toggled
             } else if (domain === 'script') {
@@ -296,9 +339,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             } else if (domain === 'media_player') {
                 service = 'media_play_pause'
             } else if (domain === 'cover') {
-                // Simplified Cover Logic: "If it's not closed, close it."
-                // This covers 'open', 'opening', 'paused', 'unknown' -> Close
-                // Only 'closed' -> Open
                 if (currentState === 'closed') {
                     service = 'open_cover'
                 } else {
@@ -562,29 +602,20 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         });
     }
 
-    // Auto-Sync DISABLED - Sync only happens when user clicks "Import from HA"
-    // This prevents duplicate entries and unnecessary API calls on every app start
-
-
-    // NEW: Direct HA Registry Import
-    const importLayoutFromHA = () => {
-        if (!window.confirm("This will RESET your dashboard and import your exact layout from Home Assistant (Areas & Devices). Continue?")) return
-
-        if (!haAreas || !haDevices || !haEntitiesRegistry) {
-            alert("No Home Assistant registry data found. Please wait a moment or check logs.")
-            return
-        }
-
-        // 1. Wipe Existing
-        let newTiles: DashboardTile[] = []
+    // Build Dashboard tiles from HA Registries (preferred) OR REST topology / live entityStates fallback
+    const buildTilesFromHA = (
+        areasList: any[],
+        devicesList: any[],
+        entitiesRegList: any[],
+        statesMap: Record<string, any>
+    ): { newTiles: DashboardTile[]; areasCreatedCount: number; devicesAddedCount: number } => {
+        const newTiles: DashboardTile[] = []
         let devicesAddedCount = 0
         let areasCreatedCount = 0
 
-        // Helper: Find/Create Tile from Area ID
         const getOrCreateTile = (areaId: string, areaName: string, iconOverride?: string): DashboardTile => {
             let tile = newTiles.find(t => t.roomId === areaId)
             if (!tile) {
-                // Heuristic Icon mapping based on Area Name
                 const lowerName = areaName.toLowerCase()
                 const icon = iconOverride || Object.entries(ROOM_ICONS).find(([k]) => lowerName.includes(k))?.[1] || ROOM_ICONS.default
 
@@ -603,160 +634,300 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             return tile
         }
 
-        const unassignedTile = {
-            id: 'unassigned', // Explicit ID for unassigned
-            type: 'room' as const,
+        const unassignedTile: DashboardTile = {
+            id: 'unassigned',
+            type: 'room',
             roomId: 'unassigned',
-            roomName: 'Unassigned',
-            roomIcon: '❓',
+            roomName: 'Overige Apparaten',
+            roomIcon: '📦',
             order: 999,
             deviceGroups: []
         }
 
-        // Pre-populate tiles with all areas defined in HA registry
-        if (haAreas && haAreas.length > 0) {
-            haAreas.forEach(area => {
-                getOrCreateTile(area.area_id, area.name)
+        const isDiagEntity = (entityId: string, entityCategory?: string) => {
+            if (entityCategory === 'diagnostic' || entityCategory === 'config') return true
+            const lower = entityId.toLowerCase()
+            return (
+                lower.includes('_battery') ||
+                lower.includes('_firmware') ||
+                lower.includes('_update') ||
+                lower.includes('_signal_strength') ||
+                lower.includes('_rssi') ||
+                lower.includes('_linkquality') ||
+                lower.includes('_uptime') ||
+                lower.includes('_identify')
+            )
+        }
+
+        const scorePrimaryEntity = (e: RoomDevice) => {
+            const eid = (e.entityId || '').toLowerCase()
+            if (e.isDiagnostic) return -10
+            if (eid.startsWith('light.')) return 20
+            if (eid.startsWith('climate.')) return 19
+            if (eid.startsWith('cover.')) return 18
+            if (eid.startsWith('switch.')) return 17
+            if (eid.startsWith('lock.')) return 16
+            if (eid.startsWith('fan.') || eid.startsWith('vacuum.') || eid.startsWith('water_heater.')) return 15
+            if (eid.startsWith('media_player.')) return 14
+            // Appliance status/program/remaining sensors (e.g. washing machine, dryer, dishwasher)
+            if (eid.startsWith('sensor.')) {
+                if (/operation_state|machine_state|status|state|phase|program|programma|remaining|resterend|progress|cycle/.test(eid)) return 12
+                if (/power|watt|energy|temp/.test(eid)) return 6
+                return 4
+            }
+            if (eid.startsWith('binary_sensor.')) {
+                if (/door|deur|window|raam|running|active|motion|occupancy/.test(eid)) return 8
+                return 3
+            }
+            if (eid.startsWith('select.') || eid.startsWith('button.') || eid.startsWith('number.')) return 7
+            return 1
+        }
+
+        // Pre-populate tiles with all HA areas
+        if (Array.isArray(areasList) && areasList.length > 0) {
+            areasList.forEach(area => {
+                if (area?.area_id) getOrCreateTile(area.area_id, area.name || area.area_id)
             })
         }
 
-        // --- MAP DATA ---
-
-        // 1. Group Entities by Device ID
-        const textEntities = haEntitiesRegistry.filter(e => !e.hidden_by && e.disabled_by === null)
+        const coveredEntityIds = new Set<string>()
         const deviceMap = new Map<string, DeviceGroup>()
-        const orphans: typeof textEntities = []
 
-        textEntities.forEach(regEntity => {
-            if (regEntity.device_id) {
-                if (!deviceMap.has(regEntity.device_id)) {
-                    // Create Group Skeleton
-                    const haDevice = haDevices.find(d => d.id === regEntity.device_id)
-                    deviceMap.set(regEntity.device_id, {
-                        id: regEntity.device_id,
-                        name: haDevice?.name_by_user || haDevice?.name || 'Unknown Device',
-                        manufacturer: haDevice?.manufacturer,
-                        model: haDevice?.model,
-                        areaId: haDevice?.area_id || regEntity.area_id, // Device Area Priority, then Entity Area
-                        entities: []
-                    })
-                }
-                const group = deviceMap.get(regEntity.device_id)!
+        // PATH A: Rich HA WebSocket Registries available
+        if (Array.isArray(entitiesRegList) && entitiesRegList.length > 0) {
+            // NOTE: disabled_by may be null OR undefined — use !e.disabled_by!
+            const activeRegistryEntities = entitiesRegList.filter(e => e?.entity_id && !e.hidden_by && !e.disabled_by)
+            const orphans: any[] = []
 
+            activeRegistryEntities.forEach(regEntity => {
+                coveredEntityIds.add(regEntity.entity_id)
+                const liveState = statesMap[regEntity.entity_id]
                 const domain = regEntity.entity_id.split('.')[0]
                 const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️', name: 'Sensor' }
+                const friendlyName = regEntity.name || regEntity.original_name || liveState?.attributes?.friendly_name || regEntity.entity_id
 
-                group.entities.push({
-                    id: `ent-${regEntity.entity_id}`,
-                    type: typeDef.id,
-                    name: regEntity.name || regEntity.original_name || regEntity.entity_id,
-                    icon: typeDef.icon, // Force emoji icon to avoid rendering "mdi:xxx" text
-                    entityId: regEntity.entity_id,
-                    deviceId: regEntity.device_id,
-                    isDiagnostic: regEntity.entity_category === 'diagnostic' || regEntity.entity_category === 'config' ||
-                        regEntity.entity_id.includes('_battery') || regEntity.entity_id.includes('_firmware') ||
-                        regEntity.entity_id.includes('_update') || regEntity.entity_id.includes('_signal_strength')
-                })
+                if (regEntity.device_id) {
+                    if (!deviceMap.has(regEntity.device_id)) {
+                        const haDevice = (devicesList || []).find(d => d.id === regEntity.device_id)
+                        deviceMap.set(regEntity.device_id, {
+                            id: regEntity.device_id,
+                            name: haDevice?.name_by_user || haDevice?.name || friendlyName,
+                            manufacturer: haDevice?.manufacturer,
+                            model: haDevice?.model,
+                            areaId: haDevice?.area_id || regEntity.area_id,
+                            entities: []
+                        })
+                    }
+                    const group = deviceMap.get(regEntity.device_id)!
+                    group.entities.push({
+                        id: `ent-${regEntity.entity_id}`,
+                        type: typeDef.id,
+                        name: friendlyName,
+                        icon: getApplianceIcon(`${group.name} ${friendlyName}`, typeDef.icon),
+                        entityId: regEntity.entity_id,
+                        deviceId: regEntity.device_id,
+                        isDiagnostic: isDiagEntity(regEntity.entity_id, regEntity.entity_category)
+                    })
 
-                // Update Area if not set on device but set on entity
-                if (!group.areaId && regEntity.area_id) {
-                    group.areaId = regEntity.area_id
+                    if (!group.areaId && regEntity.area_id) {
+                        group.areaId = regEntity.area_id
+                    }
+                } else {
+                    orphans.push(regEntity)
+                }
+            })
+
+            deviceMap.forEach(group => {
+                group.entities.sort((a, b) => scorePrimaryEntity(b) - scorePrimaryEntity(a))
+                group.primaryEntity = group.entities[0]
+
+                let tile: DashboardTile
+                if (group.areaId) {
+                    const area = (areasList || []).find(a => a.area_id === group.areaId)
+                    tile = getOrCreateTile(group.areaId, area?.name || group.areaId)
+                } else {
+                    tile = unassignedTile
+                }
+                tile.deviceGroups.push(group)
+                devicesAddedCount++
+            })
+
+            orphans.forEach(orp => {
+                const domain = orp.entity_id.split('.')[0]
+                if (domain === 'sun' || domain === 'weather' || domain === 'zone' || domain === 'person' || domain === 'update') return
+                const liveState = statesMap[orp.entity_id]
+                const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️', name: 'Sensor' }
+                const friendlyName = orp.name || orp.original_name || liveState?.attributes?.friendly_name || orp.entity_id
+
+                const virtualGroup: DeviceGroup = {
+                    id: `orp-${orp.entity_id}`,
+                    name: friendlyName,
+                    entities: [{
+                        id: `ent-${orp.entity_id}`,
+                        type: typeDef.id,
+                        name: friendlyName,
+                        icon: getApplianceIcon(friendlyName, typeDef.icon),
+                        entityId: orp.entity_id,
+                        isDiagnostic: isDiagEntity(orp.entity_id, orp.entity_category)
+                    }]
+                }
+                virtualGroup.primaryEntity = virtualGroup.entities[0]
+
+                let tile: DashboardTile
+                if (orp.area_id) {
+                    const area = (areasList || []).find(a => a.area_id === orp.area_id)
+                    tile = getOrCreateTile(orp.area_id, area?.name || orp.area_id)
+                } else {
+                    tile = unassignedTile
+                }
+                tile.deviceGroups.push(virtualGroup)
+                devicesAddedCount++
+            })
+        }
+
+        // PATH B: Also include any live entityStates not covered by registry (e.g. REST-only mode or custom template entities!)
+        const liveEntries = Object.values(statesMap || {}).filter((s: any) => s?.entity_id && !coveredEntityIds.has(s.entity_id))
+        if (liveEntries.length > 0) {
+            // Try matching area via cached ha_topology if available
+            const entityToArea = new Map<string, { id: string; name: string }>()
+            try {
+                const topoRaw = (activeConnection?.id && localStorage.getItem(`ha_topology_${activeConnection.id}`))
+                    || localStorage.getItem('ha_topology_latest')
+                if (topoRaw) {
+                    const topo = JSON.parse(topoRaw)
+                    ;(topo.areas || []).forEach((a: any) => {
+                        ;(a.entities || []).forEach((eid: string) => {
+                            entityToArea.set(eid, { id: a.id, name: a.name })
+                        })
+                    })
+                }
+            } catch { }
+
+            const skipDomains = new Set(['sun', 'weather', 'zone', 'person', 'update', 'tts', 'stt', 'conversation', 'persistent_notification', 'device_tracker'])
+            liveEntries.forEach((s: any) => {
+                const domain = s.entity_id.split('.')[0]
+                if (skipDomains.has(domain)) return
+                const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️', name: 'Sensor' }
+                const friendlyName = s.attributes?.friendly_name || s.entity_id
+                const devGroup: DeviceGroup = {
+                    id: `live-${s.entity_id}`,
+                    name: friendlyName,
+                    entities: [{
+                        id: `ent-${s.entity_id}`,
+                        type: typeDef.id,
+                        name: friendlyName,
+                        icon: getApplianceIcon(friendlyName, typeDef.icon),
+                        entityId: s.entity_id,
+                        isDiagnostic: isDiagEntity(s.entity_id)
+                    }]
+                }
+                devGroup.primaryEntity = devGroup.entities[0]
+
+                const areaMatch = entityToArea.get(s.entity_id)
+                const tile = areaMatch ? getOrCreateTile(areaMatch.id, areaMatch.name) : unassignedTile
+                tile.deviceGroups.push(devGroup)
+                devicesAddedCount++
+            })
+        }
+
+        if (unassignedTile.deviceGroups.length > 0) {
+            newTiles.push(unassignedTile)
+        }
+
+        newTiles.sort((a, b) => {
+            if (a.id === 'unassigned') return 1
+            if (b.id === 'unassigned') return -1
+            return (a.roomName || '').localeCompare(b.roomName || '')
+        })
+
+        newTiles.forEach(tile => {
+            tile.deviceGroups.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        })
+
+        return { newTiles, areasCreatedCount, devicesAddedCount }
+    }
+
+    // Automatic first-load layout population:
+    // Whenever tiles are empty (or all rooms have 0 devices) and HA data arrives, populate automatically!
+    useEffect(() => {
+        if (!activeConnection?.id) return
+        if (loadedConnectionIdRef.current !== activeConnection.id) return
+
+        const totalDevicesInTiles = tiles.reduce((sum, t) => sum + (t.deviceGroups?.length || 0), 0)
+        const hasRegistryData = (haEntitiesRegistry?.length || 0) > 0
+        const hasStateData = Object.keys(entityStates || {}).length > 0
+
+        if (!hasRegistryData && !hasStateData) return
+
+        // Auto-populate if dashboard currently has 0 devices, OR upgrade REST-only auto-import once full HA registry arrives
+        const importKey = `${activeConnection.id}:${hasRegistryData ? 'reg' : 'states'}`
+        if (totalDevicesInTiles === 0 || (hasRegistryData && autoImportedConnRef.current === `${activeConnection.id}:states`)) {
+            if (autoImportedConnRef.current === importKey) return
+            const { newTiles, devicesAddedCount } = buildTilesFromHA(haAreas, haDevices, haEntitiesRegistry, entityStates)
+            if (devicesAddedCount > 0) {
+                autoImportedConnRef.current = importKey
+                setTiles(newTiles)
+                logger.info(`✅ [Dashboard] Auto-populated ${newTiles.length} rooms & ${devicesAddedCount} devices from Home Assistant`)
+            }
+        }
+    }, [activeConnection?.id, haAreas, haDevices, haEntitiesRegistry, entityStates, tiles.length])
+
+    // Manual HA Registry Import (with REST fallback if WS registries are still empty!)
+    const importLayoutFromHA = async () => {
+        if (tiles.length > 0 && !window.confirm("Dit vernieuwt je dashboard met de actuele ruimtes en apparaten uit Home Assistant. Doorgaan?")) {
+            return
+        }
+
+        setIsSyncingLayout(true)
+        try {
+            let statesToUse = entityStates
+            // If WebSocket registries aren't available yet, also fetch topology & states via REST
+            if ((!haEntitiesRegistry || haEntitiesRegistry.length === 0) && activeConnection?.api_url && activeConnection?.api_token) {
+                try {
+                    const { fetchSmartHASync } = await import('../utils/ha-api')
+                    await fetchSmartHASync(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
+                } catch { }
+            }
+
+            if (Object.keys(statesToUse || {}).length === 0 && activeConnection?.api_url && activeConnection?.api_token) {
+                try {
+                    const { buildHAUrl, sanitizeHAToken, fetchWithTimeout } = await import('../utils/home-assistant')
+                    const res = await fetchWithTimeout(buildHAUrl('/api/states', activeConnection.api_url), {
+                        headers: { Authorization: `Bearer ${sanitizeHAToken(activeConnection.api_token)}` }
+                    }, 15000)
+                    if (res.ok) {
+                        const arr = await res.json()
+                        if (Array.isArray(arr)) {
+                            const map: Record<string, any> = {}
+                            arr.forEach((s: any) => { if (s?.entity_id) map[s.entity_id] = s })
+                            statesToUse = map
+                        }
+                    }
+                } catch { }
+            }
+
+            const { newTiles, areasCreatedCount, devicesAddedCount } = buildTilesFromHA(
+                haAreas || [],
+                haDevices || [],
+                haEntitiesRegistry || [],
+                statesToUse || {}
+            )
+
+            if (newTiles.length > 0 || devicesAddedCount > 0) {
+                autoImportedConnRef.current = `${activeConnection?.id || ''}:${(haEntitiesRegistry?.length || 0) > 0 ? 'reg' : 'states'}`
+                setTiles(newTiles)
+
+                if (activeConnection) {
+                    performToolSync(activeConnection, statesToUse)
                 }
 
+                setToastMsg(`✅ ${devicesAddedCount} apparaten in ${areasCreatedCount} ruimtes gesynchroniseerd!`)
+                setTimeout(() => setToastMsg(null), 4000)
             } else {
-                orphans.push(regEntity)
+                alert("Geen apparaten of ruimtes gevonden in je Home Assistant configuratie. Controleer je URL en token.")
             }
-        })
-
-        // 2. Process Device Groups -> Tiles
-        deviceMap.forEach(group => {
-            // Determine Primary Entity for Summary View
-            // Priority: Light > Switch > Cover > Climate > Sensor
-            const getScore = (e: RoomDevice) => {
-                if (e.entityId?.startsWith('light')) return 10
-                if (e.entityId?.startsWith('switch')) return 9
-                if (e.entityId?.startsWith('cover')) return 8
-                if (e.entityId?.startsWith('climate')) return 7
-                if (e.entityId?.startsWith('lock')) return 6
-                if (e.entityId?.startsWith('media_player')) return 5
-                return 0
-            }
-
-            group.entities.sort((a, b) => getScore(b) - getScore(a))
-            group.primaryEntity = group.entities[0]
-
-            // Assign to Area
-            let tile: DashboardTile
-            if (group.areaId) {
-                const area = haAreas.find(a => a.area_id === group.areaId)
-                tile = getOrCreateTile(group.areaId, area?.name || 'Unknown Area')
-            } else {
-                tile = unassignedTile
-            }
-
-            tile.deviceGroups.push(group)
-            devicesAddedCount++
-        })
-
-        // 3. Process Orphans (Entities without Devices)
-        orphans.forEach(orp => {
-            const domain = orp.entity_id.split('.')[0]
-            if (domain === 'sun' || domain === 'weather') return // processed later if we want special tiles
-
-            const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { id: 'sensor', icon: '👁️', name: 'Sensor' }
-
-            // Create a "Virtual Device" for this orphan
-            const virtualGroup: DeviceGroup = {
-                id: `orp-${orp.entity_id}`,
-                name: orp.name || orp.original_name || orp.entity_id,
-                entities: [{
-                    id: `ent-${orp.entity_id}`,
-                    type: typeDef.id,
-                    name: orp.name || orp.original_name || orp.entity_id,
-                    icon: typeDef.icon, // Force emoji icon
-                    entityId: orp.entity_id
-                }]
-            }
-            virtualGroup.primaryEntity = virtualGroup.entities[0]
-
-            let tile: DashboardTile
-            if (orp.area_id) {
-                const area = haAreas.find(a => a.area_id === orp.area_id)
-                tile = getOrCreateTile(orp.area_id, area?.name || 'Unknown Area')
-            } else {
-                tile = unassignedTile
-            }
-
-            tile.deviceGroups.push(virtualGroup)
-            devicesAddedCount++
-        })
-
-        // 4. Final Sort
-        if (newTiles.length > 0 || devicesAddedCount > 0) {
-            if (unassignedTile.deviceGroups.length > 0) newTiles.push(unassignedTile)
-
-            newTiles.sort((a, b) => {
-                if (a.id === 'unassigned') return 1
-                if (b.id === 'unassigned') return -1
-                return (a.roomName || '').localeCompare(b.roomName || '')
-            })
-
-            newTiles.forEach(tile => {
-                tile.deviceGroups.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-            })
-
-            setTiles(newTiles)
-
-            // === NEW: Sync to MCP Librarian (Client-Orchestrated Batching) ===
-            // This builds the Custom MCP Server with properly formatted tools
-            if (activeConnection) {
-                performToolSync(activeConnection, entityStates);
-            }
-
-            alert(`Import voltooid!\n${areasCreatedCount} ruimtes aangemaakt.\n${devicesAddedCount} apparaten gekoppeld uit Home Assistant.`)
-        } else {
-            setTiles([])
-            alert("Geen apparaten of ruimtes gevonden in je Home Assistant configuratie.")
+        } finally {
+            setIsSyncingLayout(false)
         }
     }
 
@@ -869,49 +1040,23 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 </div>
 
                 {tile.id === 'unassigned' ? (
-                    <div style={{ padding: '20px 0', textAlign: 'center', opacity: 0.6 }}>
-                        <div style={{ fontSize: '2rem', marginBottom: 8 }}>📦</div>
-                        <div>{tile.deviceGroups.length} Unassigned Items</div>
-                        <div style={{ fontSize: '0.8rem' }}>(Tap to view)</div>
+                    <div style={{ padding: '16px 0', textAlign: 'center', opacity: 0.75 }}>
+                        <div style={{ fontSize: '2rem', marginBottom: 6 }}>📦</div>
+                        <div style={{ fontWeight: 600 }}>{tile.deviceGroups.length} Overige Apparaten</div>
+                        <div style={{ fontSize: '0.8rem', opacity: 0.75 }}>(Tik om alle apparaten te bekijken)</div>
                     </div>
                 ) : (
                     <div className="room-entity-list" style={{ marginTop: 8 }}>
                         {tile.deviceGroups.length === 0 && (
-                            <div style={{ opacity: 0.5, fontSize: '0.8rem', padding: '10px 0' }}>No devices found.</div>
+                            <div style={{ opacity: 0.5, fontSize: '0.8rem', padding: '10px 0' }}>Geen apparaten in deze kamer.</div>
                         )}
                         {[...tile.deviceGroups]
                             .filter(g => {
-                                const type = g.primaryEntity?.type;
-                                const id = g.primaryEntity?.entityId?.toLowerCase() || '';
-                                const name = g.primaryEntity?.name?.toLowerCase() || '';
-
-                                // Always keep controls
-                                if (type !== 'sensor' && type !== 'binary_sensor') return true;
-
-                                // Whitelist: Season, Day/Night, Trackers
-                                if (id.includes('season') ||
-                                    id.includes('sun') ||
-                                    id.includes('day') ||
-                                    id.includes('night') ||
-                                    id.includes('mode') ||
-                                    // Lost items / Trackers
-                                    name.includes('lost') ||
-                                    name.includes('tracker') ||
-                                    name.includes('tile') ||
-                                    name.includes('tag') ||
-                                    id.includes('tracker') ||
-                                    id.includes('device_tracker') ||
-                                    // Doors / Windows / Gates
-                                    name.includes('door') ||
-                                    name.includes('window') ||
-                                    name.includes('gate') ||
-                                    name.includes('entry') ||
-                                    id.includes('door') ||
-                                    id.includes('window')) {
-                                    return true;
-                                }
-
-                                return false;
+                                const primary = g.primaryEntity || g.entities[0];
+                                if (!primary) return false;
+                                // Only hide pure diagnostic-only items from the summary card (still visible in detail view!)
+                                if (primary.isDiagnostic && g.entities.every(e => e.isDiagnostic)) return false;
+                                return true;
                             })
                             .sort((a, b) => {
                                 const typeA = a.primaryEntity?.type || 'sensor'
@@ -922,44 +1067,21 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                 return a.name.localeCompare(b.name)
                             })
                             .map(group => {
-                                // Show the Primary Entity if available, otherwise just the first entity
                                 const primary = group.primaryEntity || group.entities[0]
                                 if (!primary) return null
 
                                 const ha = entityStates[primary.entityId || '']
-
-                                // Don't hide if missing state, show placeholder?
-                                // if (!ha) return null 
-
-                                // Filtering logic same as before but per device group presentation
-                                // If the Primary is the temp sensor shown in header, do we hide the whole device?
-                                // Maybe not, because the device might have OTHER entities.
-                                // But for room summary card, we only show ONE line per device generally.
-
-                                /* 
-                                   DECISION: On the Room Card (Summary), show only the Primary Entity of the Device.
-                                   If the primary entity is HIDDEN (e.g. it's the temp sensor we moved to header),
-                                   we should show the Secondary entity?
-                                   No, let's just keep it simple. If it's in the header, we might duplicate it or just ignore. 
-                                   Duplicates are fine for full control.
-                                */
-
                                 const config = primary
 
-                                const isSensor = config.type === 'sensor' || config.type === 'climate'
-                                const isActive = ha?.state === 'on' || ha?.state === 'playing' || ha?.state === 'open'
-                                const isWarm = isSensor && (ha?.attributes?.device_class === 'temperature')
+                                const isToggleable = ['light', 'switch', 'input_boolean', 'lock', 'media', 'cover', 'fan', 'vacuum', 'humidifier'].includes(config.type)
+                                const isActive = ha?.state === 'on' || ha?.state === 'playing' || ha?.state === 'open' || ha?.state === 'running' || ha?.state === 'cleaning'
+                                const isWarm = (config.type === 'sensor' || config.type === 'climate') && (ha?.attributes?.device_class === 'temperature')
 
-                                // Formatting State
-                                let stateDisplay = ha?.state || 'Unknown'
+                                let stateDisplay = ha?.state || 'Onbekend'
 
-                                // Sun formatting
                                 if (config.entityId === 'sun.sun') {
-                                    stateDisplay = ha?.state === 'above_horizon' ? 'Day' : 'Night'
-                                }
-
-                                // Proper Door/Window text for binary sensors (Broad check)
-                                else if ((config.type === 'binary_sensor' || config.entityId?.includes('door') || config.entityId?.includes('window')) && (
+                                    stateDisplay = ha?.state === 'above_horizon' ? 'Dag' : 'Nacht'
+                                } else if ((config.type === 'binary_sensor' || config.entityId?.includes('door') || config.entityId?.includes('window')) && (
                                     config.entityId?.includes('door') ||
                                     config.entityId?.includes('window') ||
                                     config.entityId?.includes('opening') ||
@@ -967,33 +1089,30 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                     ha?.attributes?.device_class === 'window' ||
                                     ha?.attributes?.device_class === 'garage_door'
                                 )) {
-                                    stateDisplay = ha?.state === 'on' ? 'Open' : 'Closed'
-                                }
-
-                                else if (config.type === 'light') stateDisplay = isActive ? 'On' : 'Off'
-
-                                // Cover Percentage
-                                else if (config.type === 'cover') {
+                                    stateDisplay = ha?.state === 'on' ? 'Open' : 'Dicht'
+                                } else if (config.type === 'light') {
+                                    stateDisplay = isActive ? 'Aan' : 'Uit'
+                                } else if (config.type === 'cover') {
                                     if (ha?.state === 'open' && ha.attributes?.current_position !== undefined) {
                                         stateDisplay = `Open (${ha.attributes.current_position}%)`
                                     } else {
-                                        stateDisplay = ha?.state === 'open' ? 'Open' : ha?.state === 'closed' ? 'Closed' : ha?.state || 'Unknown'
+                                        stateDisplay = ha?.state === 'open' ? 'Open' : ha?.state === 'closed' ? 'Dicht' : ha?.state || 'Onbekend'
                                     }
                                 }
 
                                 if (ha?.attributes?.unit_of_measurement) stateDisplay += ` ${ha.attributes.unit_of_measurement}`
-
-                                // General Text Cleanup (Capitalize, replace underscores)
                                 if (!ha?.attributes?.unit_of_measurement && stateDisplay.includes('_')) {
                                     stateDisplay = stateDisplay.replace(/_/g, ' ')
                                 }
-
-                                // Capitalize if simple word and not already formatted
-                                if (!ha?.attributes?.unit_of_measurement && stateDisplay.length < 20 && !stateDisplay.includes('(')) {
+                                if (!ha?.attributes?.unit_of_measurement && stateDisplay.length < 24 && !stateDisplay.includes('(')) {
                                     stateDisplay = stateDisplay.charAt(0).toUpperCase() + stateDisplay.slice(1)
                                 }
-                                // Motion
-                                if (config.id.includes('motion')) stateDisplay = isActive ? 'Detected' : 'Clear'
+                                if (config.id.includes('motion')) stateDisplay = isActive ? 'Beweging' : 'Rustig'
+
+                                // For multi-entity HA devices (like Wasmachine / Droogkast), show the Device Name clearly!
+                                const displayName = (group.entities.length > 1 && group.name && group.name !== 'Unknown Device')
+                                    ? group.name
+                                    : (config.name || group.name)
 
                                 return (
                                     <div key={group.id} className="entity-row">
@@ -1001,11 +1120,10 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                             <div className={`entity-icon ${isActive ? 'active' : ''} ${isWarm ? 'warm' : ''}`}>
                                                 {config.icon}
                                             </div>
-                                            <div className="entity-name">{config.name || group.name}</div>
+                                            <div className="entity-name">{displayName}</div>
                                         </div>
 
-                                        {/* Right Side: Toggle or Value */}
-                                        {!isSensor ? (
+                                        {isToggleable ? (
                                             <div className={`toggle-switch compact ${isActive ? 'on' : ''}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
@@ -1049,21 +1167,24 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const diagnosticDevices = allEntities.filter(d => d.isDiagnostic)
 
         const covers = primaryDevices.filter(e => e.type === 'cover')
-        const climateDevices = primaryDevices.filter(e => e.type === 'climate')
-        const controls = primaryDevices.filter(e => e.type === 'light' || e.type === 'switch' || e.type === 'input_boolean' || e.type === 'lock' || e.type === 'media')
-        const sensors = primaryDevices.filter(e => e.type === 'sensor' || e.type === 'binary_sensor')
+        const climateDevices = primaryDevices.filter(e => e.type === 'climate' || e.type === 'water_heater')
+        const controlTypes = new Set(['light', 'switch', 'input_boolean', 'lock', 'media', 'fan', 'vacuum', 'humidifier', 'button', 'scene', 'script'])
+        const controls = primaryDevices.filter(e => controlTypes.has(e.type))
+        const sensors = primaryDevices.filter(e => !controlTypes.has(e.type) && e.type !== 'cover' && e.type !== 'climate' && e.type !== 'water_heater')
 
         const renderCard = (config: RoomDevice) => {
             const ha = entityStates[config.entityId || '']
             if (!ha) return null
 
-            const isOn = ha.state === 'on' || ha.state === 'playing' || ha.state === 'open' || ha.state === 'unlocked'
+            const isOn = ha.state === 'on' || ha.state === 'playing' || ha.state === 'open' || ha.state === 'unlocked' || ha.state === 'cleaning'
             const isLight = config.type === 'light'
             const isCover = config.type === 'cover'
             const isClimate = config.type === 'climate'
             const isLock = config.type === 'lock'
             const isMedia = config.type === 'media'
-            const isSensor = config.type === 'sensor' || config.type === 'binary_sensor'
+            const isTriggerable = config.type === 'button' || config.type === 'scene' || config.type === 'script'
+            const isToggleControl = isLight || config.type === 'switch' || config.type === 'input_boolean' || isLock || isMedia || config.type === 'fan' || config.type === 'vacuum' || config.type === 'humidifier'
+            const isSensor = !isCover && !isClimate && !isToggleControl && !isTriggerable
             const brightness = ha.attributes?.brightness ? Math.round((ha.attributes.brightness / 255) * 100) : 0
 
             // Only match diagnostics when deviceId is actually defined
@@ -1074,19 +1195,21 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             // Value Display
             let valueDisplay = ha.state
             if (isCover) {
-                valueDisplay = ha.state === 'open' ? 'Open' : ha.state === 'closed' ? 'Closed' : ha.state
+                valueDisplay = ha.state === 'open' ? 'Open' : ha.state === 'closed' ? 'Dicht' : ha.state
             } else if (isClimate) {
                 const cur = ha.attributes?.current_temperature
                 const target = ha.attributes?.temperature
                 valueDisplay = `${ha.state}${cur !== undefined ? ` • ${cur}°` : ''}${target !== undefined ? ` → ${target}°` : ''}`
             } else if (isLight) {
-                valueDisplay = isOn ? (brightness > 0 ? `On • ${brightness}%` : 'On') : 'Off'
+                valueDisplay = isOn ? (brightness > 0 ? `Aan • ${brightness}%` : 'Aan') : 'Uit'
             } else if (isLock) {
-                valueDisplay = ha.state === 'locked' ? 'Locked' : ha.state === 'unlocked' ? 'Unlocked' : ha.state
+                valueDisplay = ha.state === 'locked' ? 'Vergrendeld' : ha.state === 'unlocked' ? 'Ontgrendeld' : ha.state
             } else if (isMedia) {
                 valueDisplay = ha.attributes?.media_title ? `${ha.state} • ${ha.attributes.media_title}` : ha.state
+            } else if (isTriggerable) {
+                valueDisplay = config.type === 'button' ? 'Druk om uit te voeren' : 'Activeer'
             } else if (!isSensor) {
-                valueDisplay = isOn ? 'On' : 'Off'
+                valueDisplay = isOn ? 'Aan' : 'Uit'
             } else if (ha.attributes?.unit_of_measurement) {
                 valueDisplay += ` ${ha.attributes.unit_of_measurement}`
             }
@@ -1105,11 +1228,31 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                             <div className="detail-state">{valueDisplay}</div>
                         </div>
 
-                        {/* Toggle for switches, lights, input_boolean, locks, and media players */}
-                        {(isLight || config.type === 'switch' || config.type === 'input_boolean' || isLock || isMedia) && (
+                        {/* Toggle for controllable switches, lights, locks, fans, vacuums, media players */}
+                        {isToggleControl && (
                             <div className={`toggle-switch compact ${isOn ? 'on' : ''} detail-toggle`}
                                 onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}>
                             </div>
+                        )}
+
+                        {/* Action button for button/scene/script entities */}
+                        {isTriggerable && (
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}
+                                style={{
+                                    padding: '4px 10px',
+                                    borderRadius: '8px',
+                                    background: 'rgba(99, 102, 241, 0.2)',
+                                    border: '1px solid rgba(99, 102, 241, 0.4)',
+                                    color: '#a5b4fc',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                ▶
+                            </button>
                         )}
                     </div>
 
@@ -1299,24 +1442,148 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         )
     }
 
+    // Live search across ALL Home Assistant devices & entities (with NL<->EN appliance matching!)
+    const normalizedSearch = searchQuery.trim().toLowerCase()
+    const searchMatches = normalizedSearch.length >= 2 ? (() => {
+        const synonyms: Record<string, string[]> = {
+            wasmachine: ['washer', 'washing', 'was'],
+            droogkast: ['dryer', 'droger', 'tumble'],
+            droger: ['dryer', 'droogkast', 'tumble'],
+            vaatwasser: ['dishwasher'],
+            koelkast: ['fridge', 'refrigerator'],
+            vriezer: ['freezer'],
+            verwarming: ['climate', 'thermostat', 'heat'],
+            rolluik: ['cover', 'shutter', 'blind'],
+            gordijn: ['cover', 'curtain', 'blind'],
+            laadpaal: ['charger', 'wallbox', 'ev'],
+            zonnepanelen: ['solar', 'inverter', 'omvormer', 'pv'],
+            lamp: ['light', 'licht'],
+            licht: ['light', 'lamp']
+        }
+        const terms = [normalizedSearch, ...(synonyms[normalizedSearch] || [])]
+        const devById = new Map<string, any>()
+        ;(haDevices || []).forEach((d: any) => { if (d?.id) devById.set(d.id, d) })
+        const regByEid = new Map<string, any>()
+        ;(haEntitiesRegistry || []).forEach((e: any) => { if (e?.entity_id) regByEid.set(e.entity_id, e) })
+
+        return availableEntities.filter(ent => {
+            const reg = regByEid.get(ent.entity_id)
+            const dev = reg?.device_id ? devById.get(reg.device_id) : null
+            const haystack = `${ent.entity_id} ${ent.friendly_name} ${dev?.name_by_user || ''} ${dev?.name || ''} ${dev?.manufacturer || ''} ${dev?.model || ''}`.toLowerCase()
+            return terms.some(t => haystack.includes(t))
+        }).slice(0, 40)
+    })() : []
+
     return (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', flex: 1 }}>
-            {/* Top Bar */}
-            <div className="dashboard-header">
+            {/* Top Bar + Quick Search */}
+            <div className="dashboard-header" style={{ flexWrap: 'wrap', gap: '10px' }}>
                 <div>
                     <h1>Home</h1>
                     <div className="connection-status">
                         <span className={`status-dot ${activeConnection ? 'connected' : ''}`}></span>
-                        {activeConnection ? activeConnection.name : 'Disconnected'}
+                        {activeConnection
+                            ? `${activeConnection.name} • ${availableEntities.length} entiteiten`
+                            : 'Disconnected'}
                     </div>
                 </div>
+                {activeConnection && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 220px', maxWidth: '380px', marginLeft: 'auto' }}>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="🔍 Zoek apparaat (bv. wasmachine, droogkast)..."
+                            style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                borderRadius: '10px',
+                                border: '1px solid var(--border, rgba(255,255,255,0.12))',
+                                background: 'rgba(255,255,255,0.05)',
+                                color: 'var(--text-primary, #ffffff)',
+                                fontSize: '0.84rem',
+                                outline: 'none'
+                            }}
+                        />
+                        {searchQuery && (
+                            <button
+                                type="button"
+                                onClick={() => setSearchQuery('')}
+                                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1rem', padding: '4px' }}
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
 
+            {/* Instant Search Results */}
+            {normalizedSearch.length >= 2 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0 4px' }}>
+                        {searchMatches.length} resultaten voor &ldquo;{searchQuery}&rdquo;
+                    </div>
+                    {searchMatches.length === 0 ? (
+                        <div style={{ padding: '24px', textAlign: 'center', opacity: 0.65, fontSize: '0.88rem' }}>
+                            Geen apparaten of sensoren gevonden voor &ldquo;{searchQuery}&rdquo;.
+                        </div>
+                    ) : (
+                        searchMatches.map(ent => {
+                            const domain = ent.entity_id.split('.')[0]
+                            const isToggleable = ['light', 'switch', 'input_boolean', 'lock', 'media_player', 'cover', 'fan', 'vacuum', 'humidifier'].includes(domain)
+                            const isTriggerable = ['button', 'scene', 'script'].includes(domain)
+                            const isActive = ent.state === 'on' || ent.state === 'playing' || ent.state === 'open' || ent.state === 'running'
+                            const typeDef = DEVICE_TYPES.find(dt => dt.domain === domain) || { icon: '👁️' }
+                            const icon = getApplianceIcon(`${ent.friendly_name} ${ent.entity_id}`, typeDef.icon)
+                            const val = ent.attributes?.unit_of_measurement ? `${ent.state} ${ent.attributes.unit_of_measurement}` : ent.state
 
-            {/* Room Grid */}
-            {tiles.length === 0 ? (
+                            return (
+                                <div
+                                    key={ent.entity_id}
+                                    className="entity-row"
+                                    style={{
+                                        background: 'var(--bg-card)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: '12px',
+                                        padding: '10px 14px'
+                                    }}
+                                >
+                                    <div className="entity-main" style={{ minWidth: 0 }}>
+                                        <div className={`entity-icon ${isActive ? 'active' : ''}`}>{icon}</div>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div className="entity-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {ent.friendly_name}
+                                            </div>
+                                            <div style={{ fontSize: '0.72rem', opacity: 0.55, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {ent.entity_id}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {isToggleable ? (
+                                        <div
+                                            className={`toggle-switch compact ${isActive ? 'on' : ''}`}
+                                            onClick={() => handleToggle(ent.entity_id, ent.state)}
+                                        />
+                                    ) : isTriggerable ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggle(ent.entity_id, ent.state)}
+                                            style={{ padding: '4px 10px', borderRadius: '8px', background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.4)', color: '#a5b4fc', cursor: 'pointer', fontSize: '0.78rem' }}
+                                        >
+                                            ▶
+                                        </button>
+                                    ) : (
+                                        <div className="entity-state">{val}</div>
+                                    )}
+                                </div>
+                            )
+                        })
+                    )}
+                </div>
+            ) : tiles.length === 0 ? (
                 <div style={{
-                    padding: '48px 24px',
+                    padding: '40px 24px',
                     textAlign: 'center',
                     background: 'rgba(255, 255, 255, 0.03)',
                     borderRadius: '16px',
@@ -1324,11 +1591,33 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                     margin: '20px 0'
                 }}>
                     <div style={{ fontSize: '2.8rem', marginBottom: '14px' }}>🏡</div>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.25rem', fontWeight: 600 }}>Woning in opbouw</h3>
-                    <p style={{ margin: 0, opacity: 0.75, fontSize: '0.92rem', lineHeight: '1.6', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
-                        Er zijn momenteel geen kamers of actieve apparaten geconfigureerd in Home Assistant.<br />
-                        Zodra je nieuwe apparaten of ruimtes koppelt, worden deze hier direct dynamisch weergegeven.
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.25rem', fontWeight: 600 }}>
+                        {availableEntities.length > 0 ? 'Apparaten klaar om te laden' : 'Woning in opbouw'}
+                    </h3>
+                    <p style={{ margin: '0 auto 18px auto', opacity: 0.75, fontSize: '0.92rem', lineHeight: '1.6', maxWidth: '420px' }}>
+                        {availableEntities.length > 0
+                            ? `${availableEntities.length} Home Assistant entiteiten gedetecteerd. Tik op de knop hieronder om alle kamers en apparaten direct te importeren.`
+                            : 'Er zijn nog geen kamers of apparaten geladen vanuit Home Assistant. Tik hieronder om te synchroniseren.'}
                     </p>
+                    {activeConnection && (
+                        <button
+                            type="button"
+                            disabled={isSyncingLayout}
+                            onClick={() => importLayoutFromHA()}
+                            style={{
+                                padding: '10px 18px',
+                                borderRadius: '10px',
+                                background: '#4f46e5',
+                                color: '#ffffff',
+                                border: 'none',
+                                fontWeight: 600,
+                                fontSize: '0.9rem',
+                                cursor: isSyncingLayout ? 'wait' : 'pointer'
+                            }}
+                        >
+                            {isSyncingLayout ? '⏳ Synchroniseren...' : '↻ Synchroniseer met Home Assistant'}
+                        </button>
+                    )}
                 </div>
             ) : (
                 <div className="room-grid">

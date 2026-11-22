@@ -16,13 +16,83 @@ interface FloatingButtonPlugin {
 
 const FloatingButton = registerPlugin<FloatingButtonPlugin>('FloatingButton');
 
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      nodes.push(text.slice(lastIdx, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(<em key={key++}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code key={key++} style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: '4px', fontSize: '0.88em' }}>
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
+    lastIdx = match.index + token.length;
+  }
+
+  if (lastIdx < text.length) {
+    nodes.push(text.slice(lastIdx));
+  }
+  return nodes;
+}
+
+function renderRichMessage(raw: string): React.ReactNode {
+  let displayText = raw;
+  try {
+    if (raw.trim().startsWith('{')) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.text) displayText = parsed.text;
+    }
+  } catch { }
+
+  const lines = displayText.split(/\r?\n/);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', lineHeight: 1.5 }}>
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) return <div key={idx} style={{ height: '4px' }} />;
+        const headingMatch = trimmed.match(/^#{1,4}\s+(.*)$/);
+        if (headingMatch) {
+          return (
+            <div key={idx} style={{ fontWeight: 700, fontSize: '0.96rem', marginTop: idx > 0 ? '4px' : 0 }}>
+              {renderInlineMarkdown(headingMatch[1])}
+            </div>
+          );
+        }
+        const bulletMatch = trimmed.match(/^[-*•]\s+(.*)$/);
+        if (bulletMatch) {
+          return (
+            <div key={idx} style={{ display: 'flex', gap: '6px', paddingLeft: '4px' }}>
+              <span style={{ opacity: 0.7 }}>•</span>
+              <span>{renderInlineMarkdown(bulletMatch[1])}</span>
+            </div>
+          );
+        }
+        return <div key={idx}>{renderInlineMarkdown(line)}</div>;
+      })}
+    </div>
+  );
+}
+
 interface AIChatProps {
   disableGlobalVoiceListeners?: boolean;
 }
 
 export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}) {
   const { activeConnection, uiState, shouldTriggerVoice, setShouldTriggerVoice } = useApp()
-  const { messages, setMessages, sendMessage, loading, conversationMode } = useAIChatLogic()
+  const { messages, setMessages, sendMessage, loading, isSpeaking, stopCurrentSpeech, conversationMode } = useAIChatLogic()
   const [inputText, setInputText] = useState('')
   const [completedTodos, setCompletedTodos] = useState<Record<string, boolean>>({})
   const [activatedAutomations, setActivatedAutomations] = useState<Record<string, boolean>>({})
@@ -255,17 +325,7 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
             <div className="message-group">
               <div className="message ai">
                 {msg.ai_response ? (
-                  <p>
-                    {(() => {
-                      try {
-                        if (msg.ai_response.trim().startsWith('{')) {
-                          const parsed = JSON.parse(msg.ai_response);
-                          return parsed.text || msg.ai_response;
-                        }
-                      } catch (e) { }
-                      return msg.ai_response;
-                    })()}
-                  </p>
+                  renderRichMessage(msg.ai_response)
                 ) : (
                   <div className="typing-indicator">
                     <span>.</span><span>.</span><span>.</span>
@@ -598,6 +658,20 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
         </div>
       )}
 
+      {/* Speaking Indicator with quick mute */}
+      {isSpeaking && !isListening && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '5px 12px', background: 'rgba(99, 102, 241, 0.12)', border: '1px solid rgba(99, 102, 241, 0.28)', borderRadius: '12px', margin: '4px 12px' }}>
+          <span style={{ fontSize: '0.78rem', color: '#a5b4fc', fontWeight: 600 }}>🔊 Butler spreekt...</span>
+          <button
+            type="button"
+            onClick={() => stopCurrentSpeech()}
+            style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#e2e8f0', borderRadius: '8px', padding: '2px 8px', fontSize: '0.74rem', cursor: 'pointer', fontWeight: 600 }}
+          >
+            🔇 Stop
+          </button>
+        </div>
+      )}
+
       {/* Voice Transcript & Listening Waveform Indicator */}
       {isListening && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '6px 0', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '12px', margin: '4px 12px' }}>
@@ -627,7 +701,14 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
           <button
             type="button"
             className={`voice-btn ${isListening ? 'listening' : ''} ${isStarting ? 'connecting' : ''}`}
-            onClick={() => isListening ? stopListening('user_tap') : startListening()}
+            onClick={() => {
+              stopCurrentSpeech();
+              if (isListening) {
+                stopListening('user_tap');
+              } else {
+                startListening();
+              }
+            }}
             disabled={isStarting}
             style={{ backgroundColor: isListening ? '#ef4444' : isStarting ? '#eab308' : undefined }}
             title={isListening ? 'Stop met luisteren' : 'Start spraakherkenning'}

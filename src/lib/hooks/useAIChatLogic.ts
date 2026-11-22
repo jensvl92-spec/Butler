@@ -11,6 +11,13 @@ import { supabase } from '../supabase';
 // @ts-ignore
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { runClientReActOrchestrator, resolveAIConfig } from '../services/clientOrchestrator';
+import {
+    sanitizeTextForSpeech,
+    synthesizeGeminiTTS,
+    synthesizeDeepgramTTS,
+    selectBestNativeVoiceIndex,
+    getTTSConfig
+} from '../../utils/speechUtils';
 
 const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 
@@ -22,14 +29,25 @@ export let onGraphCreate: ((config: any) => void) | null = null;
 export const setGraphCreateCallback = (cb: ((config: any) => void) | null) => { onGraphCreate = cb; };
 
 export function useAIChatLogic() {
-    const { activeConnection, entityStates, haWebSocket, addChatMessage, uiState } = useApp();
+    const {
+        activeConnection,
+        entityStates,
+        haWebSocket,
+        haAreas,
+        haDevices,
+        haEntitiesRegistry,
+        addChatMessage,
+        uiState
+    } = useApp();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
     const [conversationMode, setConversationMode] = useState(false);
     const isSendingRef = useRef(false);
     const activeAudioRef = useRef<HTMLAudioElement | null>(null);
     const activeAudioUrlRef = useRef<string | null>(null);
     const ttsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const speechSessionRef = useRef<number>(0);
 
     const getDynamicCoordinates = (): { lat: number; lon: number } | null => {
         if (lastKnownLocation) return { lat: lastKnownLocation.lat, lon: lastKnownLocation.lon };
@@ -428,6 +446,8 @@ export function useAIChatLogic() {
     };
 
     const stopCurrentSpeech = () => {
+        speechSessionRef.current += 1;
+        setIsSpeaking(false);
         if (ttsTimeoutRef.current) {
             clearTimeout(ttsTimeoutRef.current);
             ttsTimeoutRef.current = null;
@@ -452,43 +472,116 @@ export function useAIChatLogic() {
         }
     };
 
-    const playNativeTTS = async (text: string, language: string, autoListen: boolean, isWhisper?: boolean) => {
-        stopCurrentSpeech();
+    const playAudioBlob = (blob: Blob, sessionId: number, autoListen: boolean, isWhisper?: boolean): Promise<boolean> => {
+        return new Promise((resolve) => {
+            if (speechSessionRef.current !== sessionId) {
+                resolve(true);
+                return;
+            }
+            const audioUrl = URL.createObjectURL(blob);
+            const audioPlayer = new Audio(audioUrl);
+            activeAudioRef.current = audioPlayer;
+            activeAudioUrlRef.current = audioUrl;
+
+            if (isWhisper) audioPlayer.volume = 0.35;
+
+            const cleanupAudio = () => {
+                if (activeAudioUrlRef.current === audioUrl) {
+                    URL.revokeObjectURL(audioUrl);
+                    activeAudioUrlRef.current = null;
+                }
+                if (activeAudioRef.current === audioPlayer) {
+                    activeAudioRef.current = null;
+                }
+                if (speechSessionRef.current === sessionId) {
+                    setIsSpeaking(false);
+                }
+            };
+
+            audioPlayer.onended = () => {
+                cleanupAudio();
+                if (autoListen && speechSessionRef.current === sessionId) {
+                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                }
+                resolve(true);
+            };
+
+            audioPlayer.onerror = () => {
+                cleanupAudio();
+                resolve(false);
+            };
+
+            setIsSpeaking(true);
+            audioPlayer.play().catch(() => {
+                cleanupAudio();
+                resolve(false);
+            });
+        });
+    };
+
+    const playNativeTTS = async (rawText: string, language: string, autoListen: boolean, isWhisper?: boolean, existingSessionId?: number) => {
+        const spokenText = sanitizeTextForSpeech(rawText, language);
+        if (!spokenText) return;
+
+        const sessionId = existingSessionId ?? (stopCurrentSpeech(), speechSessionRef.current);
+        if (speechSessionRef.current !== sessionId) return;
+
         const isDutch = !language || language.toLowerCase().startsWith('nl');
-        const locale = isDutch ? 'nl-NL' : 'en-US';
-        const volume = isWhisper ? 0.3 : 1.0;
-        const rate = isWhisper ? 0.9 : 1.05;
-        const pitch = isWhisper ? 0.85 : 1.0;
+        const locale = isDutch ? (language?.toLowerCase() === 'nl-be' ? 'nl-BE' : 'nl-NL') : 'en-US';
+        const volume = isWhisper ? 0.35 : 1.0;
+        const rate = isWhisper ? 0.9 : 0.98;
+        const pitch = isWhisper ? 0.9 : 1.0;
+
+        setIsSpeaking(true);
 
         try {
             if (Capacitor.isNativePlatform()) {
-                await TextToSpeech.speak({
-                    text,
+                let bestVoiceIdx: number | undefined = undefined;
+                try {
+                    const { voices } = await TextToSpeech.getSupportedVoices();
+                    const picked = selectBestNativeVoiceIndex(voices || [], locale);
+                    if (picked >= 0) {
+                        bestVoiceIdx = picked;
+                    }
+                } catch { }
+
+                if (speechSessionRef.current !== sessionId) return;
+
+                const speakOpts: any = {
+                    text: spokenText,
                     lang: locale,
                     rate,
                     pitch,
                     volume,
                     category: 'ambient',
-                });
-                if (autoListen) {
-                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                };
+                if (bestVoiceIdx !== undefined) {
+                    speakOpts.voice = bestVoiceIdx;
+                }
+
+                await TextToSpeech.speak(speakOpts);
+                if (speechSessionRef.current === sessionId) {
+                    setIsSpeaking(false);
+                    if (autoListen) {
+                        window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                    }
                 }
                 return;
             }
             throw new Error('Web platform - use Web Speech');
         } catch {
+            if (speechSessionRef.current !== sessionId) return;
             if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-                const utter = new SpeechSynthesisUtterance(text);
+                const utter = new SpeechSynthesisUtterance(spokenText);
                 utter.lang = locale;
                 utter.volume = volume;
                 utter.rate = rate;
                 utter.pitch = pitch;
 
                 const voices = window.speechSynthesis.getVoices();
-                const targetPrefix = isDutch ? 'nl' : 'en';
-                const matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith(targetPrefix));
-                if (matchingVoice) {
-                    utter.voice = matchingVoice;
+                const bestIdx = selectBestNativeVoiceIndex(voices, locale);
+                if (bestIdx >= 0 && voices[bestIdx]) {
+                    utter.voice = voices[bestIdx];
                 }
 
                 const finish = () => {
@@ -496,8 +589,11 @@ export function useAIChatLogic() {
                         clearTimeout(ttsTimeoutRef.current);
                         ttsTimeoutRef.current = null;
                     }
-                    if (autoListen) {
-                        window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                    if (speechSessionRef.current === sessionId) {
+                        setIsSpeaking(false);
+                        if (autoListen) {
+                            window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                        }
                     }
                 };
 
@@ -509,16 +605,89 @@ export function useAIChatLogic() {
                     if (window.speechSynthesis.speaking) {
                         window.speechSynthesis.cancel();
                     }
-                    if (autoListen) {
-                        window.dispatchEvent(new CustomEvent('butler-auto-listen'));
-                    }
-                }, Math.min(30000, (text.length * 100) + 4000));
+                    finish();
+                }, Math.min(35000, (spokenText.length * 100) + 4000));
 
                 window.speechSynthesis.speak(utter);
-            } else if (autoListen) {
-                globalThis.dispatchEvent(new CustomEvent('butler-auto-listen'));
+            } else {
+                setIsSpeaking(false);
+                if (autoListen) {
+                    globalThis.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                }
             }
         }
+    };
+
+    const speakResponse = async (rawText: string, language: string, autoListen: boolean, isWhisper?: boolean) => {
+        const ttsConfig = getTTSConfig();
+        if (!ttsConfig.enabled) return;
+
+        const cleanSpoken = sanitizeTextForSpeech(rawText, language);
+        if (!cleanSpoken) return;
+
+        stopCurrentSpeech();
+        const sessionId = speechSessionRef.current;
+
+        const isDutch = !language || language.toLowerCase().startsWith('nl');
+        const geminiApiKey = (
+            localStorage.getItem('butler.gemini_api_key') ||
+            (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+            ''
+        ).trim();
+
+        const tryGemini = async (): Promise<boolean> => {
+            if (!geminiApiKey) return false;
+            const res = await synthesizeGeminiTTS(cleanSpoken, geminiApiKey, ttsConfig.geminiVoice, {
+                isWhisper,
+                language
+            });
+            if (!res || speechSessionRef.current !== sessionId) return false;
+            return playAudioBlob(res.blob, sessionId, autoListen, isWhisper);
+        };
+
+        const tryDeepgram = async (): Promise<boolean> => {
+            if (!SUPABASE_URL) return false;
+            try {
+                const { data: sessionData } = await supabase.auth.getSession();
+                const jwt = sessionData?.session?.access_token;
+                if (!jwt) return false;
+                const voice = isDutch ? ttsConfig.deepgramVoiceNl : ttsConfig.deepgramVoiceEn;
+                const res = await synthesizeDeepgramTTS(cleanSpoken, SUPABASE_URL, jwt, language, voice);
+                if (!res || speechSessionRef.current !== sessionId) return false;
+                return playAudioBlob(res.blob, sessionId, autoListen, isWhisper);
+            } catch {
+                return false;
+            }
+        };
+
+        if (ttsConfig.provider === 'native') {
+            await playNativeTTS(cleanSpoken, language, autoListen, isWhisper, sessionId);
+            return;
+        }
+
+        if (ttsConfig.provider === 'deepgram') {
+            if (await tryDeepgram()) return;
+            if (speechSessionRef.current !== sessionId) return;
+            if (await tryGemini()) return;
+            if (speechSessionRef.current !== sessionId) return;
+            await playNativeTTS(cleanSpoken, language, autoListen, isWhisper, sessionId);
+            return;
+        }
+
+        if (ttsConfig.provider === 'gemini') {
+            if (await tryGemini()) return;
+            if (speechSessionRef.current !== sessionId) return;
+            await playNativeTTS(cleanSpoken, language, autoListen, isWhisper, sessionId);
+            return;
+        }
+
+        // 'auto' (default): Gemini Neural TTS (studio Dutch/Flemish/English via user's Gemini key)
+        // -> Deepgram Aura-2 (Dutch/English) -> Smart Native Android Neural Voice
+        if (await tryGemini()) return;
+        if (speechSessionRef.current !== sessionId) return;
+        if (await tryDeepgram()) return;
+        if (speechSessionRef.current !== sessionId) return;
+        await playNativeTTS(cleanSpoken, language, autoListen, isWhisper, sessionId);
     };
 
     const sendMessage = async (text: string, options?: { forcedLocation?: any; gpsUnavailable?: boolean; isWhisper?: boolean }) => {
@@ -547,10 +716,40 @@ export function useAIChatLogic() {
             };
             setMessages(prev => [...prev, optimisticMsg]);
 
-            // 1. Gather Context
-            let devices = Object.values(entityStates || {}).map((s: any) => ({
-                entity_id: s.entity_id, ...s
-            })).filter(d => d.entity_id);
+            // 1. Gather Context & Enrich every entity with HA Device Registry + Area names
+            // (so appliances like Wasmachine / Droogkast are ALWAYS discoverable even if entity_id is generic!)
+            const areaById = new Map<string, string>();
+            (haAreas || []).forEach((a: any) => {
+                if (a?.area_id) areaById.set(a.area_id, a.name || a.area_id);
+            });
+            const deviceById = new Map<string, any>();
+            (haDevices || []).forEach((d: any) => {
+                if (d?.id) deviceById.set(d.id, d);
+            });
+            const regByEntityId = new Map<string, any>();
+            (haEntitiesRegistry || []).forEach((e: any) => {
+                if (e?.entity_id) regByEntityId.set(e.entity_id, e);
+            });
+
+            const enrichDevice = (s: any) => {
+                const reg = regByEntityId.get(s.entity_id);
+                const dev = reg?.device_id ? deviceById.get(reg.device_id) : undefined;
+                const areaId = dev?.area_id || reg?.area_id;
+                const areaName = areaId ? areaById.get(areaId) : undefined;
+                const deviceName = dev?.name_by_user || dev?.name || undefined;
+                return {
+                    entity_id: s.entity_id,
+                    ...s,
+                    device_name: deviceName,
+                    manufacturer: dev?.manufacturer || undefined,
+                    model: dev?.model || undefined,
+                    area_name: areaName
+                };
+            };
+
+            let devices = Object.values(entityStates || {})
+                .filter((s: any) => s?.entity_id)
+                .map(enrichDevice);
 
             if (devices.length === 0 && activeConnection) {
                 try {
@@ -558,7 +757,7 @@ export function useAIChatLogic() {
                     if (cachedStatesRaw) {
                         const statesObj = JSON.parse(cachedStatesRaw);
                         if (statesObj && typeof statesObj === 'object') {
-                            devices = Object.values(statesObj).filter((d: any) => d?.entity_id);
+                            devices = Object.values(statesObj).filter((d: any) => d?.entity_id).map(enrichDevice);
                         }
                     }
                     if (devices.length === 0) {
@@ -572,13 +771,24 @@ export function useAIChatLogic() {
                                         t.deviceGroups.forEach((g: any) => {
                                             (g.entities || []).forEach((d: any) => {
                                                 const eid = d.entityId || d.entity_id;
-                                                if (eid) extracted.push({ entity_id: eid, state: 'unknown', attributes: { friendly_name: d.name } });
+                                                if (eid) extracted.push({
+                                                    entity_id: eid,
+                                                    state: 'unknown',
+                                                    device_name: g.name,
+                                                    area_name: t.roomName,
+                                                    attributes: { friendly_name: d.name }
+                                                });
                                             });
                                         });
                                     } else if (Array.isArray(t.devices)) {
                                         t.devices.forEach((d: any) => {
                                             const eid = d.entityId || d.entity_id;
-                                            if (eid) extracted.push({ entity_id: eid, state: d.state || 'unknown', attributes: { friendly_name: d.name } });
+                                            if (eid) extracted.push({
+                                                entity_id: eid,
+                                                state: d.state || 'unknown',
+                                                area_name: t.roomName,
+                                                attributes: { friendly_name: d.name }
+                                            });
                                         });
                                     }
                                 });
@@ -725,75 +935,10 @@ export function useAIChatLogic() {
                 setConversationMode(aiData.conversation_mode);
             }
 
-            // 5. TTS Playback
+            // 5. Neural TTS Playback (Sanitized — never reads Markdown asterisks aloud, supports Dutch & English)
             if (responseText) {
-                const isEnglish = responseLanguage.toLowerCase().startsWith('en');
                 const shouldAutoListen = conversationMode || !!aiData.conversation_mode;
-
-                if (isEnglish && SUPABASE_URL) {
-                    try {
-                        const { data: sessionData } = await supabase.auth.getSession();
-                        const jwt = sessionData?.session?.access_token;
-                        if (!jwt) throw new Error('No session JWT for TTS');
-
-                        const ttsResponse = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/deepgram-tts`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${jwt}`
-                            },
-                            body: JSON.stringify({ text: responseText, language: responseLanguage })
-                        });
-
-                        if (ttsResponse.ok) {
-                            const { audio, contentType } = await ttsResponse.json();
-                            const binaryString = atob(audio);
-                            const bytes = new Uint8Array(binaryString.length);
-                            for (let i = 0; i < binaryString.length; i++) {
-                                bytes[i] = binaryString.charCodeAt(i);
-                            }
-                            const audioBlob = new Blob([bytes], { type: contentType || 'audio/mp3' });
-                            const audioUrl = URL.createObjectURL(audioBlob);
-                            const audioPlayer = new Audio(audioUrl);
-                            activeAudioRef.current = audioPlayer;
-                            activeAudioUrlRef.current = audioUrl;
-
-                            if (options?.isWhisper) audioPlayer.volume = 0.3;
-
-                            const cleanupAudio = () => {
-                                if (activeAudioUrlRef.current === audioUrl) {
-                                    URL.revokeObjectURL(audioUrl);
-                                    activeAudioUrlRef.current = null;
-                                }
-                                if (activeAudioRef.current === audioPlayer) {
-                                    activeAudioRef.current = null;
-                                }
-                            };
-
-                            audioPlayer.onended = () => {
-                                cleanupAudio();
-                                if (shouldAutoListen) {
-                                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
-                                }
-                            };
-                            audioPlayer.onerror = () => {
-                                cleanupAudio();
-                                playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
-                            };
-
-                            audioPlayer.play().catch(() => {
-                                cleanupAudio();
-                                playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
-                            });
-                        } else {
-                            playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
-                        }
-                    } catch {
-                        playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
-                    }
-                } else {
-                    playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
-                }
+                speakResponse(responseText, responseLanguage, shouldAutoListen, options?.isWhisper).catch(() => {});
             }
         } catch (e: any) {
             logger.error('AI Logic Exception', e);
@@ -814,5 +959,14 @@ export function useAIChatLogic() {
         }
     };
 
-    return { messages, setMessages, sendMessage, loading, conversationMode, setConversationMode };
+    return {
+        messages,
+        setMessages,
+        sendMessage,
+        loading,
+        isSpeaking,
+        stopCurrentSpeech,
+        conversationMode,
+        setConversationMode
+    };
 }
