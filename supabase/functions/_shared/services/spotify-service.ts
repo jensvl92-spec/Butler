@@ -109,7 +109,7 @@ export async function getPlaybackState(userId: string) {
         return {
             is_playing: data.is_playing,
             track: data.item?.name,
-            artist: data.item?.artists.map((a: any) => a.name).join(', '),
+            artist: Array.isArray(data.item?.artists) ? data.item.artists.map((a: any) => a.name).join(', ') : (data.item?.show?.name || ''),
             album: data.item?.album?.name,
             device: data.device?.name,
             volume: data.device?.volume_percent
@@ -120,12 +120,22 @@ export async function getPlaybackState(userId: string) {
     }
 }
 
-export async function searchAndPlay(userId: string, query: string, log: (msg: string) => void) {
+export async function searchAndPlay(userId: string, query: string, log: (msg: string) => void = console.log) {
     const token = await getAccessToken(userId);
+
+    if (!query || !query.trim()) {
+        const resumeRes = await fetch('https://api.spotify.com/v1/me/player/play', {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!resumeRes.ok && resumeRes.status !== 204) {
+            throw new Error(`Spotify resume failed (${resumeRes.status})`);
+        }
+        return 'Resumed Spotify playback.';
+    }
 
     log(`[Spotify] Searching for "${query}"...`);
 
-    // Search
     const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track,album,artist&limit=1`, {
         headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -137,7 +147,7 @@ export async function searchAndPlay(userId: string, query: string, log: (msg: st
 
     if (searchData.tracks?.items?.length) {
         uri = searchData.tracks.items[0].uri;
-        name = `${searchData.tracks.items[0].name} by ${searchData.tracks.items[0].artists[0].name}`;
+        name = `${searchData.tracks.items[0].name} by ${searchData.tracks.items[0].artists?.[0]?.name || 'Unknown'}`;
         type = 'track';
     } else if (searchData.albums?.items?.length) {
         uri = searchData.albums.items[0].uri;
@@ -153,13 +163,7 @@ export async function searchAndPlay(userId: string, query: string, log: (msg: st
 
     log(`[Spotify] Found ${type}: "${name}". Playing...`);
 
-    // Play
-    const playBody: any = {};
-    if (type === 'track') {
-        playBody.uris = [uri];
-    } else {
-        playBody.context_uri = uri;
-    }
+    const playBody: any = type === 'track' ? { uris: [uri] } : { context_uri: uri };
 
     const playRes = await fetch('https://api.spotify.com/v1/me/player/play', {
         method: 'PUT',
@@ -172,8 +176,8 @@ export async function searchAndPlay(userId: string, query: string, log: (msg: st
 
     if (playRes.status === 404) {
         throw new Error('No active device found. Open Spotify on a device first.');
-    } else if (!playRes.ok) {
-        const err = await playRes.json();
+    } else if (!playRes.ok && playRes.status !== 204) {
+        const err = await playRes.json().catch(() => ({}));
         throw new Error(`Spotify error: ${err.error?.message || playRes.statusText}`);
     }
 
@@ -182,27 +186,30 @@ export async function searchAndPlay(userId: string, query: string, log: (msg: st
 
 export async function pause(userId: string) {
     const token = await getAccessToken(userId);
-    await fetch('https://api.spotify.com/v1/me/player/pause', {
+    const res = await fetch('https://api.spotify.com/v1/me/player/pause', {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` }
     });
+    if (!res.ok && res.status !== 204) throw new Error(`Spotify pause failed (${res.status})`);
     return 'Paused Spotify.';
 }
 
 export async function next(userId: string) {
     const token = await getAccessToken(userId);
-    await fetch('https://api.spotify.com/v1/me/player/next', {
+    const res = await fetch('https://api.spotify.com/v1/me/player/next', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
     });
+    if (!res.ok && res.status !== 204) throw new Error(`Spotify next failed (${res.status})`);
     return 'Skipped to next track.';
 }
 
 export async function previous(userId: string) {
     const token = await getAccessToken(userId);
-    await fetch('https://api.spotify.com/v1/me/player/previous', {
+    const res = await fetch('https://api.spotify.com/v1/me/player/previous', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
     });
+    if (!res.ok && res.status !== 204) throw new Error(`Spotify previous failed (${res.status})`);
     return 'Skipped to previous track.';
 }

@@ -1,6 +1,7 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyOAuthState } from "../_shared/auth.ts";
+import { fetchWithTimeout } from "../_shared/model-registry.ts";
 
 const SPOTIFY_CLIENT_ID = Deno.env.get('SPOTIFY_CLIENT_ID') || '';
 const SPOTIFY_CLIENT_SECRET = Deno.env.get('SPOTIFY_CLIENT_SECRET') || '';
@@ -11,20 +12,25 @@ serve(async (req) => {
   const url = new URL(req.url);
   const code = url.searchParams.get('code');
   const error = url.searchParams.get('error');
+  const stateParam = url.searchParams.get('state');
 
   if (error) {
     return new Response(`Error: ${error}`, { status: 400 });
   }
-
   if (!code) {
-    return new Response('No code provided', { status: 400 });
+    return new Response('No authorization code provided', { status: 400 });
   }
+
+  const stateVerification = await verifyOAuthState(stateParam);
+  if (!stateVerification.valid || !stateVerification.userId) {
+    return new Response(`Invalid OAuth state: ${stateVerification.error || 'verification failed'}`, { status: 400 });
+  }
+  const userId = stateVerification.userId;
 
   try {
     const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/auth-spotify-callback`;
 
-    // Exchange code for tokens
-    const tokenResponse = await fetch('https://accounts.spotify.com/api/token', {
+    const tokenResponse = await fetchWithTimeout('https://accounts.spotify.com/api/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -32,72 +38,51 @@ serve(async (req) => {
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
-        code: code,
+        code,
         redirect_uri: REDIRECT_URI,
       })
-    });
+    }, 15000);
 
     const tokens = await tokenResponse.json();
-
-    if (tokens.error) {
-      throw new Error(tokens.error_description || tokens.error);
+    if (!tokenResponse.ok || tokens.error) {
+      throw new Error(tokens.error_description || tokens.error || `HTTP ${tokenResponse.status}`);
     }
 
-    // Initialize Supabase Admin client
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // FETCH USER from OAuth state if present, otherwise fallback
-    let userId: string | null = null;
-    const stateParam = url.searchParams.get('state');
-    if (stateParam) {
-      const candidateId = stateParam.includes(':') ? stateParam.split(':')[0] : stateParam;
-      if (candidateId && candidateId.length > 20) {
-        const { data: userRecord } = await supabaseAdmin.auth.admin.getUserById(candidateId);
-        if (userRecord?.user) {
-          userId = userRecord.user.id;
-        }
-      }
+    const { data: userRecord, error: userErr } = await supabaseAdmin.auth.admin.getUserById(userId);
+    if (userErr || !userRecord?.user) {
+      return new Response('Target user account not found.', { status: 404 });
     }
 
-    if (!userId) {
-      const { data: users, error: userError } = await supabaseAdmin.auth.admin.listUsers();
-      if (userError || !users.users.length) throw new Error('No user found to link account to');
-      userId = users.users[0].id;
+    const expiresAt = new Date(Date.now() + (Number(tokens.expires_in) || 3600) * 1000);
+
+    const upsertPayload: Record<string, any> = {
+      user_id: userId,
+      provider: 'spotify',
+      access_token: tokens.access_token,
+      expires_at: expiresAt.toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    if (tokens.refresh_token) {
+      upsertPayload.refresh_token = tokens.refresh_token;
     }
 
-    // Set RLS user context
-    try {
-      await supabaseAdmin.rpc('set_app_user', { p_user_id: userId });
-    } catch (_ctxErr) {
-      // Ignore if RPC fails or not installed
-    }
-
-    // Calculate expiry
-    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
-
-    // Store in DB
     const { error: dbError } = await supabaseAdmin
       .from('user_tokens')
-      .upsert({
-        user_id: userId,
-        provider: 'spotify',
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_at: expiresAt.toISOString(),
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id, provider' });
+      .upsert(upsertPayload, { onConflict: 'user_id,provider' });
 
     if (dbError) throw dbError;
 
     return new Response(`
       <html>
         <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-          <h1 style="color: #1DB954;">Spotify Connected! 🎵</h1>
-          <p>You can now close this window and ask your Personal Assistant to play music.</p>
+          <h1 style="color: #1DB954;">Spotify Gekoppeld! 🎵</h1>
+          <p>Je kan dit venster nu sluiten en terugkeren naar Butler.</p>
         </body>
       </html>
     `, {
-      headers: { 'Content-Type': 'text/html' }
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
     });
 
   } catch (err: any) {

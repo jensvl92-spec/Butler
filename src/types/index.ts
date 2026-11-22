@@ -3,8 +3,9 @@ export interface HAConnection {
   user_id: string;
   name: string;
   api_url: string;
-  api_token: string;   // uit je database / Supabase
-  token: string;       // alias voor gebruik in je app
+  api_token: string;
+  token?: string;
+  fcm_token?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -36,9 +37,9 @@ export interface ScheduledAction {
 }
 
 export interface Action {
-  type: 'light' | 'switch' | 'climate' | 'media' | 'scene' | string;
-  entity_id: string;
-  service: string;
+  type: string;
+  entity_id?: string;
+  service?: string;
   data?: Record<string, any>;
   result?: 'success' | 'error' | 'pending';
   error_message?: string;
@@ -97,9 +98,18 @@ export interface UIState {
 
 export interface Suggestion {
   id: string;
+  connection_id?: string;
   title: string;
   description: string;
-  actions: any[];
+  trigger?: any;
+  condition?: any;
+  reasoning?: string;
+  ha_automation?: Record<string, any> | null;
+  actions?: any[];
   scheduled_actions?: any[];
-  status: 'pending' | 'accepted' | 'rejected';
+  type?: string;
+  context_key?: string;
+  confidence?: number;
+  status: 'pending' | 'accepted' | 'rejected' | 'executed' | 'failed';
+  created_at?: string;
 }

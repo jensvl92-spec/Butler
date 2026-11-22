@@ -1,34 +1,21 @@
 /**
  * Morning Briefing - Personalized daily summary
- * 
- * Generates a spoken/text briefing combining:
- * - Weather forecast
- * - Energy usage overnight
- * - Presence status
- * - Any anomalies detected
- * - Upcoming events (if calendar connected)
- * 
- * Triggered via pg_cron or manually
+ * Triggered via pg_cron or on-demand from Butler App / AI.
  */
 
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from "npm:@supabase/supabase-js@2.38.4"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyRequestAuth, verifyConnectionOwnership, CORS_HEADERS } from '../_shared/auth.ts';
+import { fetchHAStates } from '../_shared/ha-api.ts';
+import { chatCompletion } from '../_shared/llm-service.ts';
 
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-}
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 function jsonResponse(data: any, status = 200) {
     return new Response(JSON.stringify(data), {
         status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
     });
 }
 
@@ -40,171 +27,132 @@ interface BriefingContext {
     predictions?: { suggestions: string[] };
 }
 
-async function generateBriefingText(context: BriefingContext, language: string = 'en'): Promise<string> {
-    const prompt = `Generate a friendly morning briefing in ${language === 'nl' ? 'Dutch' : 'English'}.
+async function generateBriefingText(context: BriefingContext, language: string = 'nl'): Promise<string> {
+    const isDutch = language.toLowerCase().startsWith('nl');
+    const prompt = `Generate a friendly, concise morning briefing in ${isDutch ? 'Dutch' : 'English'}.
 
 CONTEXT:
 ${context.weather ? `Weather: ${context.weather.temp}°C, ${context.weather.condition}. ${context.weather.forecast}` : 'Weather: unavailable'}
-${context.energy ? `Energy: Used ${context.energy.overnight_kwh}kWh overnight (${context.energy.comparison}). Cost: €${context.energy.cost.toFixed(2)}` : ''}
+${context.energy ? `Energy: Used ${context.energy.overnight_kwh}kWh (${context.energy.comparison}). Estimated cost: €${context.energy.cost.toFixed(2)}` : ''}
 ${context.presence ? `Presence: Home: ${context.presence.home.join(', ') || 'nobody'}. Away: ${context.presence.away.join(', ') || 'nobody'}` : ''}
 ${context.anomalies && context.anomalies.count > 0 ? `Anomalies: ${context.anomalies.summary}` : ''}
 ${context.predictions && context.predictions.suggestions.length > 0 ? `Predictions: ${context.predictions.suggestions.join('. ')}` : ''}
 
 Rules:
 - Be concise, friendly, and helpful
-- Start with "Good morning!" (or "Goedemorgen!" in Dutch)
-- Mention only relevant info (skip unavailable data)
-- End with a positive note
+- Start with "${isDutch ? 'Goedemorgen!' : 'Good morning!'}"
+- Mention only relevant available info (skip unavailable data)
 - Max 3-4 sentences`;
 
     try {
-        const useGroq = !!GROQ_API_KEY;
-        const endpoint = useGroq 
-            ? 'https://api.groq.com/openai/v1/chat/completions'
-            : 'https://openrouter.ai/api/v1/chat/completions';
-        const apiKey = useGroq ? GROQ_API_KEY : OPENROUTER_API_KEY;
-        const model = useGroq ? 'llama-3.1-8b-instant' : 'google/gemini-2.5-flash';
-
-        if (!apiKey) throw new Error('No LLM API key configured');
-
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model,
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: 300,
-                temperature: 0.6
-            })
-        });
-
-        if (!response.ok) throw new Error(`LLM request failed: ${response.status}`);
-        const data = await response.json();
-        return data.choices[0]?.message?.content || (language === 'nl' ? 'Goedemorgen! Maak er een fijne dag van.' : 'Good morning! Have a great day.');
+        const text = await chatCompletion(
+            [{ role: 'user', content: prompt }],
+            300,
+            0.5,
+            undefined,
+            undefined,
+            undefined,
+            { effort: 'low' },
+            'high_accuracy'
+        );
+        return (typeof text === 'string' && text.trim())
+            ? text.trim()
+            : (isDutch ? 'Goedemorgen! Maak er een fijne dag van.' : 'Good morning! Have a great day.');
     } catch (e) {
         console.error('[Briefing] LLM error:', e);
-        // Fallback to template-based briefing
-        let text = 'Good morning! ';
-        if (context.weather) text += `It's ${context.weather.temp}°C and ${context.weather.condition}. `;
-        if (context.energy) text += `You used ${context.energy.overnight_kwh}kWh overnight. `;
-        if (context.anomalies?.count) text += `Note: ${context.anomalies.summary} `;
-        text += 'Have a great day!';
-        return text;
+        let text = isDutch ? 'Goedemorgen! ' : 'Good morning! ';
+        if (context.weather) text += isDutch
+            ? `Het is ${context.weather.temp}°C (${context.weather.condition}). `
+            : `It's ${context.weather.temp}°C and ${context.weather.condition}. `;
+        if (context.energy) text += isDutch
+            ? `Energieverbruik: ${context.energy.overnight_kwh} kWh. `
+            : `Energy usage: ${context.energy.overnight_kwh}kWh. `;
+        if (context.anomalies?.count) text += `${context.anomalies.summary} `;
+        return text.trim();
     }
 }
 
 Deno.serve(async (req: Request) => {
     if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders });
+        return new Response(null, { headers: CORS_HEADERS });
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const url = new URL(req.url);
 
     try {
-        const body = req.method === 'POST' ? await req.json() : {};
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) return jsonResponse({ error: auth.error }, auth.status || 401);
+
+        let body: any = {};
+        if (req.method === 'POST') {
+            const raw = await req.text().catch(() => '');
+            if (raw.trim()) {
+                try { body = JSON.parse(raw); } catch { body = {}; }
+            }
+        }
         const connectionId = url.searchParams.get('connection_id') || body.connection_id;
 
         if (!connectionId) {
             return jsonResponse({ error: 'connection_id required' }, 400);
         }
 
-        // Get HA connection
-        const { data: conn } = await supabase
-            .from('ha_connections')
-            .select('*')
-            .eq('id', connectionId)
-            .single();
+        const ownership = await verifyConnectionOwnership(supabase, auth, connectionId);
+        if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
+        const conn = ownership.connection;
 
-        if (!conn) {
-            return jsonResponse({ error: 'Connection not found' }, 404);
-        }
-
-        // Get user preferences
         const { data: prefs } = await supabase
             .from('user_preferences')
             .select('*')
             .eq('connection_id', connectionId)
-            .single();
+            .maybeSingle();
 
         const context: BriefingContext = {};
 
-        // =============================================
-        // 1. WEATHER
-        // =============================================
+        // Fetch HA states ONCE (reuse for weather, presence, and energy!)
+        let states: any[] = [];
         try {
-            const statesRes = await fetch(`${conn.api_url}/api/states`, {
-                headers: { "Authorization": `Bearer ${conn.api_token}` }
-            });
-
-            if (statesRes.ok) {
-                const states = await statesRes.json();
-
-                // Find weather entity
-                const weather = states.find((s: any) => s.entity_id.startsWith('weather.'));
-                if (weather) {
-                    context.weather = {
-                        temp: Math.round(weather.attributes?.temperature || 0),
-                        condition: weather.state || 'unknown',
-                        forecast: weather.attributes?.forecast?.[0]?.condition || ''
-                    };
-                }
-
-                // =============================================
-                // 2. PRESENCE
-                // =============================================
-                const persons = states.filter((s: any) => s.entity_id.startsWith('person.'));
-                if (persons.length > 0) {
-                    context.presence = {
-                        home: persons.filter((p: any) => p.state === 'home').map((p: any) => p.attributes?.friendly_name || p.entity_id),
-                        away: persons.filter((p: any) => p.state !== 'home').map((p: any) => p.attributes?.friendly_name || p.entity_id)
-                    };
-                }
-            }
+            states = await fetchHAStates(conn);
         } catch (e) {
             console.error('[Briefing] HA fetch error:', e);
         }
 
-        // =============================================
-        // 3. OVERNIGHT ENERGY
-        // =============================================
-        if (prefs?.briefing_include_energy !== false) {
-            try {
-                // Find energy sensor
-                const statesRes = await fetch(`${conn.api_url}/api/states`, {
-                    headers: { "Authorization": `Bearer ${conn.api_token}` }
-                });
+        if (states.length > 0) {
+            const weather = states.find((s: any) => s.entity_id?.startsWith('weather.'));
+            if (weather) {
+                context.weather = {
+                    temp: Math.round(Number(weather.attributes?.temperature || 0)),
+                    condition: weather.state || 'unknown',
+                    forecast: weather.attributes?.forecast?.[0]?.condition || ''
+                };
+            }
 
-                if (statesRes.ok) {
-                    const states = await statesRes.json();
-                    const energySensor = states.find((s: any) =>
-                        s.entity_id.includes('energy') &&
-                        s.entity_id.includes('daily') &&
-                        !isNaN(parseFloat(s.state))
-                    );
+            const persons = states.filter((s: any) => s.entity_id?.startsWith('person.'));
+            if (persons.length > 0) {
+                context.presence = {
+                    home: persons.filter((p: any) => p.state === 'home').map((p: any) => p.attributes?.friendly_name || p.entity_id),
+                    away: persons.filter((p: any) => p.state !== 'home').map((p: any) => p.attributes?.friendly_name || p.entity_id)
+                };
+            }
 
-                    if (energySensor) {
-                        const kwh = parseFloat(energySensor.state);
-                        // Rough estimate: €0.25 per kWh average
-                        const cost = kwh * 0.25;
-                        context.energy = {
-                            overnight_kwh: Math.round(kwh * 10) / 10,
-                            cost: cost,
-                            comparison: kwh < 5 ? 'lower than usual' : kwh > 15 ? 'higher than usual' : 'about average'
-                        };
-                    }
+            if (prefs?.briefing_include_energy !== false) {
+                const energySensor = states.find((s: any) =>
+                    s.entity_id?.includes('energy') &&
+                    s.entity_id?.includes('daily') &&
+                    !isNaN(parseFloat(s.state))
+                );
+                if (energySensor) {
+                    const kwh = parseFloat(energySensor.state);
+                    context.energy = {
+                        overnight_kwh: Math.round(kwh * 10) / 10,
+                        cost: kwh * 0.25,
+                        comparison: kwh < 5 ? 'lower than usual' : kwh > 15 ? 'higher than usual' : 'about average'
+                    };
                 }
-            } catch (e) {
-                console.error('[Briefing] Energy fetch error:', e);
             }
         }
 
-        // =============================================
-        // 4. RECENT ANOMALIES
-        // =============================================
+        // Recent anomalies
         const eightHoursAgo = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
         const { data: anomalies } = await supabase
             .from('anomaly_events')
@@ -214,47 +162,43 @@ Deno.serve(async (req: Request) => {
             .eq('acknowledged', false);
 
         if (anomalies && anomalies.length > 0) {
-            const critical = anomalies.filter(a => a.severity === 'critical');
+            const critical = anomalies.filter((a: any) => a.severity === 'critical');
             context.anomalies = {
                 count: anomalies.length,
                 summary: critical.length > 0
-                    ? critical.map(a => a.message).join('. ')
-                    : `${anomalies.length} minor anomalies detected overnight`
+                    ? critical.map((a: any) => a.message).join('. ')
+                    : `${anomalies.length} afwijking(en) gedetecteerd`
             };
         }
 
-        // =============================================
-        // 5. PREDICTIONS
-        // =============================================
+        // Upcoming predictions (handles midnight wrap cleanly)
+        const nowHour = new Date().getHours();
+        const upcomingHours = [nowHour, (nowHour + 1) % 24, (nowHour + 2) % 24];
         const { data: predictions } = await supabase
             .from('behavior_patterns')
             .select('entity_id, service, hour')
             .eq('connection_id', connectionId)
             .eq('suppressed', false)
             .gte('occurrence_count', 3)
-            .gte('hour', new Date().getHours())
-            .lte('hour', new Date().getHours() + 2)
+            .in('hour', upcomingHours)
             .limit(2);
 
         if (predictions && predictions.length > 0) {
             context.predictions = {
-                suggestions: predictions.map(p =>
-                    `You usually ${p.service.split('.')[1]} ${p.entity_id.split('.')[1]} around ${p.hour}:00`
+                suggestions: predictions.map((p: any) =>
+                    `${p.service?.split('.')[1] || p.service} op ${p.entity_id?.split('.')[1] || p.entity_id} rond ${p.hour}:00`
                 )
             };
         }
 
-        // =============================================
-        // GENERATE BRIEFING
-        // =============================================
-        console.log('[Briefing] Context:', JSON.stringify(context, null, 2));
-
-        const briefingText = await generateBriefingText(context, prefs?.language || 'en');
+        const language = body.language || prefs?.preferred_language || prefs?.language || 'nl';
+        const briefingText = await generateBriefingText(context, language);
 
         return jsonResponse({
             success: true,
             briefing: briefingText,
-            context: context,
+            message: briefingText,
+            context,
             speak_aloud: prefs?.briefing_speak_aloud !== false
         });
 

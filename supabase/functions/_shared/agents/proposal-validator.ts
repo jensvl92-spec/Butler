@@ -1,7 +1,5 @@
 /**
  * Proposal Validator Agent
- * 
- * The "Do Not Disturb" registry for automation proposals.
  * Checks if a similar automation has been denied before and prevents nagging.
  */
 
@@ -15,20 +13,18 @@ TASK:
 Determine if an automation proposal should be presented to the user based on denial history.
 
 LOGIC:
-1. Check if the proposal is semantically similar to any previously denied proposals.
-   - **Semantic Similarity**: A proposal is similar if it targets the same entities and achieves the same goal (e.g., "Turn on office lights when I enter" is similar to "Auto office lights at 7pm").
-2. **Denial Thresholds**:
-   - If a similar proposal was denied **3+ times** → **REJECT** (User clearly doesn't want this category of automation).
-   - If denied **1-2 times** → **WARN** (Mention it has been rejected before but might be relevant now).
-   - If never denied → **ALLOW**.
-3. **Reasoning**: Explain why you made the decision, citing the similar denied proposal if applicable.
+1. Check if the proposal is semantically similar to any previously denied proposals (targets same entities/goal).
+2. Denial Thresholds:
+   - Denied 2+ times -> REJECT
+   - Denied 1 time -> WARN
+   - Never denied -> ALLOW
 
-OUTPUT FORMAT:
+OUTPUT FORMAT (valid JSON ONLY):
 {
   "decision": "ALLOW" | "WARN" | "REJECT",
   "reason": "Brief explanation",
-  "similar_denied_proposal": "The text of the most similar denied proposal",
-  "denial_count": number
+  "similar_denied_proposal": "The text of the most similar denied proposal (or empty string)",
+  "denial_count": 0
 }
 `;
 
@@ -39,20 +35,11 @@ export interface ProposalValidatorResult {
     denial_count: number;
 }
 
-/**
- * Validate if a proposal should be shown to the user.
- * 
- * @param proposalText - The automation proposal to validate
- * @param deniedProposals - List of previously denied proposals
- */
 export async function runProposalValidator(
     proposalText: string,
     deniedProposals: Array<{ text: string; count: number; reason: string }>
 ): Promise<ProposalValidatorResult> {
-    console.log(`[ProposalValidator] Checking proposal against ${deniedProposals.length} denied items`);
-
-    // Quick check - if no denied proposals, always allow
-    if (deniedProposals.length === 0) {
+    if (!deniedProposals || deniedProposals.length === 0) {
         return {
             decision: 'ALLOW',
             reason: 'No previous denials on record',
@@ -64,11 +51,20 @@ export async function runProposalValidator(
         `- "${d.text}" (denied ${d.count}x, reason: ${d.reason})`
     ).join('\n');
 
-    const response = await chatCompletion([
-        { role: 'system', content: PROPOSAL_VALIDATOR_PROMPT },
-        { role: 'user', content: `PROPOSAL: ${proposalText}\n\nDENIED PROPOSALS:\n${deniedContext}` }
-    ], 2000, 0, undefined, undefined, 'deepseek/deepseek-chat');
+    const response = await chatCompletion(
+        [
+            { role: 'system', content: PROPOSAL_VALIDATOR_PROMPT },
+            { role: 'user', content: `PROPOSAL: ${proposalText}\n\nDENIED PROPOSALS:\n${deniedContext}` }
+        ],
+        500,
+        0,
+        undefined,
+        undefined,
+        undefined,
+        { effort: 'low' },
+        'lite_fast'
+    );
 
-    const result = parseJSONResponse(response);
+    const result = parseJSONResponse(typeof response === 'string' ? response : JSON.stringify(response));
     return result || { decision: 'ALLOW', reason: 'Parse error - allowing', denial_count: 0 };
 }

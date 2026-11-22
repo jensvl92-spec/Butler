@@ -1,4 +1,5 @@
 import { Contacts } from '@capacitor-community/contacts';
+import { Capacitor } from '@capacitor/core';
 
 export interface ContactInfo {
     id: string;
@@ -6,11 +7,22 @@ export interface ContactInfo {
     phone: string;
 }
 
+function normalizeName(str: string): string {
+    return str
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 /**
- * Request contacts permission from the user.
+ * Check or request contacts permission from the user.
  */
 export async function requestContactsPermission(): Promise<boolean> {
+    if (!Capacitor.isNativePlatform()) return false;
     try {
+        const current = await Contacts.checkPermissions();
+        if (current.contacts === 'granted') return true;
         const permission = await Contacts.requestPermissions();
         return permission.contacts === 'granted';
     } catch (e) {
@@ -20,18 +32,15 @@ export async function requestContactsPermission(): Promise<boolean> {
 }
 
 /**
- * Search for a contact by name (fuzzy match).
- * Returns the best match find or null.
+ * Search for a contact with a valid phone number by name (accent-aware fuzzy match).
  */
 export async function findContactByName(searchTerm: string): Promise<ContactInfo | null> {
-    console.log(`[Contacts] Searching for: "${searchTerm}"`);
+    const trimmed = (searchTerm || '').trim();
+    if (!trimmed) return null;
 
     try {
         const hasPermission = await requestContactsPermission();
-        if (!hasPermission) {
-            console.warn('[Contacts] ❌ Permission denied');
-            return null;
-        }
+        if (!hasPermission) return null;
 
         const result = await Contacts.getContacts({
             projection: {
@@ -40,80 +49,45 @@ export async function findContactByName(searchTerm: string): Promise<ContactInfo
             }
         });
 
-        const contacts = result.contacts;
-        const lowerSearch = searchTerm.toLowerCase();
+        // Filter to contacts WITH a non-empty phone number BEFORE name matching
+        const contacts = (result.contacts || []).filter(
+            c => Array.isArray(c.phones) && c.phones.some(p => (p.number || '').trim().length > 0)
+        );
+        if (contacts.length === 0) return null;
 
-        console.log(`[Contacts] Total contacts loaded: ${contacts.length}`);
+        const lowerSearch = trimmed.toLowerCase();
+        const normalizedSearch = normalizeName(trimmed);
 
-        // Debug: Show contacts that might match (first 5 that include any part of search term)
-        const possibleMatches = contacts
-            .filter(c => {
-                const name = (c.name?.display || '').toLowerCase();
-                // Check if any part matches
-                return lowerSearch.split(' ').some(part => name.includes(part)) ||
-                    name.split(' ').some(part => lowerSearch.includes(part));
-            })
-            .slice(0, 5);
-
-        if (possibleMatches.length > 0) {
-            console.log(`[Contacts] Possible matches:`, possibleMatches.map(c => ({
-                name: c.name?.display,
-                hasPhone: c.phones && c.phones.length > 0
-            })));
-        }
-
-        // 1. Exact match
-        let match = contacts.find(c => (c.name?.display || '').toLowerCase() === lowerSearch);
+        // 1. Exact display name match
+        let match = contacts.find(c => (c.name?.display || '').trim().toLowerCase() === lowerSearch);
 
         // 2. Starts with match
         if (!match) {
-            match = contacts.find(c => (c.name?.display || '').toLowerCase().startsWith(lowerSearch));
+            match = contacts.find(c => (c.name?.display || '').trim().toLowerCase().startsWith(lowerSearch));
         }
 
         // 3. Includes match
         if (!match) {
-            match = contacts.find(c => (c.name?.display || '').toLowerCase().includes(lowerSearch));
+            match = contacts.find(c => (c.name?.display || '').trim().toLowerCase().includes(lowerSearch));
         }
 
-        // 4. Reverse includes - search term contains contact name
-        if (!match) {
+        // 4. Accent-normalized fuzzy match (preserves Renée, Zoë, Chloé, etc.; requires >=3 chars for reverse match)
+        if (!match && normalizedSearch.length >= 2) {
             match = contacts.find(c => {
-                const name = (c.name?.display || '').toLowerCase();
-                return name && lowerSearch.includes(name);
+                const normName = normalizeName(c.name?.display || '');
+                if (normName.length < 2) return false;
+                if (normName === normalizedSearch || normName.includes(normalizedSearch)) return true;
+                return normName.length >= 3 && normalizedSearch.includes(normName);
             });
         }
 
-        // 5. Fuzzy match - normalize by removing spaces, emojis, and special chars
-        //    This allows "SchatjeL" to match "Schatje L ❤"
-        if (!match) {
-            // Extract only letters (a-z) from the search term
-            const normalizedSearch = lowerSearch.replace(/[^a-z]/gi, '');
-            if (normalizedSearch.length > 0) { // Only proceed if there are letters
-                match = contacts.find(c => {
-                    const normalizedName = (c.name?.display || '').toLowerCase().replace(/[^a-z]/gi, '');
-                    // Only match if the contact name has letters (prevents matching number-only contacts)
-                    if (normalizedName.length === 0) return false;
-                    return normalizedName === normalizedSearch ||
-                        normalizedName.includes(normalizedSearch) ||
-                        normalizedSearch.includes(normalizedName);
-                });
-            }
-        }
-
         if (match) {
-            console.log(`[Contacts] ✅ Found match: "${match.name?.display}", phones: ${match.phones?.length || 0}`);
-
-            if (match.phones && match.phones.length > 0) {
-                return {
-                    id: match.contactId,
-                    name: match.name?.display || 'Unknown',
-                    phone: match.phones[0].number || ''
-                };
-            } else {
-                console.warn(`[Contacts] ⚠️ Contact found but has no phone number`);
-            }
-        } else {
-            console.warn(`[Contacts] ❌ No match found for "${searchTerm}"`);
+            const firstPhone = match.phones!.find(p => (p.number || '').trim().length > 0)?.number || '';
+            return {
+                id: match.contactId,
+                name: match.name?.display || 'Onbekend',
+                phone: firstPhone.trim()
+            };
         }
 
         return null;
@@ -124,10 +98,13 @@ export async function findContactByName(searchTerm: string): Promise<ContactInfo
 }
 
 /**
- * Get all contacts (for initialization or syncing if needed).
+ * Get all contacts with phone numbers.
  */
 export async function getAllContacts(): Promise<ContactInfo[]> {
     try {
+        const hasPermission = await requestContactsPermission();
+        if (!hasPermission) return [];
+
         const result = await Contacts.getContacts({
             projection: {
                 name: true,
@@ -135,12 +112,12 @@ export async function getAllContacts(): Promise<ContactInfo[]> {
             }
         });
 
-        return result.contacts
-            .filter(c => c.phones && c.phones.length > 0)
+        return (result.contacts || [])
+            .filter(c => Array.isArray(c.phones) && c.phones.some(p => (p.number || '').trim().length > 0))
             .map(c => ({
                 id: c.contactId,
-                name: c.name?.display || 'Unknown',
-                phone: c.phones![0].number || ''
+                name: c.name?.display || 'Onbekend',
+                phone: (c.phones!.find(p => (p.number || '').trim().length > 0)?.number || '').trim()
             }));
     } catch (e) {
         console.error('[Contacts] Get all failed', e);

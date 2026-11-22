@@ -1,45 +1,50 @@
 /**
  * MCP Sync Service
- * 
- * Syncs Home Assistant data to MCP Librarian on app startup/sync.
+ *
+ * Syncs Home Assistant data to MCP Librarian using the authenticated user's Supabase JWT.
  */
 
 import { supabase } from '../lib/supabase';
+import { buildHAUrl, sanitizeHAToken, fetchWithTimeout } from './home-assistant';
 
-const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
-const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
-
+const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 
 /**
  * Fetch HA services (available actions)
  */
 export async function fetchHAServices(url: string, token: string): Promise<Record<string, any>> {
-    const response = await fetch(`${url.replace(/\/$/, '')}/api/services`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
-    });
+    try {
+        const response = await fetchWithTimeout(buildHAUrl('/api/services', url), {
+            headers: {
+                'Authorization': `Bearer ${sanitizeHAToken(token)}`,
+                'Content-Type': 'application/json'
+            }
+        }, 15000);
 
-    if (!response.ok) {
-        console.warn('Failed to fetch HA services:', response.status);
+        if (!response.ok) {
+            console.warn('Failed to fetch HA services:', response.status);
+            return {};
+        }
+
+        const services = await response.json();
+        if (!Array.isArray(services)) return {};
+
+        const result: Record<string, any> = {};
+        for (const svc of services) {
+            if (svc?.domain && svc?.services) {
+                result[svc.domain] = svc.services;
+            }
+        }
+
+        return result;
+    } catch (e) {
+        console.warn('Error fetching HA services:', e);
         return {};
     }
-
-    const services = await response.json();
-
-    // Convert array to domain-keyed object
-    const result: Record<string, any> = {};
-    for (const svc of services) {
-        result[svc.domain] = svc.services;
-    }
-
-    return result;
 }
 
 /**
- * Sync a Batch of Services to MCP Librarian
- * @param sync_mode - "start" (first batch), "append" (middle), "complete" (last), "replace" (single shot)
+ * Sync a Batch of Services to MCP Librarian using the user's real session JWT.
  */
 export async function syncBatchToLibrarian(
     connectionId: string,
@@ -48,14 +53,36 @@ export async function syncBatchToLibrarian(
     sync_mode: 'start' | 'append' | 'complete' | 'replace' = 'replace'
 ): Promise<{ success: boolean; processed: number; devices?: number; tools?: number; error?: string }> {
     try {
-        console.log(`[MCP Sync] Sending batch (mode: ${sync_mode})`);
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
 
-        // Send batch to Librarian
-        const response = await fetch(`${SUPABASE_URL}/functions/v1/mcp-librarian/sync`, {
+        if (!accessToken) {
+            return { success: false, processed: 0, error: 'Niet ingelogd (geen sessietoken).' };
+        }
+
+        if (!SUPABASE_URL) {
+            const { data, error } = await supabase.functions.invoke('mcp-librarian/sync', {
+                body: {
+                    connection_id: connectionId,
+                    entities: entityStates,
+                    services,
+                    sync_mode
+                }
+            });
+            if (error) return { success: false, processed: 0, error: error.message };
+            return {
+                success: true,
+                processed: data?.new_tools || 0,
+                devices: data?.devices,
+                tools: data?.tools
+            };
+        }
+
+        const response = await fetchWithTimeout(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/mcp-librarian/sync`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+                'Authorization': `Bearer ${accessToken}`
             },
             body: JSON.stringify({
                 connection_id: connectionId,
@@ -63,25 +90,23 @@ export async function syncBatchToLibrarian(
                 services,
                 sync_mode
             })
-        });
+        }, 30000);
 
         if (!response.ok) {
-            const errorText = await response.text();
+            const errorText = await response.text().catch(() => '');
             console.error('[MCP Sync] Librarian error:', errorText);
-            return { success: false, processed: 0, error: errorText };
+            return { success: false, processed: 0, error: errorText || `HTTP ${response.status}` };
         }
 
         const result = await response.json();
-        console.log(`[MCP Sync] Batch done: ${result.devices || 0} total devices, ${result.tools || 0} total tools`);
         return {
             success: true,
             processed: result.new_tools || 0,
             devices: result.devices,
             tools: result.tools
         };
-
     } catch (error: any) {
         console.error('[MCP Sync] Error:', error);
-        return { success: false, processed: 0, error: error.message };
+        return { success: false, processed: 0, error: error?.message || String(error) };
     }
 }

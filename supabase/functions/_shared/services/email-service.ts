@@ -126,10 +126,16 @@ export async function getUnreadEmails(userId: string, limit: number = 5) {
 export async function sendEmail(userId: string, to: string, subject: string, body: string) {
     const token = await getAccessToken(userId);
 
-    // Gmail API requires base64urlencoded raw message
-    const utf8Encoder = new TextEncoder();
-    const emailHeader = `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`;
-    const encodedEmail = btoa(emailHeader).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    // Strip CR/LF from headers to prevent SMTP header injection
+    const safeTo = to.replace(/[\r\n]+/g, ' ').trim();
+    const safeSubject = subject.replace(/[\r\n]+/g, ' ').trim();
+    const rawEmail = `To: ${safeTo}\r\nSubject: ${safeSubject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`;
+
+    // Proper UTF-8 -> Base64URL encoding (supports Dutch accents, € symbol, emojis)
+    const bytes = new TextEncoder().encode(rawEmail);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const encodedEmail = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
     const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST',

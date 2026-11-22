@@ -1,7 +1,12 @@
-import { AIAction, HAConnection } from './types.ts'
-import { callHAService, createHAAutomation, createHAScript, deleteHAAutomation } from './ha-api.ts'
+import { AIAction, HAConnection } from './types.ts';
+import { callHAService, createHAAutomation, createHAScript, deleteHAAutomation } from './ha-api.ts';
+import { fetchWithTimeout } from './model-registry.ts';
 
-export async function executeActionMatrix(actions: AIAction[], connection: HAConnection, supabase: any): Promise<AIAction[]> {
+export async function executeActionMatrix(
+    actions: AIAction[],
+    connection: HAConnection,
+    supabase: any
+): Promise<AIAction[]> {
     return await Promise.all(actions.map(async (action) => {
         try {
             // 1. Create Automation
@@ -28,18 +33,21 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                     sequence: action.data?.sequence || []
                 }, action.data?.alias || "AI Script");
 
-                // Execute immediately? Yes, usually.
                 await callHAService(connection, 'script', 'turn_on', { entity_id: `script.${id}` });
                 console.log(`✅ Auto-started script: script.${id}`);
 
                 return { ...action, data: { ...action.data, created_id: id, entity_id: `script.${id}` } };
             }
 
-            // 4. Cancel Scheduled Action
+            // 4. Cancel Scheduled Action (UUID-safe + tenant-scoped)
             if (action.type === 'cancel_action') {
-                const id = action.data?.id || (action.entity_id ? parseInt(action.entity_id) : null);
+                const id = String(action.data?.id || action.entity_id || '').trim();
                 if (!id) throw new Error("Missing ID for cancellation");
-                const { error } = await supabase.from('scheduled_actions').delete().eq('id', id);
+                const { error } = await supabase
+                    .from('scheduled_actions')
+                    .delete()
+                    .eq('id', id)
+                    .eq('connection_id', connection.id);
                 if (error) throw error;
                 return { ...action };
             }
@@ -49,7 +57,7 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                 const sbUrl = Deno.env.get('SUPABASE_URL')!;
                 const sbKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-                const res = await fetch(`${sbUrl}/functions/v1/energy-scheduler/schedule`, {
+                const res = await fetchWithTimeout(`${sbUrl}/functions/v1/energy-scheduler/schedule`, {
                     method: 'POST',
                     headers: {
                         'apikey': Deno.env.get('SUPABASE_ANON_KEY') || sbKey,
@@ -63,11 +71,10 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                         optimization: action.data?.optimization || { preference: "cheapest" },
                         description: "AI Scheduled Optimization"
                     })
-                });
+                }, 20000);
 
                 if (!res.ok) throw new Error(`Energy Scheduler failed: ${await res.text()}`);
                 const result = await res.json();
-
                 return { ...action, data: { ...action.data, result } };
             }
 
@@ -76,7 +83,7 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                 const sbUrl = Deno.env.get('SUPABASE_URL')!;
                 const sbKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-                const res = await fetch(`${sbUrl}/functions/v1/energy-scheduler/preheat`, {
+                const res = await fetchWithTimeout(`${sbUrl}/functions/v1/energy-scheduler/preheat`, {
                     method: 'POST',
                     headers: {
                         'apikey': Deno.env.get('SUPABASE_ANON_KEY') || sbKey,
@@ -87,11 +94,10 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                         connection_id: connection.id,
                         climate_entity_id: action.entity_id
                     })
-                });
+                }, 20000);
 
                 if (!res.ok) throw new Error(`Energy Preheat failed: ${await res.text()}`);
                 const result = await res.json();
-
                 return { ...action, data: { ...action.data, result } };
             }
 
@@ -101,38 +107,36 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                 const sbUrl = Deno.env.get('SUPABASE_URL')!;
                 const sbKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+                const isGetActive = recipeAction === 'active';
                 const endpoint = recipeAction === 'search' ? '/search'
                     : recipeAction === 'start' ? '/start'
                         : recipeAction === 'step' ? '/step'
                             : recipeAction === 'timer' ? '/timer'
-                                : '/active';
+                                : `/active?connection_id=${encodeURIComponent(connection.id)}`;
 
-                const res = await fetch(`${sbUrl}/functions/v1/recipe-assistant${endpoint}`, {
-                    method: 'POST',
+                const res = await fetchWithTimeout(`${sbUrl}/functions/v1/recipe-assistant${endpoint}`, {
+                    method: isGetActive ? 'GET' : 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'apikey': Deno.env.get('SUPABASE_ANON_KEY') || sbKey,
                         'Authorization': `Bearer ${sbKey}`
                     },
-                    body: JSON.stringify({
-                        connection_id: connection.id,
-                        ...action.data
+                    ...(isGetActive ? {} : {
+                        body: JSON.stringify({
+                            connection_id: connection.id,
+                            ...action.data
+                        })
                     })
-                });
+                }, 20000);
 
                 if (!res.ok) throw new Error(`Recipe ${recipeAction} failed: ${await res.text()}`);
                 const result = await res.json();
-
                 return { ...action, data: { ...action.data, result } };
             }
 
             // 8. Emergency Services (Panic Mode)
             if (action.service?.startsWith('emergency.')) {
                 const emergencyType = action.service.replace('emergency.', '');
-                const sbUrl = Deno.env.get('SUPABASE_URL')!;
-                const sbKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-                // Get panic config
                 const { data: panicConfig } = await supabase
                     .from('panic_config')
                     .select('*')
@@ -144,8 +148,7 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                 switch (emergencyType) {
                     case 'call_police':
                     case 'call_ambulance':
-                    case 'call_fire':
-                        // Return action for client to open phone dialer
+                    case 'call_fire': {
                         const numbers: Record<string, string> = {
                             'call_police': '112',
                             'call_ambulance': '112',
@@ -159,9 +162,10 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                                 message: `Emergency: ${emergencyType.replace('call_', '')}`
                             }
                         };
+                    }
 
                     case 'lock_all':
-                    case 'unlock_all':
+                    case 'unlock_all': {
                         const locks = panicConfig?.door_locks || [];
                         const lockService = emergencyType === 'lock_all' ? 'lock' : 'unlock';
                         for (const lockId of locks) {
@@ -169,22 +173,22 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                             results.push(`${lockService}ed ${lockId}`);
                         }
                         return { ...action, data: { results } };
+                    }
 
-                    case 'lights_on':
+                    case 'lights_on': {
                         const lights = panicConfig?.light_entities || [];
-                        // If no specific lights, turn on all
                         if (lights.length === 0) {
-                            await callHAService(connection, 'light', 'turn_on', { brightness: 255 });
+                            await callHAService(connection, 'light', 'turn_on', { entity_id: 'all', brightness: 255 });
                         } else {
                             for (const lightId of lights) {
                                 await callHAService(connection, 'light', 'turn_on', { entity_id: lightId, brightness: 255 });
                             }
                         }
                         return { ...action, data: { message: 'All lights turned on' } };
+                    }
 
-                    case 'alert_family':
+                    case 'alert_family': {
                         const contacts = panicConfig?.emergency_contacts || [];
-                        // Return contacts for client to send notifications/SMS
                         return {
                             ...action,
                             type: 'send_alerts',
@@ -193,24 +197,26 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
                                 message: 'Emergency alert from Butler: Please check on your family member.'
                             }
                         };
+                    }
 
-                    case 'alarm':
+                    case 'alarm': {
                         if (panicConfig?.alarm_entity) {
                             await callHAService(connection, 'siren', 'turn_on', { entity_id: panicConfig.alarm_entity });
                         }
                         return { ...action, data: { message: 'Alarm triggered' } };
+                    }
                 }
 
                 return { ...action };
             }
 
-            // 8. Standard Service Call
+            // 9. Standard Service Call
             if (!action.entity_id) throw new Error('Missing entity_id');
 
-            let domain = action.entity_id.split(".")[0];
+            let domain = action.domain || action.entity_id.split(".")[0];
             let service = action.service;
 
-            if (service.includes('.')) {
+            if (service && service.includes('.')) {
                 const parts = service.split('.');
                 if (parts.length === 2) {
                     domain = parts[0];
@@ -226,8 +232,8 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
             return { ...action };
 
         } catch (e: any) {
-            console.error(`Action Failed: ${action.type}`, e);
-            return { ...action, error: e.message };
+            console.error(`Action Failed: ${action.type || action.service}`, e);
+            return { ...action, error: e.message || String(e) };
         }
     }));
 }
@@ -235,13 +241,24 @@ export async function executeActionMatrix(actions: AIAction[], connection: HACon
 export async function scheduleActions(scheduledActions: any[], connectionId: string, supabase: any) {
     if (!scheduledActions || scheduledActions.length === 0) return;
 
-    const inserts = scheduledActions.map(sa => ({
-        connection_id: connectionId,
-        title: sa.title || "Scheduled Action",
-        scheduled_for: new Date(Date.now() + (sa.wait_ms || 0)).toISOString(),
-        actions: sa.actions,
-        status: 'pending'
-    }));
+    const inserts = scheduledActions.map(sa => {
+        const delayMs = typeof sa.wait_ms === 'number'
+            ? sa.wait_ms
+            : typeof sa.delay_seconds === 'number'
+                ? sa.delay_seconds * 1000
+                : 0;
+        const scheduledFor = sa.scheduled_for
+            ? new Date(sa.scheduled_for).toISOString()
+            : new Date(Date.now() + Math.max(0, delayMs)).toISOString();
+
+        return {
+            connection_id: connectionId,
+            title: sa.title || "Scheduled Action",
+            scheduled_for: scheduledFor,
+            actions: sa.actions,
+            status: 'pending'
+        };
+    });
 
     const { error } = await supabase.from('scheduled_actions').insert(inserts);
     if (error) {

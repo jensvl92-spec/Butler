@@ -3,12 +3,20 @@ import { registerPlugin } from '@capacitor/core';
 import { signOut } from '../utils/auth';
 import { supabase } from '../lib/supabase';
 import { useApp } from '../lib/AppContext';
-import { sanitizeModelId } from '../lib/services/clientOrchestrator';
-
-// @ts-ignore
+import {
+    GEMINI_MODEL_PRESETS,
+    OPENROUTER_MODEL_PRESETS,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
+    GOOGLE_GEMINI_API_URL,
+    OPENROUTER_API_URL,
+    ReasoningEffort,
+    sanitizeModelId,
+    supportsReasoningEffort
+} from '../lib/services/modelRegistry';
+import { PROACTIVE_WORKERS, triggerProactiveWorker, ProactiveWorkerId } from '../lib/services/proactiveWorkers';
 import { logger } from '../utils/logger';
 
-// Define the FloatingButton plugin interface
 interface FloatingButtonPlugin {
     start(): Promise<{ started: boolean }>;
     stop(): Promise<{ stopped: boolean }>;
@@ -19,19 +27,8 @@ interface FloatingButtonPlugin {
 
 const FloatingButton = registerPlugin<FloatingButtonPlugin>('FloatingButton');
 
-export const GEMINI_MODELS = [
-    { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview (Aanbevolen: snel, voordelig & topkwaliteit)' },
-    { id: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Extreem krachtig & snel)' },
-    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Diep redeneren)' },
-    { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Betrouwbaar werkpaard)' },
-];
-
-export const OPENROUTER_MODELS = [
-    { id: 'google/gemini-3-flash-preview', label: 'google/gemini-3-flash-preview (Aanbevolen)' },
-    { id: 'google/gemini-3.8-flash', label: 'google/gemini-3.8-flash' },
-    { id: 'google/gemini-3.1-pro', label: 'google/gemini-3.1-pro' },
-    { id: 'google/gemini-2.5-flash', label: 'google/gemini-2.5-flash' },
-];
+export const GEMINI_MODELS = GEMINI_MODEL_PRESETS;
+export const OPENROUTER_MODELS = OPENROUTER_MODEL_PRESETS;
 
 interface SettingsProps {
     onClose?: () => void;
@@ -42,20 +39,24 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [floatingEnabled, setFloatingEnabled] = useState(false);
     const [hasPermission, setHasPermission] = useState(false);
     const [snoozeUntil, setSnoozeUntil] = useState<number | null>(null);
-    const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);  // Proactive voice alerts
+    const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
     const [clearingHistory, setClearingHistory] = useState(false);
 
     // AI Brain Settings (Client-Side Google Gemini / OpenRouter)
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
     const [apiKeyInput, setApiKeyInput] = useState('');
-    const [llmModel, setLlmModel] = useState('gemini-3-flash-preview');
+    const [llmModel, setLlmModel] = useState(DEFAULT_GEMINI_MODEL);
+    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('low');
     const [isCustomModel, setIsCustomModel] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [testingKey, setTestingKey] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
     const [keySaved, setKeySaved] = useState(false);
 
-    // Load settings from localStorage
+    // Proactive Workers on-demand runner state
+    const [runningWorker, setRunningWorker] = useState<ProactiveWorkerId | null>(null);
+    const [workerStatus, setWorkerStatus] = useState<Record<string, { ok: boolean; msg: string }>>({});
+
     useEffect(() => {
         const savedEnabled = localStorage.getItem('floatingButton.enabled') === 'true';
         const savedSnooze = localStorage.getItem('floatingButton.snoozeUntil');
@@ -63,17 +64,24 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         const savedProvider = (localStorage.getItem('butler.ai_provider') as 'gemini' | 'openrouter') || 'gemini';
         setAiProvider(savedProvider);
 
-        const geminiKey = localStorage.getItem('butler.gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
-        const openRouterKey = localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
-        const initialKey = savedProvider === 'gemini' ? (geminiKey || openRouterKey) : (openRouterKey || geminiKey);
-        setApiKeyInput(initialKey);
+        const providerKey = savedProvider === 'gemini'
+            ? (localStorage.getItem('butler.gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '')
+            : (localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '');
+        setApiKeyInput(providerKey);
 
-        const savedModelRaw = localStorage.getItem('butler.llm_model') || (savedProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview');
+        const savedModelRaw = savedProvider === 'gemini'
+            ? (localStorage.getItem('butler.gemini_model') || localStorage.getItem('butler.llm_model') || DEFAULT_GEMINI_MODEL)
+            : (localStorage.getItem('butler.openrouter_model') || localStorage.getItem('butler.llm_model') || DEFAULT_OPENROUTER_MODEL);
         const cleanSavedModel = sanitizeModelId(savedModelRaw, savedProvider);
         setLlmModel(cleanSavedModel);
 
         const presets = savedProvider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS;
         setIsCustomModel(!presets.some(m => m.id === cleanSavedModel));
+
+        const savedEffort = localStorage.getItem('butler.reasoning_effort') as ReasoningEffort | null;
+        if (savedEffort && ['low', 'medium', 'high'].includes(savedEffort)) {
+            setReasoningEffort(savedEffort);
+        }
 
         if (savedSnooze) {
             const snoozeTime = parseInt(savedSnooze, 10);
@@ -81,7 +89,6 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 setSnoozeUntil(snoozeTime);
                 setFloatingEnabled(false);
             } else {
-                // Snooze expired
                 localStorage.removeItem('floatingButton.snoozeUntil');
                 setFloatingEnabled(savedEnabled);
             }
@@ -89,14 +96,19 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             setFloatingEnabled(savedEnabled);
         }
 
-        // Check permission
         checkPermission();
 
-        // Load voice alerts setting
+        const onVisChange = () => {
+            if (document.visibilityState === 'visible') checkPermission();
+        };
+        document.addEventListener('visibilitychange', onVisChange);
+
         const savedVoiceAlerts = localStorage.getItem('settings.voiceAlerts');
         if (savedVoiceAlerts !== null) {
             setVoiceAlertsEnabled(savedVoiceAlerts === 'true');
         }
+
+        return () => document.removeEventListener('visibilitychange', onVisChange);
     }, []);
 
     const checkPermission = async () => {
@@ -218,11 +230,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('gemini');
-                            if (!isCustomModel) {
-                                setLlmModel('gemini-3-flash-preview');
-                            } else {
-                                setLlmModel(prev => sanitizeModelId(prev, 'gemini'));
-                            }
+                            const storedKey = localStorage.getItem('butler.gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+                            setApiKeyInput(storedKey);
+                            const storedModel = sanitizeModelId(
+                                localStorage.getItem('butler.gemini_model') || DEFAULT_GEMINI_MODEL,
+                                'gemini'
+                            );
+                            setLlmModel(storedModel);
+                            setIsCustomModel(!GEMINI_MODELS.some(m => m.id === storedModel));
+                            setTestResult(null);
                         }}
                         style={{
                             flex: 1,
@@ -242,11 +258,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         type="button"
                         onClick={() => {
                             setAiProvider('openrouter');
-                            if (!isCustomModel) {
-                                setLlmModel('google/gemini-3-flash-preview');
-                            } else {
-                                setLlmModel(prev => sanitizeModelId(prev, 'openrouter'));
-                            }
+                            const storedKey = localStorage.getItem('butler.openrouter_api_key') || (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+                            setApiKeyInput(storedKey);
+                            const storedModel = sanitizeModelId(
+                                localStorage.getItem('butler.openrouter_model') || DEFAULT_OPENROUTER_MODEL,
+                                'openrouter'
+                            );
+                            setLlmModel(storedModel);
+                            setIsCustomModel(!OPENROUTER_MODELS.some(m => m.id === storedModel));
+                            setTestResult(null);
                         }}
                         style={{
                             flex: 1,
@@ -317,7 +337,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                     type="button"
                                     onClick={() => {
                                         setIsCustomModel(false);
-                                        setLlmModel(aiProvider === 'gemini' ? 'gemini-3-flash-preview' : 'google/gemini-3-flash-preview');
+                                        setLlmModel(aiProvider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL);
                                     }}
                                     style={{
                                         background: 'none',
@@ -344,7 +364,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                         setIsCustomModel(false);
                                     }
                                 }}
-                                placeholder={aiProvider === 'gemini' ? 'bijv. gemini-3-flash-preview of publishers/google/models/...' : 'bijv. google/gemini-3-flash-preview'}
+                                placeholder={aiProvider === 'gemini' ? `bijv. ${DEFAULT_GEMINI_MODEL}` : `bijv. ${DEFAULT_OPENROUTER_MODEL}`}
                                 style={{
                                     width: '100%',
                                     padding: '8px 10px',
@@ -359,7 +379,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 }}
                             />
                             <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: 'var(--text-secondary, #9ca3af)', lineHeight: '1.3' }}>
-                                💡 <strong>Tip:</strong> Je mag ook het volledige Google Cloud pad plakken (zoals <code>publishers/google/models/gemini-2.5-flash</code>). Butler schoont dit automatisch op.
+                                💡 <strong>Tip:</strong> Butler migreert verlopen modellen automatisch naar het nieuwste actieve alternatief en valt bij rate-limits automatisch terug op de failover-keten.
                             </p>
                         </div>
                     ) : (
@@ -385,6 +405,39 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         </div>
                     )}
                 </div>
+
+                {/* Reasoning Effort Selector */}
+                {supportsReasoningEffort(llmModel) && (
+                    <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px', color: 'var(--text-primary, #ffffff)' }}>
+                            Denkniveau (Snelheid vs. Logica)
+                        </label>
+                        <select
+                            value={reasoningEffort}
+                            onChange={(e) => setReasoningEffort(e.target.value as ReasoningEffort)}
+                            style={{
+                                width: '100%',
+                                padding: '9px 12px',
+                                borderRadius: '8px',
+                                border: '1px solid var(--border, #3a3a4a)',
+                                background: 'var(--bg-elevated, #252532)',
+                                color: 'var(--text-primary, #ffffff)',
+                                fontSize: '0.85rem',
+                                outline: 'none'
+                            }}
+                        >
+                            <option value="low" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                ⚡ Laag (Aanbevolen — snelste spraak & smart home acties)
+                            </option>
+                            <option value="medium" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                ⚖️ Gemiddeld (Gebalanceerd voor analyses & planning)
+                            </option>
+                            <option value="high" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                🧠 Hoog (Diep redeneren voor complexe automatiseringen)
+                            </option>
+                        </select>
+                    </div>
+                )}
 
                 {/* API Key Input */}
                 <div style={{ marginBottom: '12px' }}>
@@ -412,10 +465,12 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 setApiKeyInput(val);
                                 if (val.startsWith('AIzaSy') && aiProvider !== 'gemini') {
                                     setAiProvider('gemini');
-                                    setLlmModel('gemini-3-flash-preview');
+                                    setLlmModel(DEFAULT_GEMINI_MODEL);
+                                    setIsCustomModel(false);
                                 } else if (val.startsWith('sk-or-') && aiProvider !== 'openrouter') {
                                     setAiProvider('openrouter');
-                                    setLlmModel('google/gemini-3-flash-preview');
+                                    setLlmModel(DEFAULT_OPENROUTER_MODEL);
+                                    setIsCustomModel(false);
                                 }
                             }}
                             placeholder={aiProvider === 'gemini' ? 'AIzaSy...' : 'sk-or-v1-...'}
@@ -454,21 +509,28 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     <button
                         onClick={() => {
                             const trimmed = apiKeyInput.trim();
-                            const isGemini = aiProvider === 'gemini' || trimmed.startsWith('AIzaSy');
-                            const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
+                            const resolvedProvider: 'gemini' | 'openrouter' = trimmed.startsWith('sk-or-')
+                                ? 'openrouter'
+                                : trimmed.startsWith('AIzaSy')
+                                    ? 'gemini'
+                                    : aiProvider;
+                            const cleanModel = sanitizeModelId(llmModel, resolvedProvider);
+                            setAiProvider(resolvedProvider);
                             setLlmModel(cleanModel);
-                            const activePresets = isGemini ? GEMINI_MODELS : OPENROUTER_MODELS;
+                            const activePresets = resolvedProvider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS;
                             setIsCustomModel(!activePresets.some(m => m.id === cleanModel));
 
-                            if (isGemini) {
+                            localStorage.setItem('butler.ai_provider', resolvedProvider);
+                            if (resolvedProvider === 'gemini') {
                                 localStorage.setItem('butler.gemini_api_key', trimmed);
-                                localStorage.setItem('butler.ai_provider', 'gemini');
+                                localStorage.setItem('butler.gemini_model', cleanModel);
                             } else {
                                 localStorage.setItem('butler.openrouter_api_key', trimmed);
-                                localStorage.setItem('butler.ai_provider', 'openrouter');
+                                localStorage.setItem('butler.openrouter_model', cleanModel);
                             }
                             localStorage.setItem('butler.api_key', trimmed);
                             localStorage.setItem('butler.llm_model', cleanModel);
+                            localStorage.setItem('butler.reasoning_effort', reasoningEffort);
                             setKeySaved(true);
                             setTimeout(() => setKeySaved(false), 2500);
                         }}
@@ -489,7 +551,12 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     <button
                         onClick={async () => {
                             const trimmed = apiKeyInput.trim();
-                            const isGemini = aiProvider === 'gemini' || trimmed.startsWith('AIzaSy');
+                            const resolvedProvider: 'gemini' | 'openrouter' = trimmed.startsWith('sk-or-')
+                                ? 'openrouter'
+                                : trimmed.startsWith('AIzaSy')
+                                    ? 'gemini'
+                                    : aiProvider;
+                            const isGemini = resolvedProvider === 'gemini';
                             const keyToTest = trimmed ||
                                 (isGemini
                                     ? localStorage.getItem('butler.gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY
@@ -502,97 +569,53 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                             setTestingKey(true);
                             setTestResult(null);
 
-                            const cleanModel = sanitizeModelId(llmModel, isGemini ? 'gemini' : 'openrouter');
+                            const cleanModel = sanitizeModelId(llmModel, resolvedProvider);
                             setLlmModel(cleanModel);
                             const activePresets = isGemini ? GEMINI_MODELS : OPENROUTER_MODELS;
                             setIsCustomModel(!activePresets.some(m => m.id === cleanModel));
 
                             try {
                                 const start = Date.now();
-                                if (isGemini) {
-                                    // 1. Google AI Studio OpenAI-compatible endpoint
-                                    const openaiRes = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
-                                        method: 'POST',
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'Authorization': `Bearer ${keyToTest}`,
-                                            'x-goog-api-key': keyToTest
-                                        },
-                                        body: JSON.stringify({
-                                            model: cleanModel,
-                                            messages: [{ role: 'user', content: 'Ping' }],
-                                            max_tokens: 10
-                                        })
-                                    });
-
-                                    const elapsed = Date.now() - start;
-
-                                    if (openaiRes.ok) {
-                                        setTestResult({
-                                            success: true,
-                                            message: `✅ Verbinding geslaagd! ${cleanModel} via Google AI Studio reageerde in ${elapsed}ms.`
-                                        });
-                                    } else {
-                                        // 2. Direct Gemini REST endpoint fallback verification
-                                        let directOk = false;
-                                        try {
-                                            const directRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${keyToTest}`, {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({
-                                                    contents: [{ parts: [{ text: 'Ping' }] }],
-                                                    generationConfig: { maxOutputTokens: 10 }
-                                                })
-                                            });
-                                            if (directRes.ok) {
-                                                directOk = true;
-                                            }
-                                        } catch {
-                                            directOk = false;
-                                        }
-
-                                        if (directOk) {
-                                            setTestResult({
-                                                success: true,
-                                                message: `✅ Verbinding geslaagd! ${cleanModel} geverifieerd via Google Gemini API in ${elapsed}ms.`
-                                            });
-                                        } else {
-                                            const err = await openaiRes.text();
-                                            setTestResult({
-                                                success: false,
-                                                message: `❌ Fout (${openaiRes.status}): ${err.substring(0, 160)}`
-                                            });
-                                        }
+                                const url = isGemini ? GOOGLE_GEMINI_API_URL : OPENROUTER_API_URL;
+                                const headers: Record<string, string> = isGemini
+                                    ? {
+                                        'Content-Type': 'application/json',
+                                        'Authorization': `Bearer ${keyToTest}`,
+                                        'x-goog-api-key': keyToTest
                                     }
+                                    : {
+                                        'Content-Type': 'application/json',
+                                        'Authorization': `Bearer ${keyToTest}`,
+                                        'HTTP-Referer': 'https://aiha.app',
+                                        'X-Title': 'Butler AI App'
+                                    };
+                                const payload: Record<string, any> = {
+                                    model: cleanModel,
+                                    messages: [{ role: 'user', content: 'Antwoord met precies één woord: OK' }],
+                                    max_tokens: 64
+                                };
+                                if (supportsReasoningEffort(cleanModel)) {
+                                    payload.reasoning_effort = 'low';
+                                }
+
+                                const res = await fetch(url, {
+                                    method: 'POST',
+                                    headers,
+                                    body: JSON.stringify(payload)
+                                });
+                                const elapsed = Date.now() - start;
+
+                                if (res.ok) {
+                                    setTestResult({
+                                        success: true,
+                                        message: `✅ Verbinding geslaagd! ${cleanModel} via ${isGemini ? 'Google AI Studio' : 'OpenRouter'} reageerde in ${elapsed}ms.`
+                                    });
                                 } else {
-                                    // OpenRouter
-                                    const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                                        method: 'POST',
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'Authorization': `Bearer ${keyToTest}`,
-                                            'HTTP-Referer': 'https://aiha.app',
-                                            'X-Title': 'Butler AI App'
-                                        },
-                                        body: JSON.stringify({
-                                            model: cleanModel,
-                                            messages: [{ role: 'user', content: 'Ping' }],
-                                            max_tokens: 10
-                                        })
+                                    const err = await res.text();
+                                    setTestResult({
+                                        success: false,
+                                        message: `❌ Fout (${res.status}): ${err.substring(0, 180)}`
                                     });
-                                    const elapsed = Date.now() - start;
-                                    if (openRouterRes.ok) {
-                                        setTestResult({
-                                            success: true,
-                                            message: `✅ Verbinding geslaagd! ${cleanModel} via OpenRouter reageerde in ${elapsed}ms.`
-                                        });
-                                    } else {
-                                        const err = await openRouterRes.text();
-                                        setTestResult({
-                                            success: false,
-                                            message: `❌ Fout (${openRouterRes.status}): ${err.substring(0, 160)}`
-                                        });
-                                    }
                                 }
                             } catch (e: any) {
                                 setTestResult({ success: false, message: `❌ Netwerkfout: ${e.message}` });
@@ -628,6 +651,108 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         {testResult.message}
                     </div>
                 )}
+            </div>
+
+            {/* Proactive Backend Workers (On-Demand Control) */}
+            <div style={{
+                marginBottom: '24px',
+                padding: '16px',
+                background: 'rgba(16, 185, 129, 0.06)',
+                borderRadius: '12px',
+                border: '1px solid rgba(16, 185, 129, 0.22)'
+            }}>
+                <h3 style={{ margin: '0 0 6px 0' }}>🤖 Proactieve Butler Workers</h3>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: '1.4' }}>
+                    Alle proactieve achtergrondwerkers blijven automatisch draaien via de backend, en je kan elke worker hier (of via spraak/chat) direct handmatig starten.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {PROACTIVE_WORKERS.map((worker) => {
+                        const isRunning = runningWorker === worker.id;
+                        const st = workerStatus[worker.id];
+                        return (
+                            <div
+                                key={worker.id}
+                                style={{
+                                    padding: '10px 12px',
+                                    borderRadius: '8px',
+                                    background: 'var(--bg-card, #1a1a24)',
+                                    border: '1px solid var(--border, #3a3a4a)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '6px'
+                                }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: '0.88rem', fontWeight: 600 }}>
+                                            {worker.icon} {worker.name}
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                            {worker.description}
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        disabled={!!runningWorker || !activeConnection?.id}
+                                        onClick={async () => {
+                                            if (!activeConnection?.id) return;
+                                            setRunningWorker(worker.id);
+                                            try {
+                                                const res = await triggerProactiveWorker(worker.id, activeConnection.id);
+                                                const summary = typeof res.data?.message === 'string'
+                                                    ? res.data.message
+                                                    : typeof res.data?.summary === 'string'
+                                                        ? res.data.summary
+                                                        : 'Voltooid';
+                                                setWorkerStatus(prev => ({
+                                                    ...prev,
+                                                    [worker.id]: {
+                                                        ok: res.success,
+                                                        msg: res.success
+                                                            ? `✅ ${summary} (${res.durationMs}ms)`
+                                                            : `❌ ${res.error || 'Worker fout'}`
+                                                    }
+                                                }));
+                                            } catch (err: any) {
+                                                setWorkerStatus(prev => ({
+                                                    ...prev,
+                                                    [worker.id]: { ok: false, msg: `❌ ${err.message}` }
+                                                }));
+                                            } finally {
+                                                setRunningWorker(null);
+                                            }
+                                        }}
+                                        style={{
+                                            padding: '6px 12px',
+                                            borderRadius: '6px',
+                                            background: isRunning ? '#4b5563' : '#059669',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                            fontSize: '0.78rem',
+                                            fontWeight: 600,
+                                            cursor: (!!runningWorker || !activeConnection?.id) ? 'not-allowed' : 'pointer',
+                                            opacity: (!activeConnection?.id || (runningWorker && !isRunning)) ? 0.55 : 1,
+                                            whiteSpace: 'nowrap'
+                                        }}
+                                    >
+                                        {isRunning ? '⏳ Bezig...' : '▶ Start'}
+                                    </button>
+                                </div>
+                                {st && (
+                                    <div style={{
+                                        fontSize: '0.75rem',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        background: st.ok ? 'rgba(22, 163, 74, 0.15)' : 'rgba(220, 38, 38, 0.15)',
+                                        color: st.ok ? '#4ade80' : '#f87171'
+                                    }}>
+                                        {st.msg}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* Floating Button Section */}
@@ -707,7 +832,6 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     onClick={async () => {
                         await signOut();
                         if (onClose) onClose();
-                        // App state listener handles redirect to Auth screen
                     }}
                     style={{
                         padding: '10px 16px',
@@ -773,11 +897,17 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
                         setClearingHistory(true);
                         try {
-                            const { error, count } = await supabase
+                            const { error } = await supabase
                                 .from('suggestions')
                                 .delete()
-                                .or(`connection_id.eq.${activeConnection.id},connection_id.is.null`)
+                                .eq('connection_id', activeConnection.id)
                                 .eq('status', 'rejected');
+
+                            // Also clear denied_proposals scoped to this connection
+                            await supabase
+                                .from('denied_proposals')
+                                .delete()
+                                .eq('connection_id', activeConnection.id);
 
                             if (error) {
                                 alert('Failed to clear history: ' + error.message);

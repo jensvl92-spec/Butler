@@ -1,19 +1,18 @@
 /**
- * Client-Side SOTA ReAct Orchestrator
+ * Client-Side SOTA Unified ReAct Orchestrator (v2.0)
  *
- * Runs directly inside the Butler mobile app.
- * Powers Gemini 3 Flash via OpenRouter with typed tool calling:
- * - get_weather (Open-Meteo with live dew point, wind gusts, and Dutch descriptions)
- * - control_home_device (Direct Home Assistant WebSocket or REST execution)
- * - get_navigation_eta (Nominatim / Haversine distance & ETA)
- * - manage_core_memory (4-tier Dynamic Core Memory with localStorage persistence)
- * - spotify_action & calendar_action
+ * Single unified agent with:
+ * - Centralized Model Registry & automatic failover (never breaks on retired models)
+ * - Gemini 3.8 Flash / Gemini 4 Hydrogen API compliance (reasoning_effort, no deprecated temperature)
+ * - Parallel tool calling (Promise.all) for sub-2s multi-action latency
+ * - True multimodal vision for Home Assistant camera snapshots
+ * - Direct local Home Assistant WebSocket/REST execution + On-demand Proactive Backend Workers
+ * - Zero hardcoded intent-blanking regexes or synthetic fallback sentences
  */
 
-// @ts-ignore
 import { logger } from '../../utils/logger';
 import { Action, HADevice, LLMResponse } from '../../types';
-import { callHAService } from '../../utils/home-assistant';
+import { callHAService, buildHAUrl, sanitizeHAToken, fetchWithTimeout } from '../../utils/home-assistant';
 import {
     fetchHAHistory,
     fetchHALogbook,
@@ -23,100 +22,29 @@ import {
     fetchHACalendarEvents
 } from '../../utils/ha-api';
 import { supabase } from '../supabase';
+import {
+    AIProvider,
+    AIResolvedConfig,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
+    GOOGLE_GEMINI_API_URL,
+    OPENROUTER_API_URL,
+    sanitizeModelId,
+    resolveAIConfig,
+    supportsTemperatureParam,
+    supportsReasoningEffort
+} from './modelRegistry';
+import { triggerProactiveWorker, ProactiveWorkerId } from './proactiveWorkers';
 
-export type AIProvider = 'gemini' | 'openrouter';
-
-export const GOOGLE_GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-
-export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
-export const DEFAULT_OPENROUTER_MODEL = 'google/gemini-3-flash-preview';
-
-export function sanitizeModelId(raw: string | undefined | null, provider: AIProvider): string {
-    if (!raw) return provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
-    let clean = raw.trim();
-
-    // 1. Strip surrounding quotes or backticks
-    clean = clean.replace(/^[ "'`]+|[ "'`]+$/g, '').trim();
-
-    // 2. If user pasted a full URL or path containing '/models/'
-    if (clean.includes('/models/')) {
-        clean = clean.split('/models/')[1];
-    }
-
-    // 3. Strip query parameters or actions (e.g. ?key=... or :generateContent or :streamGenerateContent)
-    if (clean.includes('?')) {
-        clean = clean.split('?')[0];
-    }
-    if (clean.includes(':')) {
-        clean = clean.split(':')[0];
-    }
-
-    // 4. Strip Google Cloud Vertex AI / Model Garden prefixes
-    // e.g. projects/.../publishers/google/models/... or publishers/google/models/...
-    clean = clean.replace(/^.*publishers\/google\/models\//i, '');
-    clean = clean.replace(/^publishers\/[^\/]+\/models\//i, '');
-
-    // 5. Strip 'models/' prefix
-    clean = clean.replace(/^models\//i, '');
-
-    // 6. Take first token before spaces or brackets (e.g. "gemini-3-flash-preview (latest)" -> "gemini-3-flash-preview")
-    clean = clean.split(' ')[0].split('(')[0].trim();
-
-    if (provider === 'gemini') {
-        clean = clean.replace(/^google\//i, '');
-        if (clean === 'gemini-3-flash') {
-            clean = 'gemini-3-flash-preview';
-        }
-    } else {
-        // OpenRouter requires provider/model format
-        if (!clean.includes('/')) {
-            clean = `google/${clean}`;
-        }
-        if (clean === 'google/gemini-3-flash') {
-            clean = 'google/gemini-3-flash-preview';
-        }
-    }
-    return clean;
-}
-
-export interface AIResolvedConfig {
-    apiKey: string;
-    provider: AIProvider;
-    model: string;
-    endpoint: string;
-}
-
-export function resolveAIConfig(providedKey?: string, providedModel?: string, providedProvider?: AIProvider): AIResolvedConfig {
-    const geminiKey =
-        localStorage.getItem('butler.gemini_api_key') ||
-        (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
-
-    const openRouterKey =
-        localStorage.getItem('butler.openrouter_api_key') ||
-        (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
-
-    const genericKey = localStorage.getItem('butler.api_key') || '';
-
-    let apiKey = (providedKey || geminiKey || openRouterKey || genericKey).trim();
-
-    // Auto-detect provider if not explicitly specified
-    let provider: AIProvider = providedProvider || (localStorage.getItem('butler.ai_provider') as AIProvider) || 'gemini';
-
-    if (apiKey.startsWith('AIzaSy')) {
-        provider = 'gemini';
-    } else if (apiKey.startsWith('sk-or-')) {
-        provider = 'openrouter';
-    }
-
-    let defaultModel = provider === 'gemini' ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL;
-    let rawModel = providedModel || localStorage.getItem('butler.llm_model') || defaultModel;
-    let model = sanitizeModelId(rawModel, provider);
-
-    const endpoint = provider === 'gemini' ? GOOGLE_GEMINI_API_URL : OPENROUTER_API_URL;
-
-    return { apiKey, provider, model, endpoint };
-}
+export {
+    GOOGLE_GEMINI_API_URL,
+    OPENROUTER_API_URL,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
+    sanitizeModelId,
+    resolveAIConfig
+};
+export type { AIProvider, AIResolvedConfig };
 
 export interface ClientOrchestratorOptions {
     apiKey?: string;
@@ -134,29 +62,20 @@ export interface ClientOrchestratorOptions {
 }
 
 // -------------------------------------------------------------
-// 1. Tool Schemas (OpenAI / OpenRouter Compatible)
+// 1. Unified Tool Schemas (OpenAI / Gemini / OpenRouter Compatible)
 // -------------------------------------------------------------
 const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
             name: 'get_weather',
-            description: 'Haalt de actuele weersomstandigheden en voorspelling op (inclusief temperatuur, gevoelstemperatuur, dauwpunt, windsnelheid, windstoten en neerslag). Gebruik dit ALTIJD voor vragen over weer, regen, wind, dauwpunt of temperatuur.',
+            description: 'Haalt actuele weersomstandigheden, 24-uurs uurlijkse neerslag/temperatuur en 3-daagse voorspelling op (incl. gevoelstemperatuur, dauwpunt, wind & windstoten).',
             parameters: {
                 type: 'object',
                 properties: {
-                    location_name: {
-                        type: 'string',
-                        description: 'Naam van de stad of plaats (optioneel, standaard de huidige locatie of thuislocatie).'
-                    },
-                    latitude: {
-                        type: 'number',
-                        description: 'Breedtegraad (optioneel, wordt automatisch berekend indien afwezig).'
-                    },
-                    longitude: {
-                        type: 'number',
-                        description: 'Lengtegraad (optioneel, wordt automatisch berekend indien afwezig).'
-                    }
+                    location_name: { type: 'string', description: 'Plaatsnaam of stad (optioneel; standaard huidige locatie).' },
+                    latitude: { type: 'number', description: 'Optionele breedtegraad.' },
+                    longitude: { type: 'number', description: 'Optionele lengtegraad.' }
                 }
             }
         }
@@ -165,26 +84,14 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'control_home_device',
-            description: 'Bestuurt een apparaat in Home Assistant (bv. lampen aan/uitzetten, thermostaat instellen, schakelaar bedienen, media pauzeren/afspelen).',
+            description: 'Bestuurt een apparaat of entiteit in Home Assistant (light, switch, climate, media_player, cover, lock, fan, vacuum, scene, script).',
             parameters: {
                 type: 'object',
                 properties: {
-                    domain: {
-                        type: 'string',
-                        description: 'Home Assistant domein (bv. light, switch, climate, media_player, cover, lock, scene, script).'
-                    },
-                    service: {
-                        type: 'string',
-                        description: 'Service naam (bv. turn_on, turn_off, toggle, set_temperature, play_media).'
-                    },
-                    entity_id: {
-                        type: 'string',
-                        description: 'Exacte Home Assistant entity_id (bv. light.woonkamer, climate.thermostaat, switch.koffiezetapparaat).'
-                    },
-                    parameters: {
-                        type: 'object',
-                        description: 'Optionele service parameters zoals brightness, temperature, color_name, etc.'
-                    }
+                    domain: { type: 'string', description: 'Home Assistant domein (bv. light, switch, climate, media_player, cover, lock, scene, script).' },
+                    service: { type: 'string', description: 'Service naam zonder domeinprefix (bv. turn_on, turn_off, toggle, set_temperature, open_cover).' },
+                    entity_id: { type: 'string', description: 'Exacte Home Assistant entity_id (bv. light.woonkamer).' },
+                    parameters: { type: 'object', description: 'Optionele service parameters (bv. brightness_pct, temperature, color_name).' }
                 },
                 required: ['domain', 'service', 'entity_id']
             }
@@ -193,92 +100,14 @@ const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
-            name: 'manage_core_memory',
-            description: 'Beheert het permanente geheugen over de gebruiker (bv. favoriete ruimtes, gewoontes, voorkeuren, werklocatie, huisregels).',
-            parameters: {
-                type: 'object',
-                properties: {
-                    action: {
-                        type: 'string',
-                        enum: ['get', 'save', 'delete'],
-                        description: 'De actie: "get" om herinneringen te lezen, "save" om een nieuw feit op te slaan, "delete" om te verwijderen.'
-                    },
-                    content: {
-                        type: 'string',
-                        description: 'Het feit of de voorkeur om op te slaan (bv. "Gebruiker wil \'s avonds de lichten gedimd op 30%").'
-                    },
-                    memory_id: {
-                        type: 'string',
-                        description: 'ID of trefwoord om te verwijderen.'
-                    }
-                },
-                required: ['action']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'get_navigation_eta',
-            description: 'Berekent de reistijd, afstand en route naar een bestemming vanaf de huidige locatie van de gebruiker.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    destination: {
-                        type: 'string',
-                        description: 'De bestemming (adres, stad of POI, bv. "Antwerpen Centraal" of "Bakkerij").'
-                    },
-                    mode: {
-                        type: 'string',
-                        enum: ['driving', 'walking', 'bicycling'],
-                        description: 'Vervoersmiddel (standaard driving).'
-                    }
-                },
-                required: ['destination']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'get_energy_prices',
-            description: 'Haalt de actuele stroomprijs of gasprijs, dynamische energie/spotprijzen voor de komende uren (vandaag en morgen), daggemiddelde, piek/daluren en het goedkoopste tijdslot op vanuit Home Assistant (EnergyZero, Nordpool, ENTSO-E, EPEX Spot, etc.) of live marktprijzen. Gebruik dit ALTIJD bij vragen over stroomprijzen, elektriciteitstarieven of gas.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    device_or_sensor: {
-                        type: 'string',
-                        description: 'Optionele specifieke Home Assistant sensor entity_id (bv. sensor.energyzero_today_energy_current_hour_price voor stroom, of sensor.energyzero_today_gas_current_hour_price voor gas). Indien leeg zoekt Butler automatisch naar de juiste sensor.'
-                    },
-                    energy_type: {
-                        type: 'string',
-                        enum: ['electricity', 'gas'],
-                        description: 'Geeft aan of de gebruiker naar elektriciteit/stroom vraagt (standaard: electricity) of naar gas (gas). Selecteer ALTIJD electricity voor stroomvragen!'
-                    }
-                }
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
             name: 'search_home_entities',
-            description: 'Zoekt gericht naar specifieke apparaten, sensoren of entiteiten in Home Assistant op basis van kamernaam, apparaattype of zoekterm. Gebruik dit als een gewenst apparaat niet in de initiële selectie staat of bij vragen zoals "welke lampen staan er in de hal?".',
+            description: 'Zoekt gericht naar apparaten, sensoren of entiteiten in Home Assistant op trefwoord, kamernaam of domein. Gebruik dit wanneer een gewenst apparaat niet in de initiële selectie staat.',
             parameters: {
                 type: 'object',
                 properties: {
-                    query: {
-                        type: 'string',
-                        description: 'Trefwoord of apparaatnaam (bv. "leeslamp", "ventilator", "warmtepomp", "deur").'
-                    },
-                    room: {
-                        type: 'string',
-                        description: 'Optionele kamernaam (bv. "woonkamer", "slaapkamer", "keuken", "gang", "tuin").'
-                    },
-                    domain: {
-                        type: 'string',
-                        description: 'Optioneel Home Assistant domein (bv. "light", "switch", "climate", "cover", "sensor", "media_player").'
-                    }
+                    query: { type: 'string', description: 'Zoekterm of naam (bv. "leeslamp", "warmtepomp", "deur", "stroomprijs").' },
+                    room: { type: 'string', description: 'Optionele kamernaam (bv. "woonkamer", "keuken", "slaapkamer").' },
+                    domain: { type: 'string', description: 'Optioneel HA-domein (bv. "light", "sensor", "climate", "cover", "camera", "todo").' }
                 }
             }
         }
@@ -287,14 +116,11 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'get_entity_state',
-            description: 'Leest de actuele status en alle attributen uit van een specifieke Home Assistant sensor, schakelaar of apparaat, of zoekt entiteiten op trefwoord (bv. "prijs", "stroom", "nordpool", "solar", "warmtepomp", "batterij", "temperatuur").',
+            description: 'Leest de actuele status en alle attributen uit van een specifieke Home Assistant entiteit of sensor.',
             parameters: {
                 type: 'object',
                 properties: {
-                    entity_id_or_search: {
-                        type: 'string',
-                        description: 'Exacte entity_id of zoekterm om te matchen.'
-                    }
+                    entity_id_or_search: { type: 'string', description: 'Exacte entity_id of zoekterm.' }
                 },
                 required: ['entity_id_or_search']
             }
@@ -303,19 +129,27 @@ const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
-            name: 'get_ha_history_and_statistics',
-            description: 'Haalt historische data en statistische berekeningen op van een Home Assistant sensor of teller (bv. stroomopbrengst zonnepanelen over 24u/7d, minimum/maximum temperatuur vannacht, kWh verbruik warmtepomp). Berekent automatisch het verschil (delta) en gemiddeldes.',
+            name: 'get_energy_prices',
+            description: 'Haalt actuele en komende dynamische elektriciteits- of gasprijzen (vandaag & morgen, daggemiddelde, goedkoopste/duurste uren) op uit Home Assistant of live EPEX/EnergyZero spotmarkt.',
             parameters: {
                 type: 'object',
                 properties: {
-                    entity_id: {
-                        type: 'string',
-                        description: 'Exacte entity_id van de sensor (bv. sensor.solar_production_total, sensor.woonkamer_temperatuur).'
-                    },
-                    hours_ago: {
-                        type: 'number',
-                        description: 'Hoeveel uur terugkijken (bv. 24 voor afgelopen etmaal, 168 voor afgelopen week, 8 voor afgelopen nacht). Standaard 24.'
-                    }
+                    device_or_sensor: { type: 'string', description: 'Optionele specifieke HA sensor entity_id.' },
+                    energy_type: { type: 'string', enum: ['electricity', 'gas'], description: 'electricity (standaard) of gas.' }
+                }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_ha_history_and_statistics',
+            description: 'Haalt historische data en statistieken (min, max, gemiddelde, verschil/delta, statuswisselingen) op van een Home Assistant entiteit over de afgelopen uren of dagen.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    entity_id: { type: 'string', description: 'Exacte Home Assistant entity_id.' },
+                    hours_ago: { type: 'number', description: 'Aantal uren terug (standaard 24, max 720).' }
                 },
                 required: ['entity_id']
             }
@@ -325,18 +159,12 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'get_ha_logbook',
-            description: 'Haalt het Home Assistant logboek op om te zien wanneer gebeurtenissen hebben plaatsgevonden en wie/wat ze heeft getriggerd (bv. "Hoe laat ging de voordeur open?", "Wanneer is het alarm ingeschakeld?", "Wie deed het licht aan?").',
+            description: 'Leest recente gebeurtenissen en tijdstippen uit het Home Assistant logboek (bv. wie/wanneer deur geopend of beweging gedetecteerd).',
             parameters: {
                 type: 'object',
                 properties: {
-                    entity_id: {
-                        type: 'string',
-                        description: 'Optionele entity_id om specifiek op te filteren (bv. binary_sensor.voordeur_contact).'
-                    },
-                    hours_ago: {
-                        type: 'number',
-                        description: 'Aantal uren terug in het logboek (standaard 24).'
-                    }
+                    entity_id: { type: 'string', description: 'Optionele entity_id om op te filteren.' },
+                    hours_ago: { type: 'number', description: 'Aantal uren terug (standaard 24).' }
                 }
             }
         }
@@ -345,20 +173,13 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'capture_camera_snapshot',
-            description: 'Haalt een actuele live snapshot op van een beveiligingscamera of deurbel in Home Assistant en laat deze visueel analyseren door de AI (bv. "Wie staat er aan de deur?", "Ligt er een pakketje op de oprit?", "Staat de garagepoort open?").',
+            description: 'Maakt een live snapshot van een Home Assistant camera of deurbel zodat je het beeld direct visueel kunt analyseren en beschrijven.',
             parameters: {
                 type: 'object',
                 properties: {
-                    camera_entity_id: {
-                        type: 'string',
-                        description: 'Exacte camera entity_id (bv. camera.voordeur, camera.oprit, camera.tuin).'
-                    },
-                    question: {
-                        type: 'string',
-                        description: 'De specifieke visuele vraag van de gebruiker (bv. "Staat er iemand aan de deur?", "Is de poort dicht?").'
-                    }
+                    camera_entity_id: { type: 'string', description: 'Exacte camera entity_id (bv. camera.voordeur).' }
                 },
-                required: ['camera_entity_id', 'question']
+                required: ['camera_entity_id']
             }
         }
     },
@@ -366,23 +187,13 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'manage_todo_list',
-            description: 'Beheert to-do lijsten en boodschappenlijstjes in Home Assistant (items ophalen, nieuw item toevoegen, afvinken als voltooid, of verwijderen).',
+            description: 'Beheert to-do lijsten en boodschappenlijsten in Home Assistant (bekijken, toevoegen, afvinken, verwijderen).',
             parameters: {
                 type: 'object',
                 properties: {
-                    action: {
-                        type: 'string',
-                        enum: ['list', 'add', 'complete', 'remove'],
-                        description: 'De actie: "list" om items te bekijken, "add" om toe te voegen, "complete" om af te vinken, "remove" om te wissen.'
-                    },
-                    item_summary: {
-                        type: 'string',
-                        description: 'De tekst van het item (bv. "Melk", "Brood", "Gras maaien"). Verplicht bij add, complete of remove.'
-                    },
-                    list_entity_id: {
-                        type: 'string',
-                        description: 'Optionele entity_id van de lijst (bv. todo.boodschappen, todo.shopping_list). Indien leeg kiest Butler automatisch de actieve lijst.'
-                    }
+                    action: { type: 'string', enum: ['list', 'add', 'complete', 'remove'], description: 'De actie op de lijst.' },
+                    item: { type: 'string', description: 'Naam van het item (vereist bij add/complete/remove).' },
+                    list_entity_id: { type: 'string', description: 'Optionele todo entity_id; indien leeg wordt de eerste lijst gekozen.' }
                 },
                 required: ['action']
             }
@@ -392,18 +203,12 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'get_calendar_events',
-            description: 'Haalt agenda-afspraken en kalender-evenementen op uit Home Assistant kalenders (bv. afvalkalender, ophaaldagen voor restafval/PMD/papier, gezinsagenda, of persoonlijke afspraken).',
+            description: 'Haalt geplande afspraken en ophaaldagen op uit alle gekoppelde Home Assistant kalenders (of één specifieke kalender).',
             parameters: {
                 type: 'object',
                 properties: {
-                    calendar_entity_id: {
-                        type: 'string',
-                        description: 'Optionele entity_id van de kalender (bv. calendar.afvalkalender, calendar.gezin). Indien leeg doorzoekt Butler alle kalenders.'
-                    },
-                    days_ahead: {
-                        type: 'number',
-                        description: 'Aantal dagen vooruitkijken (standaard 7 dagen).'
-                    }
+                    calendar_entity_id: { type: 'string', description: 'Optionele kalender entity_id; indien leeg worden alle kalenders doorzocht.' },
+                    days_ahead: { type: 'number', description: 'Aantal dagen vooruit (standaard 7).' }
                 }
             }
         }
@@ -412,384 +217,514 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'create_home_assistant_automation',
-            description: 'Ontwerpt een complete Home Assistant automatisering en presenteert deze als interactieve kaart aan de gebruiker met een directe "Installeer in Home Assistant" knop.',
+            description: 'Ontwerpt een volledige Home Assistant automatisering (alias, trigger, condition, action) die de gebruiker met één klik kan activeren.',
             parameters: {
                 type: 'object',
                 properties: {
-                    alias: {
-                        type: 'string',
-                        description: 'Duidelijke en beschrijvende titel van de automatisering (bv. "Automatisch zonwering sluiten bij felle zon").'
-                    },
-                    description: {
-                        type: 'string',
-                        description: 'Korte toelichting van wat de automatisering doet.'
-                    },
-                    trigger: {
-                        type: 'array',
-                        items: { type: 'object' },
-                        description: 'Lijst van triggers in Home Assistant formaat (bv. platform: numeric_state, entity_id: sensor.temperatuur, above: 24).'
-                    },
-                    condition: {
-                        type: 'array',
-                        items: { type: 'object' },
-                        description: 'Optionele lijst van voorwaarden in Home Assistant formaat.'
-                    },
-                    action: {
-                        type: 'array',
-                        items: { type: 'object' },
-                        description: 'Lijst van acties in Home Assistant formaat (bv. service: cover.close_cover, target: { entity_id: cover.living }).'
-                    },
-                    mode: {
-                        type: 'string',
-                        enum: ['single', 'restart', 'queued', 'parallel'],
-                        description: 'Uitvoeringsmodus (standaard single).'
-                    }
+                    alias: { type: 'string', description: 'Naam van de automatisering.' },
+                    description: { type: 'string', description: 'Korte uitleg.' },
+                    trigger: { type: 'array', items: { type: 'object' }, description: 'Lijst van HA triggers.' },
+                    condition: { type: 'array', items: { type: 'object' }, description: 'Optionele HA voorwaarden.' },
+                    action: { type: 'array', items: { type: 'object' }, description: 'Lijst van HA acties.' },
+                    mode: { type: 'string', enum: ['single', 'restart', 'queued', 'parallel'], description: 'Uitvoeringsmodus (standaard single).' }
                 },
                 required: ['alias', 'trigger', 'action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'manage_core_memory',
+            description: 'Beheert het langetermijngeheugen over voorkeuren, gewoontes en feiten van de gebruiker.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['get', 'save', 'delete'], description: 'Lezen, opslaan of verwijderen.' },
+                    content: { type: 'string', description: 'Het op te slaan feit of de voorkeur.' },
+                    memory_id: { type: 'string', description: 'ID of trefwoord om te verwijderen.' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'get_navigation_eta',
+            description: 'Berekent afstand, geschatte reistijd en Google Maps-routelink naar een bestemming.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    destination: { type: 'string', description: 'Bestemming (adres, stad of POI).' },
+                    mode: { type: 'string', enum: ['driving', 'walking', 'bicycling'], description: 'Vervoersmiddel (standaard driving).' }
+                },
+                required: ['destination']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'set_timer_or_alarm',
+            description: 'Stelt een wekker of afteltimer in op de telefoon van de gebruiker.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    kind: { type: 'string', enum: ['timer', 'alarm'], description: 'timer of alarm.' },
+                    duration_seconds: { type: 'number', description: 'Aantal seconden (voor timer, bv. 600 voor 10 minuten).' },
+                    hour: { type: 'number', description: 'Uur 0-23 (voor alarm).' },
+                    minute: { type: 'number', description: 'Minuut 0-59 (voor alarm).' },
+                    label: { type: 'string', description: 'Optioneel label of bericht.' }
+                },
+                required: ['kind']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'create_graph',
+            description: 'Maakt en opent een interactieve historische grafiek voor één of meer Home Assistant sensoren.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    title: { type: 'string', description: 'Titel van de grafiek.' },
+                    entity_ids: { type: 'array', items: { type: 'string' }, description: 'Lijst van sensor entity_ids om te plotten.' },
+                    period: { type: 'string', enum: ['1h', '6h', '24h', '7d', '30d'], description: 'Tijdsperiode (standaard 24h).' }
+                },
+                required: ['title', 'entity_ids']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'run_proactive_worker',
+            description: 'Voert direct een proactieve Butler-achtergrondworker uit op aanvraag (ochtendbriefing, patroonanalyse, anomaliedetectie, energieplanning, gewoontes/klimaat/laadsnelheid leren, dagelijkse check).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    worker: {
+                        type: 'string',
+                        enum: ['morning-briefing', 'daily-butler', 'analyze-patterns', 'detect-anomalies', 'energy-scheduler', 'learn-climate', 'learn-energy', 'learn-habits'],
+                        description: 'Naam van de uit te voeren proactieve worker.'
+                    },
+                    extra_params: { type: 'object', description: 'Optionele extra parameters voor de worker.' }
+                },
+                required: ['worker']
             }
         }
     }
 ];
 
 // -------------------------------------------------------------
-// 2. Weather Tool Implementation (Open-Meteo + Dew Point)
+// 2. Weather Tool (Open-Meteo — preserves hourly & 3-day forecasts!)
 // -------------------------------------------------------------
-function getWeatherDescription(code: number): string {
-    const table: Record<number, string> = {
-        0: 'Heldere hemel / Zonnig',
-        1: 'Overwegend helder',
-        2: 'Gedeeltelijk bewolkt',
-        3: 'Zwaarbewolkt',
-        45: 'Mistig',
-        48: 'Aanvriezende mist',
-        51: 'Lichte motregen',
-        53: 'Matige motregen',
-        55: 'Dichte motregen',
-        61: 'Lichte regen',
-        63: 'Matige regen',
-        65: 'Zware regenval',
-        66: 'Lichte ijzel',
-        67: 'Zware ijzel',
-        71: 'Lichte sneeuwval',
-        73: 'Matige sneeuwval',
-        75: 'Zware sneeuwval',
-        77: 'Hagelsneeuw',
-        80: 'Lichte regenbuien',
-        81: 'Matige regenbuien',
-        82: 'Hevige stortbuien',
-        85: 'Lichte sneeuwbuien',
-        86: 'Zware sneeuwbuien',
-        95: 'Onweer',
-        96: 'Onweer met lichte hagel',
-        99: 'Hevig onweer met zware hagel'
+function getWmoDescription(code: number): string {
+    const map: Record<number, string> = {
+        0: 'Helder', 1: 'Licht bewolkt', 2: 'Gedeeltelijk bewolkt', 3: 'Geheel bewolkt',
+        45: 'Mist', 48: 'Aanvriezende mist',
+        51: 'Lichte motregen', 53: 'Matige motregen', 55: 'Dichte motregen',
+        61: 'Lichte regen', 63: 'Matige regen', 65: 'Zware regen',
+        71: 'Lichte sneeuw', 73: 'Matige sneeuw', 75: 'Zware sneeuw',
+        80: 'Lichte regenbuien', 81: 'Matige regenbuien', 82: 'Zware regenbuien',
+        95: 'Onweer', 96: 'Onweer met lichte hagel', 99: 'Onweer met zware hagel'
     };
-    return table[code] || 'Onbekend';
+    return map[code] || 'Wisselend bewolkt';
 }
 
-async function executeWeatherTool(args: any, fallbackLoc?: { lat: number; lon: number } | null): Promise<any> {
-    let lat = args.latitude;
-    let lon = args.longitude;
+async function executeWeatherTool(args: any, userLocation?: { lat: number; lon: number } | null): Promise<any> {
+    let lat = typeof args.latitude === 'number' ? args.latitude : userLocation?.lat;
+    let lon = typeof args.longitude === 'number' ? args.longitude : userLocation?.lon;
+    let resolvedLocationName = args.location_name || (userLocation ? 'Huidige locatie' : 'Brussel (standaard)');
 
-    // Resolve location if not provided
-    if ((!lat || !lon) && args.location_name) {
+    if (args.location_name && (typeof args.latitude !== 'number' || typeof args.longitude !== 'number')) {
         try {
-            const geoRes = await fetch(
-                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(args.location_name)}&limit=1`,
-                { headers: { 'User-Agent': 'Butler-HomeAssistant-App/1.0' } }
-            );
-            const geoData = await geoRes.json();
-            if (geoData && geoData.length > 0) {
-                lat = parseFloat(geoData[0].lat);
-                lon = parseFloat(geoData[0].lon);
+            const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(args.location_name)}&limit=1`;
+            const geoRes = await fetchWithTimeout(geoUrl, {}, 8000);
+            if (geoRes.ok) {
+                const geoData = await geoRes.json();
+                if (Array.isArray(geoData) && geoData.length > 0) {
+                    lat = parseFloat(geoData[0].lat);
+                    lon = parseFloat(geoData[0].lon);
+                    resolvedLocationName = geoData[0].display_name.split(',')[0];
+                }
             }
         } catch (e) {
-            logger.warn('[ClientOrchestrator] Nominatim geocode error:', e);
+            logger.warn('[ClientOrchestrator] Geocoding failed:', e);
         }
     }
 
-    if (!lat || !lon) {
-        if (fallbackLoc) {
-            lat = fallbackLoc.lat;
-            lon = fallbackLoc.lon;
-        } else {
-            // Default to Brussels/Belgium center if nothing known
-            lat = 50.8503;
-            lon = 4.3517;
-        }
+    if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+        lat = 50.8503;
+        lon = 4.3517;
     }
 
-    try {
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=3`;
-        const res = await fetch(url);
-        if (!res.ok) {
-            throw new Error(`Open-Meteo returned status ${res.status}`);
-        }
-        const data = await res.json();
-        const current = data.current || {};
-        const daily = data.daily || {};
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,showers,snowfall,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,dew_point_2m&hourly=temperature_2m,precipitation_probability,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max&timezone=auto&forecast_days=3`;
 
-        return {
-            location: { latitude: lat, longitude: lon, requested_name: args.location_name || 'Huidige locatie' },
-            current: {
-                temperature: current.temperature_2m,
-                temperature_unit: '°C',
-                apparent_temperature: current.apparent_temperature,
-                dew_point: current.dew_point_2m, // SOTA Dew Point
-                dew_point_unit: '°C',
-                relative_humidity: current.relative_humidity_2m,
-                humidity_unit: '%',
-                wind_speed: current.wind_speed_10m,
-                wind_speed_unit: 'km/h',
-                wind_gusts: current.wind_gusts_10m,
-                wind_gusts_unit: 'km/h',
-                wind_direction: current.wind_direction_10m,
-                precipitation: current.precipitation,
-                precipitation_unit: 'mm',
-                weather_code: current.weather_code,
-                weather_description: getWeatherDescription(current.weather_code),
-                air_pressure_hpa: current.surface_pressure
-            },
-            forecast_today: {
-                max_temp: daily.temperature_2m_max?.[0],
-                min_temp: daily.temperature_2m_min?.[0],
-                precipitation_sum: daily.precipitation_sum?.[0],
-                weather_description: getWeatherDescription(daily.weather_code?.[0])
+    const res = await fetchWithTimeout(url, {}, 10000);
+    if (!res.ok) {
+        return { error: `Weer-API fout (${res.status}).` };
+    }
+    const data = await res.json();
+    const cur = data.current || {};
+    const daily = data.daily || {};
+    const hourly = data.hourly || {};
+
+    // Next 24 hours from current hour
+    const nowMs = Date.now();
+    const hourlyNext24h: Array<{ time: string; temp_c: number; rain_prob_pct: number; precip_mm: number; condition: string }> = [];
+    if (Array.isArray(hourly.time)) {
+        for (let i = 0; i < hourly.time.length && hourlyNext24h.length < 24; i++) {
+            const tMs = new Date(hourly.time[i]).getTime();
+            if (tMs >= nowMs - 3600000) {
+                hourlyNext24h.push({
+                    time: hourly.time[i].slice(11, 16),
+                    temp_c: hourly.temperature_2m?.[i],
+                    rain_prob_pct: hourly.precipitation_probability?.[i] ?? 0,
+                    precip_mm: hourly.precipitation?.[i] ?? 0,
+                    condition: getWmoDescription(hourly.weather_code?.[i] ?? 0)
+                });
             }
-        };
-    } catch (e: any) {
-        logger.error('[ClientOrchestrator] Weather fetch error:', e);
-        return { error: `Kon weerdata niet ophalen: ${e.message}` };
+        }
     }
+
+    const forecastDays: Array<any> = [];
+    if (Array.isArray(daily.time)) {
+        for (let i = 0; i < daily.time.length; i++) {
+            forecastDays.push({
+                date: daily.time[i],
+                condition: getWmoDescription(daily.weather_code?.[i] ?? 0),
+                temp_max_c: daily.temperature_2m_max?.[i],
+                temp_min_c: daily.temperature_2m_min?.[i],
+                precipitation_sum_mm: daily.precipitation_sum?.[i],
+                rain_probability_max_pct: daily.precipitation_probability_max?.[i],
+                wind_max_kmh: daily.wind_speed_10m_max?.[i]
+            });
+        }
+    }
+
+    return {
+        location: { name: resolvedLocationName, lat, lon },
+        current: {
+            temperature: cur.temperature_2m,
+            temperature_c: cur.temperature_2m,
+            feels_like_c: cur.apparent_temperature,
+            dew_point: cur.dew_point_2m,
+            dew_point_c: cur.dew_point_2m,
+            relative_humidity: cur.relative_humidity_2m,
+            wind_speed: cur.wind_speed_10m,
+            wind_speed_kmh: cur.wind_speed_10m,
+            wind_gusts: cur.wind_gusts_10m,
+            wind_gusts_kmh: cur.wind_gusts_10m,
+            precipitation: cur.precipitation,
+            precipitation_mm: cur.precipitation,
+            cloud_cover_pct: cur.cloud_cover,
+            weather_description: getWmoDescription(cur.weather_code ?? 0),
+            condition_nl: getWmoDescription(cur.weather_code ?? 0),
+            is_day: cur.is_day === 1
+        },
+        hourly_next_24h: hourlyNext24h,
+        forecast_today: forecastDays[0] || null,
+        forecast_3_days: forecastDays
+    };
 }
 
 // -------------------------------------------------------------
-// 3. Home Assistant Device Control Tool
+// 3. Home Assistant Device Control Tool (instant WS if connected, else REST)
 // -------------------------------------------------------------
 async function executeDeviceControl(
     args: any,
     options: { haWebSocket?: any; haUrl?: string; haToken?: string }
 ): Promise<{ success: boolean; message: string; action: Action }> {
-    const { domain, service, entity_id, parameters = {} } = args;
+    let domain = (args.domain || '').trim().toLowerCase();
+    let service = (args.service || '').trim().toLowerCase();
+    const entity_id = (args.entity_id || '').trim();
+    const parameters = args.parameters || {};
 
-    const action: Action = {
-        type: domain,
+    // Handle LLM passing "light.turn_on" as service
+    if (service.includes('.')) {
+        const parts = service.split('.');
+        if (!domain) domain = parts[0];
+        service = parts[1];
+    }
+    if (!domain && entity_id.includes('.')) {
+        domain = entity_id.split('.')[0];
+    }
+
+    const serviceData = {
         entity_id,
-        service: `${domain}.${service}`,
-        data: parameters
+        ...parameters
     };
 
-    logger.info(`[ClientOrchestrator] 🔌 Executing HA service: ${domain}.${service} on ${entity_id}`, parameters);
+    const actionRecord: Action = {
+        type: domain || 'homeassistant',
+        entity_id,
+        service: `${domain}.${service}`,
+        data: parameters,
+        executedLocally: true
+    };
 
-    // Try WebSocket first (fastest, zero-latency)
-    if (options.haWebSocket && typeof options.haWebSocket.sendMessage === 'function') {
+    // Only use WebSocket when ALREADY connected & authenticated (never block 10s on offline WS!)
+    if (options.haWebSocket && typeof options.haWebSocket.isConnected === 'function' && options.haWebSocket.isConnected()) {
         try {
             await options.haWebSocket.sendMessage({
                 type: 'call_service',
                 domain,
                 service,
-                service_data: parameters,
-                target: { entity_id }
-            });
-            logger.info(`[ClientOrchestrator] ✅ HA service called via WebSocket: ${domain}.${service}`);
+                service_data: serviceData
+            }, 6000);
             return {
                 success: true,
-                message: `Actie succesvol uitgevoerd op ${entity_id} (${domain}.${service}).`,
-                action: { ...action, result: 'success', executedLocally: true } as any
+                message: `Service ${domain}.${service} uitgevoerd op ${entity_id} via WebSocket.`,
+                action: { ...actionRecord, result: 'success' }
             };
         } catch (wsErr: any) {
-            logger.warn(`[ClientOrchestrator] WebSocket service call failed, trying REST fallback:`, wsErr);
+            logger.warn('[ClientOrchestrator] WS device control failed, falling back to REST:', wsErr?.message);
         }
     }
 
-    // Fallback to REST API
     if (options.haUrl && options.haToken) {
         try {
-            await callHAService(domain, service, { entity_id, ...parameters }, options.haUrl, options.haToken);
-            logger.info(`[ClientOrchestrator] ✅ HA service called via REST API: ${domain}.${service}`);
+            await callHAService(domain, service, serviceData, options.haUrl, options.haToken);
             return {
                 success: true,
-                message: `Actie succesvol uitgevoerd op ${entity_id} via REST.`,
-                action: { ...action, result: 'success', executedLocally: true } as any
+                message: `Service ${domain}.${service} uitgevoerd op ${entity_id} via REST.`,
+                action: { ...actionRecord, result: 'success' }
             };
         } catch (restErr: any) {
-            logger.error(`[ClientOrchestrator] ❌ HA REST service call failed:`, restErr);
             return {
                 success: false,
-                message: `Fout bij uitvoeren van ${domain}.${service} op ${entity_id}: ${restErr.message}`,
-                action
+                message: `Fout bij uitvoeren van ${domain}.${service} op ${entity_id}: ${restErr?.message || restErr}`,
+                action: { ...actionRecord, result: 'error', error_message: restErr?.message }
             };
         }
     }
 
     return {
         success: false,
-        message: `Geen actieve verbinding met Home Assistant beschikbaar om ${entity_id} te bedienen.`,
-        action
+        message: 'Geen actieve Home Assistant verbinding beschikbaar.',
+        action: { ...actionRecord, result: 'error', error_message: 'No HA connection' }
     };
 }
 
 // -------------------------------------------------------------
-// 4. Core Memory Management Tool (localStorage + Supabase)
+// 4. Core Memory Tool (localStorage + real Supabase `user_memories` sync)
 // -------------------------------------------------------------
-const MEMORY_STORAGE_KEY = 'butler.core_memories';
+const CORE_MEMORY_KEY = 'butler_core_memories_v2';
 
-interface MemoryItem {
-    id: string;
-    content: string;
-    created_at: string;
-}
-
-function getStoredMemories(): MemoryItem[] {
+function getStoredMemories(): Array<{ id: string; content: string; created_at: string }> {
     try {
-        const raw = localStorage.getItem(MEMORY_STORAGE_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw);
+        const raw = localStorage.getItem(CORE_MEMORY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
     } catch {
         return [];
     }
 }
 
-function saveMemoryItem(content: string): MemoryItem {
+async function saveMemoryItem(content: string, connectionId?: string) {
     const items = getStoredMemories();
-    const newItem: MemoryItem = {
-        id: `mem_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        content: content.trim(),
-        created_at: new Date().toISOString()
-    };
-    items.unshift(newItem);
-    localStorage.setItem(MEMORY_STORAGE_KEY, JSON.stringify(items.slice(0, 50)));
-
-    // Try async Supabase sync if user is authenticated
+    const newItem = { id: `mem_${Date.now()}`, content, created_at: new Date().toISOString() };
+    items.push(newItem);
     try {
-        supabase.auth.getUser().then(({ data }) => {
-            if (data?.user) {
-                supabase.from('memories').insert({
-                    user_id: data.user.id,
-                    content: newItem.content,
-                    type: 'core_fact'
-                }).then(() => logger.info('[ClientOrchestrator] Memory synced to Supabase'));
-            }
-        });
+        localStorage.setItem(CORE_MEMORY_KEY, JSON.stringify(items.slice(-50)));
     } catch { }
 
+    // Sync to real `user_memories` table (columns: connection_id, category, content)
+    if (connectionId) {
+        try {
+            const { error } = await supabase.from('user_memories').insert({
+                connection_id: connectionId,
+                category: 'core_preference',
+                content
+            });
+            if (error) {
+                logger.warn('[ClientOrchestrator] Supabase user_memories sync error:', error.message);
+            }
+        } catch { }
+    }
     return newItem;
 }
 
-function deleteMemoryItem(idOrSnippet: string): boolean {
+async function deleteMemoryItem(idOrKeyword: string, connectionId?: string): Promise<boolean> {
     const items = getStoredMemories();
-    const filtered = items.filter(m => m.id !== idOrSnippet && !m.content.toLowerCase().includes(idOrSnippet.toLowerCase()));
-    const changed = filtered.length !== items.length;
-    if (changed) {
-        localStorage.setItem(MEMORY_STORAGE_KEY, JSON.stringify(filtered));
+    const lower = (idOrKeyword || '').toLowerCase().trim();
+    if (!lower) return false;
+    const filtered = items.filter(m => m.id !== idOrKeyword && !m.content.toLowerCase().includes(lower));
+    try {
+        localStorage.setItem(CORE_MEMORY_KEY, JSON.stringify(filtered));
+    } catch { }
+
+    if (connectionId) {
+        try {
+            const safePattern = lower.replace(/[%_]/g, '');
+            if (safePattern.length >= 2) {
+                await supabase
+                    .from('user_memories')
+                    .delete()
+                    .eq('connection_id', connectionId)
+                    .ilike('content', `%${safePattern}%`);
+            }
+        } catch { }
     }
-    return changed;
+
+    return filtered.length < items.length;
 }
 
-function executeCoreMemoryTool(args: any): any {
-    const action = args.action;
-    if (action === 'get') {
-        const items = getStoredMemories();
-        return { memories: items.map(m => m.content), count: items.length };
+async function executeCoreMemoryTool(args: any, connectionId?: string): Promise<any> {
+    if (args.action === 'get') {
+        const localMems = getStoredMemories();
+        if (connectionId) {
+            try {
+                const { data } = await supabase
+                    .from('user_memories')
+                    .select('id, content, created_at')
+                    .eq('connection_id', connectionId)
+                    .order('created_at', { ascending: false })
+                    .limit(30);
+                if (Array.isArray(data) && data.length > 0) {
+                    const seen = new Set(localMems.map(m => m.content));
+                    const merged = [...localMems, ...data.filter(d => !seen.has(d.content))];
+                    return { memories: merged };
+                }
+            } catch { }
+        }
+        return { memories: localMems };
     }
-    if (action === 'save') {
-        if (!args.content) return { error: 'Geen content opgegeven om op te slaan.' };
-        const saved = saveMemoryItem(args.content);
-        return { success: true, message: `Opgeslagen in permanent geheugen: "${saved.content}"`, id: saved.id };
+    if (args.action === 'save' && args.content) {
+        const saved = await saveMemoryItem(args.content, connectionId);
+        return { status: 'saved', memory: saved };
     }
-    if (action === 'delete') {
-        if (!args.memory_id) return { error: 'Geen memory_id of snippet opgegeven.' };
-        const success = deleteMemoryItem(args.memory_id);
-        return { success, message: success ? 'Herinnering verwijderd.' : 'Herinnering niet gevonden.' };
+    if (args.action === 'delete' && args.memory_id) {
+        const deleted = await deleteMemoryItem(args.memory_id, connectionId);
+        return { status: deleted ? 'deleted' : 'not_found' };
     }
-    return { error: `Onbekende actie: ${action}` };
+    return { error: 'Ongeldige geheugenactie.' };
 }
 
 // -------------------------------------------------------------
-// 5. Navigation / ETA Tool Implementation
+// 5. Navigation & ETA Tool (mode-aware speeds + honest geocode failure)
 // -------------------------------------------------------------
-async function executeNavigationTool(args: any, userLoc?: { lat: number; lon: number } | null): Promise<any> {
-    const dest = args.destination;
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function executeNavigationTool(args: any, userLocation?: { lat: number; lon: number } | null): Promise<any> {
+    const dest = (args.destination || '').trim();
     if (!dest) return { error: 'Geen bestemming opgegeven.' };
 
-    const origin = userLoc || { lat: 50.8503, lon: 4.3517 }; // default
+    const mode: 'driving' | 'walking' | 'bicycling' =
+        ['driving', 'walking', 'bicycling'].includes(args.mode) ? args.mode : 'driving';
+
+    const originLat = userLocation?.lat ?? 50.8503;
+    const originLon = userLocation?.lon ?? 4.3517;
 
     try {
-        const geoRes = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`,
-            { headers: { 'User-Agent': 'Butler-HomeAssistant-App/1.0' } }
-        );
-        const geoData = await geoRes.json();
-        if (!geoData || geoData.length === 0) {
+        const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`;
+        const geoRes = await fetchWithTimeout(geoUrl, {}, 8000);
+        if (geoRes.ok) {
+            const geoData = await geoRes.json();
+            if (Array.isArray(geoData) && geoData.length > 0) {
+                const destLat = parseFloat(geoData[0].lat);
+                const destLon = parseFloat(geoData[0].lon);
+                const straightKm = haversineKm(originLat, originLon, destLat, destLon);
+                // Apply realistic road-factor (1.28x) and mode-specific average speeds
+                const roadKm = straightKm * 1.28;
+                const speedKmh = mode === 'walking' ? 5 : mode === 'bicycling' ? 16 : 55;
+                const estMinutes = Math.max(1, Math.round((roadKm / speedKmh) * 60));
+
+                return {
+                    found: true,
+                    destination: geoData[0].display_name,
+                    mode,
+                    used_fallback_origin: !userLocation,
+                    estimated_distance_km: Number(roadKm.toFixed(1)),
+                    estimated_duration_minutes: estMinutes,
+                    maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
+                };
+            }
             return {
-                destination: dest,
-                note: `Bestemming "${dest}" gevonden op de kaart. Directe route kan worden geopend via Google Maps.`,
-                maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`
+                found: false,
+                error: `Bestemming "${dest}" niet gevonden via OpenStreetMap geocoding.`,
+                maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
             };
         }
-
-        const destLat = parseFloat(geoData[0].lat);
-        const destLon = parseFloat(geoData[0].lon);
-
-        // Calculate Haversine distance
-        const R = 6371; // km
-        const dLat = (destLat - origin.lat) * Math.PI / 180;
-        const dLon = (destLon - origin.lon) * Math.PI / 180;
-        const a =
-            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(origin.lat * Math.PI / 180) * Math.cos(destLat * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        const distanceKm = Math.round(R * c * 10) / 10;
-
-        // Estimate driving duration (~50 km/h average in EU mixed traffic)
-        const estDriveMins = Math.max(1, Math.round((distanceKm / 55) * 60));
-
-        return {
-            destination: geoData[0].display_name || dest,
-            distance_km: distanceKm,
-            estimated_duration_minutes: estDriveMins,
-            estimated_eta: new Date(Date.now() + estDriveMins * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`
-        };
     } catch (e: any) {
-        return {
-            destination: dest,
-            maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`,
-            error: e.message
-        };
+        logger.warn('[ClientOrchestrator] Navigation geocode error:', e?.message);
     }
+
+    return {
+        found: false,
+        error: `Kon geen route berekenen naar "${dest}".`,
+        maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
+    };
 }
 
 // -------------------------------------------------------------
-// 6. Energy & Spot Prices Tool Implementation
+// 6. Energy Prices Tool (HA sensors + local timezone + EnergyZero API)
 // -------------------------------------------------------------
+function getLocalDateBoundsIso(daysOffset = 0): { fromIso: string; tillIso: string } {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() + daysOffset);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    return { fromIso: start.toISOString(), tillIso: end.toISOString() };
+}
+
+async function fetchEnergyZeroPrices(daysOffset: number, isGas: boolean): Promise<Array<{ hour: string; price: number }>> {
+    try {
+        const { fromIso, tillIso } = getLocalDateBoundsIso(daysOffset);
+        // EnergyZero usageType: 1 = electricity, 3 = gas
+        const usageType = isGas ? 3 : 1;
+        const url = `https://api.energyzero.nl/v1/energyprices?fromDate=${encodeURIComponent(fromIso)}&tillDate=${encodeURIComponent(tillIso)}&interval=4&usageType=${usageType}&inclBtw=true`;
+        const res = await fetchWithTimeout(url, {}, 8000);
+        if (!res.ok) return [];
+        const data = await res.json();
+        if (!Array.isArray(data?.Prices)) return [];
+        return data.Prices
+            .map((p: any) => {
+                const num = Number(p?.price);
+                const d = new Date(p?.readingDate);
+                if (!Number.isFinite(num) || isNaN(d.getTime())) return null;
+                return {
+                    hour: `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`,
+                    price: Number(num.toFixed(4))
+                };
+            })
+            .filter(Boolean) as Array<{ hour: string; price: number }>;
+    } catch {
+        return [];
+    }
+}
+
 async function executeEnergyPricesTool(
     args: any,
     options: { devices?: HADevice[]; haUrl?: string; haToken?: string }
 ): Promise<any> {
     let allStates: any[] = options.devices || [];
 
-    // If device list is empty, fetch directly via HA REST API if credentials exist
     if (allStates.length === 0 && options.haUrl && options.haToken) {
         try {
-            const res = await fetch(`${options.haUrl.replace(/\/+$/, '')}/api/states`, {
-                headers: {
-                    'Authorization': `Bearer ${options.haToken}`,
-                    'Content-Type': 'application/json'
-                }
+            const res = await fetchWithTimeout(buildHAUrl('/api/states', options.haUrl), {
+                headers: { Authorization: `Bearer ${sanitizeHAToken(options.haToken)}`, 'Content-Type': 'application/json' }
             });
             if (res.ok) {
                 const fetched = await res.json();
                 if (Array.isArray(fetched)) allStates = fetched;
             }
-        } catch (e: any) {
-            logger.warn('[ClientOrchestrator] HA REST states fetch error for energy prices:', e.message);
-        }
+        } catch { }
     }
 
     const isGasQuery = args.energy_type === 'gas' || /gas|gasprijs|kuub|m³|m3/i.test(args.device_or_sensor || '');
-
-    // 1. Check for active Home Assistant spot price sensors (EnergyZero, Nordpool, ENTSO-E, EPEX Spot, etc.)
     let priceSensor: any = null;
     let detectedProvider = 'Home Assistant';
 
@@ -803,78 +738,70 @@ async function executeEnergyPricesTool(
             const fn = (s.attributes?.friendly_name || '').toLowerCase();
             const uom = (s.attributes?.unit_of_measurement || '').toLowerCase();
 
-            // Strict separation: never mix gas and electricity!
             if (!isGasQuery) {
-                if (id.includes('gas') || fn.includes('gas') || uom.includes('m³') || uom.includes('m3')) {
-                    return false;
-                }
+                if (id.includes('gas') || fn.includes('gas') || uom.includes('m³') || uom.includes('m3')) return false;
             } else {
-                if (!id.includes('gas') && !fn.includes('gas') && !uom.includes('m³') && !uom.includes('m3')) {
-                    return false;
-                }
+                if (!id.includes('gas') && !fn.includes('gas') && !uom.includes('m³') && !uom.includes('m3')) return false;
             }
 
-            return (
-                id.includes('nordpool') ||
-                id.includes('entsoe') ||
-                id.includes('epex') ||
-                id.includes('tibber') ||
-                id.includes('frank_energie') ||
-                id.includes('energyzero') ||
-                id.includes('amber') ||
-                id.includes('stroomprijs') ||
-                id.includes('spotprijs') ||
-                id.includes('electricity_price') ||
-                id.includes('gasprijs') ||
-                fn.includes('stroomprijs') ||
-                fn.includes('gasprijs') ||
-                fn.includes('nordpool') ||
-                fn.includes('spotprijs') ||
-                uom.includes('/kwh') ||
-                uom.includes('/mwh') ||
-                uom.includes('/m³') ||
-                uom.includes('/m3') ||
-                s.attributes?.today ||
-                s.attributes?.raw_today ||
-                s.attributes?.prices
-            );
+            // Require actual energy price indicator (do NOT match arbitrary sensors just because they have attributes.today!)
+            const hasPriceKeyword =
+                id.includes('nordpool') || id.includes('entsoe') || id.includes('epex') ||
+                id.includes('tibber') || id.includes('frank_energie') || id.includes('energyzero') ||
+                id.includes('amber') || id.includes('stroomprijs') || id.includes('spotprijs') ||
+                id.includes('electricity_price') || id.includes('gasprijs') ||
+                fn.includes('stroomprijs') || fn.includes('gasprijs') || fn.includes('spotprijs') || fn.includes('nordpool');
+
+            const hasPriceUnit =
+                (uom.includes('€') || uom.includes('eur') || uom.includes('ct')) &&
+                (uom.includes('kwh') || uom.includes('mwh') || uom.includes('m³') || uom.includes('m3'));
+
+            return hasPriceKeyword || hasPriceUnit;
         });
 
         if (!isGasQuery) {
-            priceSensor = candidates.find(s => s.entity_id.includes('energyzero') && (s.entity_id.includes('energy') || s.entity_id.includes('current_hour_price'))) ||
+            priceSensor =
+                candidates.find(s => s.entity_id.includes('energyzero') && (s.entity_id.includes('energy') || s.entity_id.includes('current_hour_price'))) ||
                 candidates.find(s => s.entity_id.includes('nordpool')) ||
                 candidates.find(s => s.entity_id.includes('entsoe')) ||
                 candidates.find(s => s.entity_id.includes('epex')) ||
                 candidates.find(s => s.entity_id.includes('tibber')) ||
                 candidates.find(s => s.entity_id.includes('frank_energie')) ||
-                candidates.find(s => s.entity_id.includes('energyzero')) ||
                 candidates.find(s => s.entity_id.includes('price') || s.entity_id.includes('prijs')) ||
                 candidates[0];
         } else {
-            priceSensor = candidates.find(s => s.entity_id.includes('energyzero') && s.entity_id.includes('gas')) ||
+            priceSensor =
+                candidates.find(s => s.entity_id.includes('energyzero') && s.entity_id.includes('gas')) ||
                 candidates.find(s => s.entity_id.includes('gas')) ||
                 candidates[0];
         }
 
         if (priceSensor) {
-            if (priceSensor.entity_id.includes('nordpool')) detectedProvider = 'Nordpool';
-            else if (priceSensor.entity_id.includes('entsoe')) detectedProvider = 'ENTSO-E';
-            else if (priceSensor.entity_id.includes('epex')) detectedProvider = 'EPEX Spot';
-            else if (priceSensor.entity_id.includes('tibber')) detectedProvider = 'Tibber';
-            else if (priceSensor.entity_id.includes('frank_energie')) detectedProvider = 'Frank Energie';
-            else if (priceSensor.entity_id.includes('energyzero')) detectedProvider = 'EnergyZero';
+            const eid = priceSensor.entity_id.toLowerCase();
+            if (eid.includes('nordpool')) detectedProvider = 'Nordpool';
+            else if (eid.includes('entsoe')) detectedProvider = 'ENTSO-E';
+            else if (eid.includes('epex')) detectedProvider = 'EPEX Spot';
+            else if (eid.includes('tibber')) detectedProvider = 'Tibber';
+            else if (eid.includes('frank_energie')) detectedProvider = 'Frank Energie';
+            else if (eid.includes('energyzero')) detectedProvider = 'EnergyZero';
         }
     }
 
+    const parseNumericPrice = (raw: any): number => {
+        const val = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(val) ? val : NaN;
+    };
+
+    const currentHour = new Date().getHours();
+
     if (priceSensor) {
         const unit = priceSensor.attributes?.unit_of_measurement || (isGasQuery ? '€/m³' : '€/kWh');
-        const currentPrice = parseFloat(priceSensor.state);
+        const currentPrice = parseNumericPrice(priceSensor.state);
         let hourly: Array<{ hour: string; price: number }> = [];
 
-        // Parse attributes.prices (array or object)
         if (Array.isArray(priceSensor.attributes?.prices)) {
             priceSensor.attributes.prices.forEach((item: any, idx: number) => {
-                const val = typeof item === 'number' ? item : (item?.price ?? item?.value ?? parseFloat(item?.price));
+                const val = parseNumericPrice(typeof item === 'object' ? (item?.price ?? item?.value) : item);
                 const timeStr = item?.readingDate || item?.time || item?.start || item?.timestamp || item?.from;
                 let hourLabel = '';
                 if (timeStr) {
@@ -884,97 +811,61 @@ async function executeEnergyPricesTool(
                     }
                 }
                 if (!hourLabel) hourLabel = `${idx.toString().padStart(2, '0')}:00`;
-                if (!isNaN(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
+                if (Number.isFinite(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
             });
         } else if (priceSensor.attributes?.prices && typeof priceSensor.attributes.prices === 'object') {
             Object.entries(priceSensor.attributes.prices).forEach(([ts, p]: [string, any]) => {
-                const val = typeof p === 'number' ? p : (p?.price ?? p?.value ?? parseFloat(p));
+                const val = parseNumericPrice(typeof p === 'object' ? (p?.price ?? p?.value) : p);
                 const d = new Date(ts);
                 const hourLabel = !isNaN(d.getTime())
                     ? `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
                     : ts;
-                if (!isNaN(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
+                if (Number.isFinite(val)) hourly.push({ hour: hourLabel, price: Number(val.toFixed(4)) });
             });
         } else if (Array.isArray(priceSensor.attributes?.today)) {
             priceSensor.attributes.today.forEach((p: any, idx: number) => {
-                const val = typeof p === 'number' ? p : parseFloat(p);
-                if (!isNaN(val)) hourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+                const val = parseNumericPrice(p);
+                if (Number.isFinite(val)) hourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
             });
         } else if (Array.isArray(priceSensor.attributes?.raw_today)) {
             priceSensor.attributes.raw_today.forEach((item: any, idx: number) => {
-                const hour = item.start ? new Date(item.start).getHours() : idx;
-                const val = typeof item.value === 'number' ? item.value : parseFloat(item.value);
-                if (!isNaN(val)) hourly.push({ hour: `${hour.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+                const d = item?.start ? new Date(item.start) : null;
+                const label = d && !isNaN(d.getTime())
+                    ? `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                    : `${idx.toString().padStart(2, '0')}:00`;
+                const val = parseNumericPrice(item?.value ?? item?.price);
+                if (Number.isFinite(val)) hourly.push({ hour: label, price: Number(val.toFixed(4)) });
             });
         }
 
         let tomorrowHourly: Array<{ hour: string; price: number }> = [];
         if (Array.isArray(priceSensor.attributes?.tomorrow)) {
             priceSensor.attributes.tomorrow.forEach((p: any, idx: number) => {
-                const val = typeof p === 'number' ? p : parseFloat(p);
-                if (!isNaN(val)) tomorrowHourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
+                const val = parseNumericPrice(p);
+                if (Number.isFinite(val)) tomorrowHourly.push({ hour: `${idx.toString().padStart(2, '0')}:00`, price: Number(val.toFixed(4)) });
             });
         }
 
-        // If hourly list from sensor is empty and this is electricity, enrich via EnergyZero public API!
-        if (hourly.length === 0 && !isGasQuery) {
-            try {
-                const today = new Date().toISOString().slice(0, 10);
-                const ezRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${today}T00:00:00.000Z&tillDate=${today}T23:59:59.999Z&interval=4`);
-                if (ezRes.ok) {
-                    const ezData = await ezRes.json();
-                    if (Array.isArray(ezData.Prices) && ezData.Prices.length > 0) {
-                        hourly = ezData.Prices.map((p: any) => ({
-                            hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
-                            price: Number(p.price.toFixed(4))
-                        }));
-                    }
-                }
-            } catch (e: any) {
-                logger.warn('[ClientOrchestrator] EnergyZero public feed fallback error:', e.message);
-            }
+        if (hourly.length === 0) {
+            hourly = await fetchEnergyZeroPrices(0, isGasQuery);
         }
-
-        // If tomorrowHourly is empty and after 14:00 UTC, attempt fetch
         if (tomorrowHourly.length === 0 && !isGasQuery) {
-            try {
-                const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-                const tomRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${tomorrow}T00:00:00.000Z&tillDate=${tomorrow}T23:59:59.999Z&interval=4`);
-                if (tomRes.ok) {
-                    const tomData = await tomRes.json();
-                    if (Array.isArray(tomData.Prices) && tomData.Prices.length > 0) {
-                        tomorrowHourly = tomData.Prices.map((p: any) => ({
-                            hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
-                            price: Number(p.price.toFixed(4))
-                        }));
-                    }
-                }
-            } catch { }
+            tomorrowHourly = await fetchEnergyZeroPrices(1, false);
         }
 
-        const currentHour = new Date().getHours();
-        const effectiveCurrentPrice = !isNaN(currentPrice)
+        const currentSlot = hourly.find(h => parseInt(h.hour.split(':')[0], 10) === currentHour);
+        const effectiveCurrentPrice = Number.isFinite(currentPrice)
             ? currentPrice
-            : (hourly[currentHour]?.price ?? priceSensor.attributes?.current_price ?? 0);
+            : (currentSlot?.price ?? parseNumericPrice(priceSensor.attributes?.current_price) ?? 0);
 
-        let average = priceSensor.attributes?.average;
-        if (typeof average !== 'number' && hourly.length > 0) {
-            average = Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4));
-        }
+        const average = typeof priceSensor.attributes?.average === 'number'
+            ? priceSensor.attributes.average
+            : (hourly.length > 0 ? Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4)) : undefined);
 
         const sorted = [...hourly].sort((a, b) => a.price - b.price);
-
-        // Calculate upcoming prices for the rest of today + tomorrow (next 10-12 hours)
-        const upcomingPrices: Array<{ hour: string; price: number }> = [];
-        hourly.forEach(h => {
-            const hNum = parseInt(h.hour.split(':')[0], 10);
-            if (hNum >= currentHour) {
-                upcomingPrices.push(h);
-            }
-        });
+        const upcomingPrices = hourly.filter(h => parseInt(h.hour.split(':')[0], 10) >= currentHour);
         if (upcomingPrices.length < 12 && tomorrowHourly.length > 0) {
-            const needed = 12 - upcomingPrices.length;
-            tomorrowHourly.slice(0, needed).forEach(h => {
+            tomorrowHourly.slice(0, 12 - upcomingPrices.length).forEach(h => {
                 upcomingPrices.push({ hour: `Morgen ${h.hour}`, price: h.price });
             });
         }
@@ -986,7 +877,7 @@ async function executeEnergyPricesTool(
             friendly_name: priceSensor.attributes?.friendly_name || priceSensor.entity_id,
             unit,
             current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
-            current_price: Number(effectiveCurrentPrice.toFixed(4)),
+            current_price: Number((Number.isFinite(effectiveCurrentPrice) ? effectiveCurrentPrice : 0).toFixed(4)),
             average_price_today: average,
             min_price_today: priceSensor.attributes?.min ?? sorted[0]?.price,
             max_price_today: priceSensor.attributes?.max ?? sorted[sorted.length - 1]?.price,
@@ -996,93 +887,53 @@ async function executeEnergyPricesTool(
             hourly_prices_today: hourly,
             upcoming_prices_next_hours: upcomingPrices,
             tomorrow_prices_available: tomorrowHourly.length > 0,
-            hourly_prices_tomorrow: tomorrowHourly,
-            market_note: isGasQuery
-                ? 'Gasprijzen zijn dagtarieven en veranderen 1x per 24 uur (om 06:00 uur).'
-                : 'Day-ahead elektriciteitsprijzen op de Europese beurs (EPEX Spot / EnergyZero) worden per uur vastgesteld (ieder kwartier binnen dat uur geldt hetzelfde uurtarief).'
+            hourly_prices_tomorrow: tomorrowHourly
         };
     }
 
-    // 2. Fallback: Live Day-Ahead EPEX Spot Market Feed (EnergyZero public API)
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const res = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${today}T00:00:00.000Z&tillDate=${today}T23:59:59.999Z&interval=4`);
-        if (res.ok) {
-            const data = await res.json();
-            const prices: any[] = data.Prices || [];
-            if (prices.length > 0) {
-                const currentHour = new Date().getHours();
-                const currentItem = prices.find(p => new Date(p.readingDate).getHours() === currentHour) || prices[0];
-                const hourly = prices.map(p => ({
-                    hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
-                    price: Number(p.price.toFixed(4))
-                }));
+    // Fallback: Live EnergyZero Public Spot Feed (honors gas vs electricity via usageType!)
+    const [hourly, tomorrowPrices] = await Promise.all([
+        fetchEnergyZeroPrices(0, isGasQuery),
+        isGasQuery ? Promise.resolve([]) : fetchEnergyZeroPrices(1, false)
+    ]);
 
-                const sorted = [...hourly].sort((a, b) => a.price - b.price);
-                const avg = Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4));
-
-                let tomorrowPrices: any[] = [];
-                try {
-                    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-                    const tomRes = await fetch(`https://api.energyzero.nl/v1/energyprices?fromDate=${tomorrow}T00:00:00.000Z&tillDate=${tomorrow}T23:59:59.999Z&interval=4`);
-                    if (tomRes.ok) {
-                        const tomData = await tomRes.json();
-                        if (Array.isArray(tomData.Prices) && tomData.Prices.length > 0) {
-                            tomorrowPrices = tomData.Prices.map((p: any) => ({
-                                hour: `${new Date(p.readingDate).getHours().toString().padStart(2, '0')}:00`,
-                                price: Number(p.price.toFixed(4))
-                            }));
-                        }
-                    }
-                } catch { }
-
-                const upcomingPrices: Array<{ hour: string; price: number }> = [];
-                hourly.forEach(h => {
-                    const hNum = parseInt(h.hour.split(':')[0], 10);
-                    if (hNum >= currentHour) {
-                        upcomingPrices.push(h);
-                    }
-                });
-                if (upcomingPrices.length < 12 && tomorrowPrices.length > 0) {
-                    const needed = 12 - upcomingPrices.length;
-                    tomorrowPrices.slice(0, needed).forEach(h => {
-                        upcomingPrices.push({ hour: `Morgen ${h.hour}`, price: h.price });
-                    });
-                }
-
-                return {
-                    source: 'Live Day-Ahead Spotmarkt (EPEX Spot)',
-                    note: 'Live spotprijzen opgehaald via de openbare EPEX Spotmarkt feed (BE/NL). Koppel eventueel Nordpool of ENTSO-E in Home Assistant voor leveranciers-specifieke toeslagen.',
-                    energy_type: 'electricity',
-                    unit: '€/kWh',
-                    current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
-                    current_price: Number(currentItem?.price.toFixed(4)),
-                    average_price_today: avg,
-                    min_price_today: sorted[0]?.price,
-                    max_price_today: sorted[sorted.length - 1]?.price,
-                    cheapest_hours_today: sorted.slice(0, 3),
-                    most_expensive_hours_today: sorted.slice(-3).reverse(),
-                    is_cheap_now: currentItem?.price <= avg,
-                    hourly_prices_today: hourly,
-                    upcoming_prices_next_hours: upcomingPrices,
-                    tomorrow_prices_available: tomorrowPrices.length > 0,
-                    hourly_prices_tomorrow: tomorrowPrices,
-                    market_note: 'Day-ahead elektriciteitsprijzen op de Europese beurs (EPEX Spot / EnergyZero) worden per uur vastgesteld (ieder kwartier binnen dat uur geldt hetzelfde tarief).'
-                };
-            }
+    if (hourly.length > 0) {
+        const currentSlot = hourly.find(h => parseInt(h.hour.split(':')[0], 10) === currentHour) || hourly[0];
+        const avg = Number((hourly.reduce((s, h) => s + h.price, 0) / hourly.length).toFixed(4));
+        const sorted = [...hourly].sort((a, b) => a.price - b.price);
+        const upcomingPrices = hourly.filter(h => parseInt(h.hour.split(':')[0], 10) >= currentHour);
+        if (upcomingPrices.length < 12 && tomorrowPrices.length > 0) {
+            tomorrowPrices.slice(0, 12 - upcomingPrices.length).forEach(h => {
+                upcomingPrices.push({ hour: `Morgen ${h.hour}`, price: h.price });
+            });
         }
-    } catch (e: any) {
-        logger.error('[ClientOrchestrator] Spot market fallback error:', e);
+
+        return {
+            source: 'Live Day-Ahead Spotmarkt (EnergyZero / EPEX Spot)',
+            energy_type: isGasQuery ? 'gas' : 'electricity',
+            unit: isGasQuery ? '€/m³' : '€/kWh',
+            current_hour: `${currentHour.toString().padStart(2, '0')}:00`,
+            current_price: currentSlot.price,
+            average_price_today: avg,
+            min_price_today: sorted[0]?.price,
+            max_price_today: sorted[sorted.length - 1]?.price,
+            cheapest_hours_today: sorted.slice(0, 3),
+            most_expensive_hours_today: sorted.slice(-3).reverse(),
+            is_cheap_now: currentSlot.price <= avg,
+            hourly_prices_today: hourly,
+            upcoming_prices_next_hours: upcomingPrices,
+            tomorrow_prices_available: tomorrowPrices.length > 0,
+            hourly_prices_tomorrow: tomorrowPrices
+        };
     }
 
     return {
-        error: 'Kon actuele stroomprijzen niet ophalen uit Home Assistant of live spotmarkt.',
-        hint: 'Installeer of activeer de EnergyZero, Nordpool of ENTSO-E integratie in Home Assistant.'
+        error: `Kon actuele ${isGasQuery ? 'gas' : 'stroom'}prijzen niet ophalen uit Home Assistant of de live spotmarkt.`
     };
 }
 
 // -------------------------------------------------------------
-// 7. Get Entity State & Attributes Tool Implementation
+// 7. Entity Lookup & Search Tools
 // -------------------------------------------------------------
 async function executeGetEntityStateTool(
     args: any,
@@ -1093,11 +944,8 @@ async function executeGetEntityStateTool(
 
     if (allStates.length === 0 && options.haUrl && options.haToken) {
         try {
-            const res = await fetch(`${options.haUrl.replace(/\/+$/, '')}/api/states`, {
-                headers: {
-                    'Authorization': `Bearer ${options.haToken}`,
-                    'Content-Type': 'application/json'
-                }
+            const res = await fetchWithTimeout(buildHAUrl('/api/states', options.haUrl), {
+                headers: { Authorization: `Bearer ${sanitizeHAToken(options.haToken)}`, 'Content-Type': 'application/json' }
             });
             if (res.ok) {
                 const fetched = await res.json();
@@ -1107,7 +955,7 @@ async function executeGetEntityStateTool(
     }
 
     if (allStates.length === 0) {
-        return { error: 'Geen apparaten of sensoren gevonden in Home Assistant context.' };
+        return { error: 'Geen apparaten of sensoren gevonden in Home Assistant.' };
     }
 
     const exact = allStates.find(s => s.entity_id.toLowerCase() === query);
@@ -1122,10 +970,12 @@ async function executeGetEntityStateTool(
         };
     }
 
-    const matches = allStates.filter(s =>
-        s.entity_id.toLowerCase().includes(query) ||
-        (s.attributes?.friendly_name && s.attributes.friendly_name.toLowerCase().includes(query))
-    ).slice(0, 8);
+    const matches = allStates
+        .filter(s =>
+            s.entity_id.toLowerCase().includes(query) ||
+            (s.attributes?.friendly_name && s.attributes.friendly_name.toLowerCase().includes(query))
+        )
+        .slice(0, 10);
 
     if (matches.length > 0) {
         return {
@@ -1140,413 +990,364 @@ async function executeGetEntityStateTool(
         };
     }
 
-    return { message: `Geen entiteit gevonden in Home Assistant die overeenkomt met "${query}".` };
+    return { message: `Geen entiteit gevonden die overeenkomt met "${query}".` };
 }
 
-// -------------------------------------------------------------
-// 7. Extended Tool Execution Handlers (History, Logbook, Camera, Todo, Calendar, Automation)
-// -------------------------------------------------------------
-async function executeHistoryTool(
-    args: any,
-    options: { haUrl?: string; haToken?: string }
-): Promise<any> {
-    const { entity_id, hours_ago = 24 } = args;
-    if (!options.haUrl || !options.haToken) {
-        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor geschiedenis.' };
-    }
-    try {
-        return await fetchHAHistory(options.haUrl, options.haToken, entity_id, hours_ago);
-    } catch (e: any) {
-        return { error: `Geschiedenis ophalen mislukt voor ${entity_id}: ${e.message}` };
-    }
-}
-
-async function executeLogbookTool(
-    args: any,
-    options: { haUrl?: string; haToken?: string }
-): Promise<any> {
-    const { entity_id, hours_ago = 24 } = args;
-    if (!options.haUrl || !options.haToken) {
-        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor het logboek.' };
-    }
-    try {
-        return await fetchHALogbook(options.haUrl, options.haToken, entity_id, hours_ago);
-    } catch (e: any) {
-        return { error: `Logboek ophalen mislukt: ${e.message}` };
-    }
-}
-
-async function executeCameraSnapshotTool(
-    args: any,
-    options: { haUrl?: string; haToken?: string }
-): Promise<any> {
-    const { camera_entity_id, question } = args;
-    if (!options.haUrl || !options.haToken) {
-        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor camerabeelden.' };
-    }
-    try {
-        const snap = await fetchHACameraSnapshot(options.haUrl, options.haToken, camera_entity_id);
-        return {
-            camera_entity_id,
-            question,
-            has_image: true,
-            snapshot_data_url: snap.dataUrl,
-            status: 'Camerabeeld succesvol opgehaald. Beeld is klaar voor weergave en analyse.'
-        };
-    } catch (e: any) {
-        return { error: `Camerabeeld ophalen mislukt van ${camera_entity_id}: ${e.message}` };
-    }
-}
-
-async function executeTodoListTool(
-    args: any,
-    options: { haUrl?: string; haToken?: string }
-): Promise<any> {
-    const { action, item_summary, list_entity_id } = args;
-    if (!options.haUrl || !options.haToken) {
-        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor to-do lijsten.' };
-    }
-    try {
-        if (action === 'list') {
-            return await fetchHATodoItems(options.haUrl, options.haToken, list_entity_id);
-        } else {
-            if (!item_summary) {
-                return { error: `Item tekst ontbreekt voor actie "${action}".` };
-            }
-            let targetList = list_entity_id;
-            if (!targetList) {
-                const listInfo = await fetchHATodoItems(options.haUrl, options.haToken);
-                targetList = (listInfo as any)?.list_entity_id || 'todo.shopping_list';
-            }
-            return await manageHATodoItem(options.haUrl, options.haToken, action, {
-                listEntityId: targetList,
-                item: item_summary,
-                status: action === 'complete' ? 'completed' : 'needs_action'
-            });
-        }
-    } catch (e: any) {
-        return { error: `To-do actie "${action}" mislukt: ${e.message}` };
-    }
-}
-
-async function executeCalendarEventsTool(
-    args: any,
-    options: { haUrl?: string; haToken?: string }
-): Promise<any> {
-    const { calendar_entity_id, days_ahead = 7 } = args;
-    if (!options.haUrl || !options.haToken) {
-        return { error: 'Home Assistant API URL en token zijn niet beschikbaar voor kalenders.' };
-    }
-    try {
-        return await fetchHACalendarEvents(options.haUrl, options.haToken, calendar_entity_id, days_ahead);
-    } catch (e: any) {
-        return { error: `Kalender-evenementen ophalen mislukt: ${e.message}` };
-    }
-}
-
-function executeCreateAutomationTool(args: any): any {
-    const { alias, description, trigger, condition, action, mode = 'single' } = args;
-    const autoId = `butler_${Date.now()}`;
-    return {
-        id: autoId,
-        alias,
-        description: description || `Aangemaakt door Butler op ${new Date().toLocaleString('nl-BE')}`,
-        trigger: Array.isArray(trigger) ? trigger : [trigger],
-        condition: condition ? (Array.isArray(condition) ? condition : [condition]) : [],
-        action: Array.isArray(action) ? action : [action],
-        mode,
-        ready_for_user_review: true,
-        message: `Automatisering "${alias}" is ontworpen en klaargezet voor goedkeuring.`
-    };
-}
-
-/** SOTA On-Demand Search Tool for Home Assistant Entities */
 async function executeSearchEntitiesTool(
     args: any,
-    options: { devices: HADevice[]; haUrl?: string; haToken?: string }
+    options: { devices?: HADevice[]; haUrl?: string; haToken?: string; connectionId?: string }
 ): Promise<any> {
-    const { query = '', room = '', domain = '' } = args;
-    const qLower = query.toLowerCase();
-    const rLower = room.toLowerCase();
-    const dLower = domain.toLowerCase();
+    const query = (args.query || '').toLowerCase().trim();
+    const room = (args.room || '').toLowerCase().trim();
+    const domain = (args.domain || '').toLowerCase().trim();
 
-    let pool = options.devices;
-    if (pool.length === 0 && options.haUrl && options.haToken) {
+    let allDevices = options.devices || [];
+    if (allDevices.length === 0 && options.haUrl && options.haToken) {
         try {
-            const { getHAStates } = await import('../../utils/home-assistant');
-            pool = await getHAStates(options.haUrl, options.haToken);
+            const res = await fetchWithTimeout(buildHAUrl('/api/states', options.haUrl), {
+                headers: { Authorization: `Bearer ${sanitizeHAToken(options.haToken)}` }
+            });
+            if (res.ok) allDevices = await res.json();
         } catch { }
     }
 
-    const matches = pool.filter(d => {
+    let topoEntitiesForRoom: Set<string> | null = null;
+    if (room) {
+        try {
+            const topoRaw = (options.connectionId && localStorage.getItem(`ha_topology_${options.connectionId}`))
+                || localStorage.getItem('ha_topology_latest');
+            if (topoRaw) {
+                const topo = JSON.parse(topoRaw);
+                const matchingAreas = (topo.areas || []).filter((a: any) =>
+                    (a.name || '').toLowerCase().includes(room) || (a.id || '').toLowerCase().includes(room)
+                );
+                if (matchingAreas.length > 0) {
+                    topoEntitiesForRoom = new Set(matchingAreas.flatMap((a: any) => a.entities || []));
+                }
+            }
+        } catch { }
+    }
+
+    const matches = allDevices.filter(d => {
         const eid = d.entity_id.toLowerCase();
         const fname = (d.attributes?.friendly_name || '').toLowerCase();
         const dDomain = eid.split('.')[0];
 
-        if (dLower && dDomain !== dLower) return false;
-        if (rLower && !eid.includes(rLower) && !fname.includes(rLower)) return false;
-        if (qLower && !eid.includes(qLower) && !fname.includes(qLower)) return false;
-
+        if (domain && dDomain !== domain) return false;
+        if (room) {
+            const inTopo = topoEntitiesForRoom ? topoEntitiesForRoom.has(d.entity_id) : false;
+            if (!inTopo && !eid.includes(room) && !fname.includes(room)) return false;
+        }
+        if (query && !eid.includes(query) && !fname.includes(query)) return false;
         return true;
-    }).slice(0, 10);
+    }).slice(0, 25);
 
-    if (matches.length > 0) {
-        return {
-            found_count: matches.length,
-            entities: matches.map(m => ({
-                entity_id: m.entity_id,
-                friendly_name: m.attributes?.friendly_name || m.entity_id,
-                state: m.state,
-                unit: m.attributes?.unit_of_measurement || null
-            }))
-        };
+    if (matches.length === 0) {
+        return { message: `Geen apparaten gevonden voor query="${query}", room="${room}", domain="${domain}".` };
     }
 
-    return { message: `Geen apparaten gevonden voor zoekcriteria (zoekterm: "${query}", ruimte: "${room}", domein: "${domain}").` };
+    return {
+        found_count: matches.length,
+        entities: matches.map(m => ({
+            entity_id: m.entity_id,
+            name: m.attributes?.friendly_name || m.entity_id,
+            state: m.state,
+            unit: m.attributes?.unit_of_measurement || undefined
+        }))
+    };
 }
 
 // -------------------------------------------------------------
-// 8. SOTA Semantic & Spatial Context Pre-Filtering
+// 8. Smart Context Selection (Clean, Bilingual, Zero Intent-Blanking Regexes!)
 // -------------------------------------------------------------
-interface EntityFilterResult {
-    topologySummary: string;
-    relevantEntitiesSection: string;
-    matchedCount: number;
-}
+const STOP_WORDS = new Set([
+    'het', 'een', 'van', 'voor', 'met', 'aan', 'uit', 'wat', 'hoe', 'wie', 'waar', 'zijn', 'deze', 'naar',
+    'dat', 'die', 'niet', 'ook', 'als', 'maar', 'bij', 'nog', 'wel', 'kan', 'kun', 'wil', 'aub', 'graag',
+    'the', 'and', 'for', 'with', 'from', 'what', 'how', 'who', 'where', 'this', 'that', 'can', 'please', 'are'
+]);
 
-export function filterContextEntities(
+function selectInitialContextEntities(
     userMessage: string,
-    devices: HADevice[]
-): EntityFilterResult {
-    const rawTopo = typeof localStorage !== 'undefined' ? localStorage.getItem('ha_topology_latest') : null;
-    let topo: any = null;
-    try {
-        if (rawTopo) topo = JSON.parse(rawTopo);
-    } catch { }
-
-    const deviceMap = new Map(devices.map(d => [d.entity_id, d]));
+    devices: HADevice[],
+    connectionId?: string
+): { topologySummary: string; relevantEntitiesSection: string; matchedCount: number } {
+    let topologySummary = '';
     const roomToDevices = new Map<string, HADevice[]>();
 
-    // 1. Build a super-compact Tier 1 House Structure Map (Summary only, ZERO device bloat!)
-    let topologySummary = '';
-    if (topo && Array.isArray(topo.areas)) {
-        const floorLines: string[] = [];
-        if (Array.isArray(topo.floors) && topo.floors.length > 0) {
-            topo.floors.forEach((f: any) => {
-                const floorAreas = (f.areas || []).map((areaId: string) => topo.areas.find((a: any) => a.id === areaId)).filter(Boolean);
-                if (floorAreas.length > 0) {
-                    const areaSummary = floorAreas.map((ar: any) => {
-                        const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
-                        roomToDevices.set(ar.name.toLowerCase(), areaDevs);
-                        roomToDevices.set(ar.id.toLowerCase(), areaDevs);
-                        return `${ar.name} (${areaDevs.length} app)`;
-                    }).join(', ');
-                    floorLines.push(`  - Verdieping '${f.name}': ${areaSummary}`);
+    try {
+        const topoRaw = (connectionId && localStorage.getItem(`ha_topology_${connectionId}`))
+            || localStorage.getItem('ha_topology_latest');
+        if (topoRaw) {
+            const topo = JSON.parse(topoRaw);
+            const areasMap = new Map<string, any>();
+            (topo.areas || []).forEach((a: any) => areasMap.set(a.id, a));
+
+            const assignedAreaIds = new Set<string>();
+            const lines: string[] = [];
+
+            const indexArea = (ar: any) => {
+                const areaDevs = devices.filter(d => (ar.entities || []).includes(d.entity_id));
+                roomToDevices.set((ar.name || '').toLowerCase(), areaDevs);
+                roomToDevices.set((ar.id || '').toLowerCase(), areaDevs);
+                return `${ar.name} (${areaDevs.length})`;
+            };
+
+            if (Array.isArray(topo.floors) && topo.floors.length > 0) {
+                for (const fl of topo.floors) {
+                    const names: string[] = [];
+                    for (const aid of (fl.areas || [])) {
+                        const ar = areasMap.get(aid);
+                        if (ar) {
+                            assignedAreaIds.add(aid);
+                            names.push(indexArea(ar));
+                        }
+                    }
+                    if (names.length > 0) lines.push(`  - ${fl.name}: ${names.join(', ')}`);
                 }
-            });
-        } else {
-            const areaSummary = topo.areas.map((ar: any) => {
-                const areaDevs = (ar.entities || []).map((eid: string) => deviceMap.get(eid)).filter(Boolean);
-                roomToDevices.set(ar.name.toLowerCase(), areaDevs);
-                roomToDevices.set(ar.id.toLowerCase(), areaDevs);
-                return `${ar.name} (${areaDevs.length} app)`;
-            }).join(', ');
-            floorLines.push(`  - Ruimtes: ${areaSummary}`);
+            }
+
+            // Always include areas NOT assigned to any floor!
+            const unassignedAreas = (topo.areas || []).filter((a: any) => !assignedAreaIds.has(a.id));
+            if (unassignedAreas.length > 0) {
+                const names = unassignedAreas.map((ar: any) => indexArea(ar));
+                lines.push(`  - Overige ruimtes: ${names.join(', ')}`);
+            }
+
+            if (lines.length > 0) {
+                topologySummary = `### HUISSTRUCTUUR:\n${lines.join('\n')}\n`;
+            }
         }
-        if (floorLines.length > 0) {
-            topologySummary = `### HUISSTRUCTUUR (OVERZICHT RUIMTES & VERDIEPINGEN):\n${floorLines.join('\n')}\n`;
-        }
-    }
+    } catch { }
 
-    const lowerMsg = userMessage.toLowerCase();
-
-    // 2. Intent Detection: Pure external questions require ZERO devices in prompt!
-    const isPureWeather = /weer|regen|temperatuur buiten|wind|storm|zonnig|onweer|dauwpunt|paraplu/i.test(lowerMsg) &&
-        !/woon|living|slaap|keuken|bad|lamp|licht|thermostaat|verwarming|rolluik|stekker/i.test(lowerMsg);
-
-    const isPureNavigation = /hoe lang rijden|reistijd|route naar|afstand tot|navigeer/i.test(lowerMsg);
-    const isPureMemory = /onthoud dat|mijn voorkeur is|vergeet dat/i.test(lowerMsg);
-    const isPureTodo = /boodschappen|to-do|takenlijst|zet .* op .*lijst|vink .* af/i.test(lowerMsg) && !/lamp|licht|verwarming/i.test(lowerMsg);
-    const isPureCalendar = /afvalkalender|restafval|pmd|papier|wanneer.*opgehaald|agenda vandaag|afspraken/i.test(lowerMsg);
-
-    if (isPureWeather || isPureNavigation || isPureMemory || isPureTodo || isPureCalendar) {
+    if (!devices || devices.length === 0) {
         return {
             topologySummary,
-            relevantEntitiesSection: 'Geen apparaten nodig voor deze vraag.',
+            relevantEntitiesSection: 'Geen Home Assistant apparaten gesynchroniseerd.',
             matchedCount: 0
         };
     }
 
-    // 3. Smart Home Query: Semantic Pre-Filtering
+    // Tokenize cleanly (strip punctuation & filter stop-words)
+    const lowerMsg = userMessage.toLowerCase();
+    const tokens = lowerMsg
+        .replace(/[^\p{L}\p{N}\s_-]/gu, ' ')
+        .split(/\s+/)
+        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+
     const matchedRooms: string[] = [];
     roomToDevices.forEach((_, roomKey) => {
-        if (lowerMsg.includes(roomKey)) {
+        if (roomKey && roomKey.length >= 3 && lowerMsg.includes(roomKey)) {
             matchedRooms.push(roomKey);
         }
     });
-
-    const mentionsBoven = /boven|verdieping|1e verdieping|slaapkamer|badkamer/i.test(lowerMsg);
-    const mentionsBeneden = /beneden|gelijkvloers|keuken|living|woonkamer|salon/i.test(lowerMsg);
-
-    const domains: string[] = [];
-    if (/licht|lamp|spot|spots|verlichting|peertje|schemerlamp/i.test(lowerMsg)) domains.push('light');
-    if (/thermostaat|verwarm|temperatuur|graden|airco|koel|hvac/i.test(lowerMsg)) domains.push('climate');
-    if (/schakelaar|stopcontact|stekker|koffie|switch/i.test(lowerMsg)) domains.push('switch');
-    if (/rolluik|gordijn|zonwering|screen|blind|shutter|poort|garage/i.test(lowerMsg)) domains.push('cover');
-    if (/muziek|radio|speaker|box|tv|volume|spelen|sonos|media/i.test(lowerMsg)) domains.push('media_player');
-    if (/slot|deur|grendel|lock/i.test(lowerMsg)) domains.push('lock');
-    if (/stofzuiger|stofzuig|vacuum/i.test(lowerMsg)) domains.push('vacuum');
-    if (/batterij|accu|solar|zonnepaneel|zonnepanelen|opwek|verbruik|kwh|stroom|elektriciteit|energie|prijs|tarief|gas|spot/i.test(lowerMsg)) domains.push('sensor');
 
     const scored = devices.map(d => {
         let score = 0;
         const eid = d.entity_id.toLowerCase();
         const fname = (d.attributes?.friendly_name || '').toLowerCase();
-        const domain = eid.split('.')[0];
-
-        if (domains.includes(domain)) score += 8;
+        const uom = (d.attributes?.unit_of_measurement || '').toLowerCase();
 
         for (const room of matchedRooms) {
-            if (eid.includes(room) || fname.includes(room)) score += 15;
+            if (eid.includes(room) || fname.includes(room)) score += 16;
             const devsInRoom = roomToDevices.get(room) || [];
-            if (devsInRoom.some(rDev => rDev.entity_id === d.entity_id)) score += 15;
+            if (devsInRoom.some(rDev => rDev.entity_id === d.entity_id)) score += 16;
         }
 
-        if (mentionsBoven && (/slaap|bad|overloop|zolder|boven/i.test(eid) || /slaap|bad|overloop|zolder|boven/i.test(fname))) score += 10;
-        if (mentionsBeneden && (/woon|living|keuken|hal|gang|garage|tuin|beneden/i.test(eid) || /woon|living|keuken|hal|gang|garage|tuin|beneden/i.test(fname))) score += 10;
-
-        const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
-        for (const w of words) {
+        for (const w of tokens) {
             if (fname.includes(w) || eid.includes(w)) score += 12;
+            if (uom && uom.includes(w)) score += 8;
         }
 
-        if (/wat staat.*aan|welke.*aan|wat brandt/i.test(lowerMsg) && d.state === 'on') score += 10;
+        // Bilingual domain hints (boost, NEVER hide!)
+        if (/licht|lamp|spot|light|dim/i.test(lowerMsg) && eid.startsWith('light.')) score += 6;
+        if (/thermostaat|verwarm|temperatuur|graden|airco|climate|heat|temp/i.test(lowerMsg) && (eid.startsWith('climate.') || eid.includes('temperature'))) score += 6;
+        if (/stroom|elektriciteit|energie|prijs|tarief|gas|spot|kwh|price|energy/i.test(lowerMsg) && (eid.includes('price') || eid.includes('prijs') || eid.includes('energy') || eid.includes('gas') || eid.includes('nordpool') || eid.includes('epex'))) score += 12;
+        if (/camera|deurbel|doorbell|voordeur/i.test(lowerMsg) && eid.startsWith('camera.')) score += 12;
+        if (/boodschap|todo|lijst|shopping/i.test(lowerMsg) && eid.startsWith('todo.')) score += 12;
+        if (/agenda|kalender|afval|calendar/i.test(lowerMsg) && eid.startsWith('calendar.')) score += 12;
+        if (/rolluik|gordijn|screen|cover|poort|garage/i.test(lowerMsg) && eid.startsWith('cover.')) score += 8;
+        if (/muziek|radio|tv|sonos|speaker|volume|media/i.test(lowerMsg) && eid.startsWith('media_player.')) score += 8;
 
         return { device: d, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    let candidates = scored.filter(s => s.score > 0);
+    let selected = scored.filter(s => s.score > 0).slice(0, 18).map(s => s.device);
 
-    if (candidates.length === 0) {
-        if (/alles.*uit|alles.*aan/i.test(lowerMsg)) {
-            candidates = scored.filter(s => ['light', 'switch'].includes(s.device.entity_id.split('.')[0]));
-        } else {
-            candidates = scored.filter(s => s.device.state === 'on' || /climate|energy|solar/i.test(s.device.entity_id));
-        }
+    if (selected.length === 0) {
+        selected = devices
+            .filter(d => d.state === 'on' || /^(climate|alarm_control_panel|lock)\./.test(d.entity_id))
+            .slice(0, 12);
     }
-
-    const selected = candidates.slice(0, 15).map(s => s.device);
 
     const relevantDevicesText = selected.map(d => {
         const name = d.attributes?.friendly_name || d.entity_id;
         const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
-        return `${d.entity_id} (${name}): ${d.state}${uom}`;
+        return `- ${d.entity_id} (${name}): ${d.state}${uom}`;
     }).join('\n');
 
     return {
         topologySummary,
-        relevantEntitiesSection: relevantDevicesText || 'Geen actieve apparaten direct gerelateerd aan de vraag. Gebruik search_home_entities om apparaten op te zoeken.',
+        relevantEntitiesSection: relevantDevicesText || 'Gebruik search_home_entities om apparaten op te zoeken.',
         matchedCount: selected.length
     };
 }
 
 // -------------------------------------------------------------
-// 9. SOTA Dynamic System Prompt Builder
+// 9. Clean LLM-First System Prompt
 // -------------------------------------------------------------
 function buildSystemPrompt(options: ClientOrchestratorOptions): string {
-    const { language, location, devices, userMessage } = options;
+    const { language, location, devices, userMessage, connectionId } = options;
     const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const timeStr = now.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
     const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-    // SOTA Pre-filtering: Only inject the 0-12 entities that actually matter
-    const filterRes = filterContextEntities(userMessage, devices);
-
-    // Retrieve stored core memories
-    const storedMems = getStoredMemories().map(m => `- ${m.content}`).join('\n') || '- Geen specifieke voorkeuren opgeslagen.';
-
+    const ctx = selectInitialContextEntities(userMessage, devices, connectionId);
+    const storedMems = getStoredMemories().map(m => `- ${m.content}`).join('\n') || '- Geen voorkeuren opgeslagen.';
     const locationContext = location
         ? `Coördinaten: ${location.lat.toFixed(4)}, ${location.lon.toFixed(4)}`
-        : 'Locatie: Thuisbasis (zone.home)';
+        : 'Locatie: Thuisbasis (geen live GPS)';
 
-    return `Je bent Butler, de intelligente, betrouwbare persoonlijke AI-assistent voor Home Assistant en het dagelijks leven.
-Je draait direct op het apparaat van de gebruiker met state-of-the-art ReAct tool calling en minimale token-belasting.
+    return `Je bent Butler, een intelligente, snelle en betrouwbare persoonlijke AI-assistent voor Home Assistant en het dagelijks leven.
 
-### HUIDIGE CONTEXT:
+### CONTEXT:
 - Datum & Tijd: ${dateStr}, ${timeStr}
-- Huidige Locatie: ${locationContext}
-- Taal van de gebruiker: ${language} (Antwoord ALTIJD in het Nederlands, behalve als de gebruiker expliciet in een andere taal spreekt)
+- Locatie: ${locationContext}
+- Voorkeurstaal: ${language} (Antwoord in de taal van de gebruiker; standaard Nederlands)
 
-${filterRes.topologySummary}
-### GESELECTEERDE RELEVANTE APPARATEN VOOR DEZE VRAAG (${filterRes.matchedCount} geselecteerd uit ${devices.length} totaal):
-${filterRes.relevantEntitiesSection}
+${ctx.topologySummary}
+### RELEVANTE ENTITEITEN (${ctx.matchedCount} uit ${devices.length} — gebruik \`search_home_entities\` voor overige apparaten):
+${ctx.relevantEntitiesSection}
 
-### DYNAMISCH CORE GEHEUGEN (Letta / Memori):
+### PERSOONLIJK GEHEUGEN:
 ${storedMems}
 
-### STRIKTE REGELS VOOR HET GEBRUIK VAN TOOLS:
-1. **NOOIT GISSEN NAAR WEER OF DATA**: Vraagt de gebruiker naar het weer, regen, temperatuur, wind of dauwpunt? Roep **ALTIJD** \`get_weather\` aan.
-2. **DAUWPUNT & WINDSNELHEID**: Vermeld bij wind de snelheid en stoten in km/h. Vermeld bij luchtvochtigheid ook het dauwpunt.
-3. **STROOM- EN SPOTPRIJZEN**: Vraagt de gebruiker naar stroomprijs, 24u-spotprijzen, dynamische tarieven of goedkope uren? Roep **ALTIJD** \`get_energy_prices\` aan.
-4. **HISTORIEK & STATISTIEKEN (ZONNEPANELEN, VERBRUIK, VERLEDEN)**: Vraagt de gebruiker hoeveel stroom er gisteren/vorige week is opgewekt/verbruikt of wat de minimum/maximum temperatuur was? Roep **ALTIJD** \`get_ha_history_and_statistics\` aan.
-5. **LOGBOEK & GEBEURTENISSEN**: Vraagt de gebruiker wanneer iets gebeurde of wie iets deed? Gebruik \`get_ha_logbook\`.
-6. **CAMERABEELDEN & DEURBEL**: Vraagt de gebruiker wie er voor de deur staat of wat er op camera te zien is? Roep **ALTIJD** \`capture_camera_snapshot\` aan.
-7. **TO-DO & BOODSCHAPPEN**: Voor boodschappen en takenlijsten (bekijken, toevoegen, afvinken), gebruik \`manage_todo_list\`.
-8. **KALENDER & AFVALKALENDER**: Voor afvalophaaldagen of afspraken, gebruik \`get_calendar_events\`.
-9. **AUTOMATISERINGEN ONTWERPEN**: Als de gebruiker een automatisering wil aanmaken, gebruik \`create_home_assistant_automation\`.
-10. **ON-DEMAND APPARATEN ZOEKEN**: Als een gewenst apparaat niet in de bovenstaande selectie staat of de vraag breed is (bv. "zoek de rolluiken"), roep dan \`search_home_entities\` aan om gericht entiteiten te vinden.
-11. **APPARAATBEDIENING**: Gebruik \`control_home_device\` om apparaten aan te sturen met domein, service en entity_id.
-12. **COMMUNICATIESTIJL**: Wees behulpzaam, vlot, natuurlijk en to-the-point. Geen overbodige meta-tekst ("Ik ga nu een tool aanroepen..."). Geef direct het juiste antwoord na afhandeling van de tools.`;
+### RICHTLIJNEN:
+1. Gebruik altijd tools om actuele data (weer, energieprijzen, sensoren, historiek, logboek, agenda, to-do, camera) op te halen — verzin nooit waarden.
+2. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
+3. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³) en naam voordat je antwoordt.
+4. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
+5. Geef altijd een helder, beknopt, natuurlijk en to-the-point antwoord zonder overbodige meta-tekst.`;
 }
 
 // -------------------------------------------------------------
-// 7. SOTA ReAct Loop Runner
+// 10. Unified SOTA ReAct Loop with Automatic Model Failover & Parallel Tool Execution
 // -------------------------------------------------------------
+async function callLLMWithFailover(
+    config: AIResolvedConfig,
+    messages: any[],
+    includeTools: boolean,
+    log: (msg: string) => void
+): Promise<{ data: any; usedModel: string }> {
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`
+    };
+    if (config.provider === 'openrouter') {
+        headers['HTTP-Referer'] = 'https://butler.aiha.app';
+        headers['X-Title'] = 'Butler AI App';
+    }
+
+    const candidates = config.fallbackModels;
+    let lastError = 'Onbekende LLM API fout';
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i];
+        const body: Record<string, any> = {
+            model: candidateModel,
+            messages,
+            max_tokens: 8192
+        };
+
+        if (includeTools) {
+            body.tools = ORCHESTRATOR_TOOLS;
+            body.tool_choice = 'auto';
+        }
+
+        // Gemini 3.6+/3.8/4.x deprecate temperature and use reasoning_effort instead!
+        if (supportsTemperatureParam(candidateModel)) {
+            body.temperature = 0.3;
+        }
+        if (supportsReasoningEffort(candidateModel)) {
+            body.reasoning_effort = config.reasoningEffort;
+        }
+
+        // On OpenRouter, also supply native fallback models array on the first attempt
+        if (config.provider === 'openrouter' && i === 0 && candidates.length > 1) {
+            body.models = candidates;
+        }
+
+        try {
+            const res = await fetchWithTimeout(config.endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body)
+            }, 30000);
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data?.choices?.[0]?.message) {
+                    return { data, usedModel: candidateModel };
+                }
+                lastError = `Leeg of ongeldig API-antwoord van ${candidateModel}: ${JSON.stringify(data).slice(0, 200)}`;
+            } else {
+                const errText = await res.text().catch(() => '');
+                lastError = `${config.provider.toUpperCase()} (${res.status}) op ${candidateModel}: ${errText.slice(0, 250)}`;
+                log(`⚠️ Model ${candidateModel} fout (${res.status}), probeer failover indien mogelijk...`);
+
+                // Do not failover on auth errors (401/403) — key itself is invalid
+                if (res.status === 401 || res.status === 403) {
+                    throw new Error(lastError);
+                }
+            }
+        } catch (err: any) {
+            const msg = err?.name === 'AbortError' ? `Timeout (30s) bij ${candidateModel}` : (err?.message || String(err));
+            lastError = msg;
+            if (msg.includes('(401)') || msg.includes('(403)')) {
+                throw err;
+            }
+            log(`⚠️ Failover trigger na fout op ${candidateModel}: ${msg}`);
+        }
+    }
+
+    throw new Error(lastError);
+}
+
 export async function runClientReActOrchestrator(
     options: ClientOrchestratorOptions
 ): Promise<LLMResponse> {
     const config = resolveAIConfig(options.apiKey, options.model, options.provider);
-
     if (!config.apiKey) {
         throw new Error('NO_API_KEY');
     }
 
-    const { apiKey, provider, model, endpoint } = config;
-
     const systemPrompt = buildSystemPrompt(options);
 
-    // Prepare message array for OpenAI chat completion format
-    const messages: any[] = [
-        { role: 'system', content: systemPrompt },
-        ...options.recentHistory.map(h => ({
-            role: h.role === 'assistant' ? 'assistant' : 'user',
-            content: h.content
-        })),
-        { role: 'user', content: options.userMessage }
-    ];
+    // Ensure alternating clean message history (no consecutive duplicate roles or empty messages)
+    const messages: any[] = [{ role: 'system', content: systemPrompt }];
+    for (const h of options.recentHistory) {
+        if (!h.content || !h.content.trim()) continue;
+        const role = h.role === 'assistant' ? 'assistant' : 'user';
+        if (messages.length > 1 && messages[messages.length - 1].role === role) {
+            messages[messages.length - 1].content += `\n${h.content}`;
+        } else {
+            messages.push({ role, content: h.content });
+        }
+    }
+    if (messages.length > 1 && messages[messages.length - 1].role === 'user') {
+        messages[messages.length - 1].content += `\n${options.userMessage}`;
+    } else {
+        messages.push({ role: 'user', content: options.userMessage });
+    }
 
     const actionsTaken: Action[] = [];
     const executionLogs: string[] = [];
-
     const log = (msg: string) => {
         executionLogs.push(msg);
         logger.info(`[ClientOrchestrator] ${msg}`);
     };
 
-    log(`🚀 ReAct Loop started [Provider: ${provider.toUpperCase()}] Model: ${model}`);
-
-    const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-    };
-    if (provider === 'openrouter') {
-        headers['HTTP-Referer'] = 'https://aiha.app';
-        headers['X-Title'] = 'Butler AI App';
-    }
-    if (provider === 'gemini') {
-        headers['x-goog-api-key'] = apiKey;
-    }
+    log(`🚀 ReAct v2 started [${config.provider.toUpperCase()}] Primary: ${config.model} (effort: ${config.reasoningEffort})`);
 
     const MAX_TURNS = 5;
     let turn = 0;
@@ -1554,260 +1355,335 @@ export async function runClientReActOrchestrator(
 
     while (turn < MAX_TURNS) {
         turn++;
-        log(`🔄 Turn ${turn}/${MAX_TURNS}: Calling ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}...`);
+        log(`🔄 Turn ${turn}/${MAX_TURNS}...`);
 
-        const requestBody: any = {
-            model,
-            messages,
-            tools: ORCHESTRATOR_TOOLS,
-            tool_choice: 'auto',
-            // Google recommends temperature 1.0 for Gemini 3 to prevent degraded/empty output
-            temperature: provider === 'gemini' ? 1.0 : 0.3,
-            // Allow 10,000 tokens for Gemini thinking models (thinking tokens can consume 2,000-8,000 tokens)
-            max_tokens: 10000
-        };
-
-        const res = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(requestBody)
-        });
-
-        if (!res.ok) {
-            const errBody = await res.text();
-            log(`❌ ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'} API error: ${res.status} - ${errBody}`);
-            throw new Error(`${provider === 'gemini' ? 'Gemini' : 'OpenRouter'} error (${res.status}): ${errBody}`);
+        const { data, usedModel } = await callLLMWithFailover(config, messages, true, log);
+        if (turn === 1 && usedModel !== config.model) {
+            log(`🔁 Failover actief: gebruikt model ${usedModel}`);
         }
 
-        const data = await res.json();
-        const choice = data.choices?.[0];
-        if (!choice) {
-            throw new Error('Geen antwoord ontvangen van AI model.');
-        }
+        const assistantMsg = data.choices[0].message;
 
-        const assistantMsg = choice.message;
-        // Ensure content is not null/undefined to prevent serialization issues
-        if (assistantMsg.content === null || assistantMsg.content === undefined) {
-            assistantMsg.content = '';
-        }
-
-        // Sanitize tool_calls if present (Gemini sometimes emits empty string IDs)
-        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+        // Preserve Gemini thought_signature / reasoning_details intact while ensuring tool_call IDs exist
+        if (Array.isArray(assistantMsg.tool_calls) && assistantMsg.tool_calls.length > 0) {
             assistantMsg.tool_calls.forEach((tc: any, idx: number) => {
-                if (!tc.id || tc.id.trim() === '') {
+                if (!tc.id || !tc.id.trim()) {
                     tc.id = `call_${Date.now()}_${idx}`;
                 }
             });
-        }
+            messages.push(assistantMsg);
 
-        messages.push(assistantMsg);
+            log(`🛠️ Executing ${assistantMsg.tool_calls.length} tool call(s) in parallel`);
+            const pendingVisionImages: Array<{ entityId: string; dataUrl: string }> = [];
 
-        // Check if the model made tool calls
-        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-            log(`🛠️ Model requested ${assistantMsg.tool_calls.length} tool call(s)`);
+            // Execute all tool calls in this turn IN PARALLEL for minimal latency!
+            const toolResults = await Promise.all(
+                assistantMsg.tool_calls.map(async (toolCall: any) => {
+                    const fnName = toolCall.function?.name || 'unknown';
+                    const callId = toolCall.id;
+                    let fnArgs: any = {};
+                    try {
+                        fnArgs = JSON.parse(toolCall.function?.arguments || '{}');
+                    } catch (parseErr: any) {
+                        return {
+                            callId,
+                            fnName,
+                            result: { error: `Ongeldige JSON in tool-argumenten: ${parseErr?.message}` }
+                        };
+                    }
 
-            for (const toolCall of assistantMsg.tool_calls) {
-                const fnName = toolCall.function.name;
-                let fnArgs: any = {};
-                try {
-                    fnArgs = JSON.parse(toolCall.function.arguments || '{}');
-                } catch {
-                    fnArgs = {};
-                }
+                    log(`⚙️ Tool: ${fnName}(${JSON.stringify(fnArgs).slice(0, 150)})`);
+                    let toolResult: any;
 
-                log(`⚙️ Executing tool: ${fnName} with args: ${JSON.stringify(fnArgs)}`);
+                    try {
+                        if (fnName === 'get_weather') {
+                            toolResult = await executeWeatherTool(fnArgs, options.location);
+                            actionsTaken.push({
+                                type: 'weather',
+                                entity_id: 'weather.open_meteo',
+                                service: 'weather.get_forecast',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'get_energy_prices') {
+                            toolResult = await executeEnergyPricesTool(fnArgs, {
+                                devices: options.devices,
+                                haUrl: options.haUrl,
+                                haToken: options.haToken
+                            });
+                            actionsTaken.push({
+                                type: 'energy',
+                                entity_id: toolResult?.entity_id || 'sensor.energy_prices',
+                                service: 'energy.get_prices',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'get_entity_state') {
+                            toolResult = await executeGetEntityStateTool(fnArgs, {
+                                devices: options.devices,
+                                haUrl: options.haUrl,
+                                haToken: options.haToken
+                            });
+                        } else if (fnName === 'search_home_entities') {
+                            toolResult = await executeSearchEntitiesTool(fnArgs, {
+                                devices: options.devices,
+                                haUrl: options.haUrl,
+                                haToken: options.haToken,
+                                connectionId: options.connectionId
+                            });
+                        } else if (fnName === 'control_home_device') {
+                            const devRes = await executeDeviceControl(fnArgs, {
+                                haWebSocket: options.haWebSocket,
+                                haUrl: options.haUrl,
+                                haToken: options.haToken
+                            });
+                            toolResult = { success: devRes.success, message: devRes.message };
+                            actionsTaken.push(devRes.action);
+                        } else if (fnName === 'manage_core_memory') {
+                            toolResult = await executeCoreMemoryTool(fnArgs, options.connectionId);
+                        } else if (fnName === 'get_navigation_eta') {
+                            toolResult = await executeNavigationTool(fnArgs, options.location);
+                            actionsTaken.push({
+                                type: 'navigation',
+                                entity_id: 'device.navigation',
+                                service: 'navigation.eta',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'get_ha_history_and_statistics') {
+                            if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            } else {
+                                toolResult = await fetchHAHistory(options.haUrl, options.haToken, fnArgs.entity_id, fnArgs.hours_ago || 24);
+                            }
+                            actionsTaken.push({
+                                type: 'history',
+                                entity_id: fnArgs.entity_id,
+                                service: 'history.period',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'get_ha_logbook') {
+                            if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            } else {
+                                toolResult = await fetchHALogbook(options.haUrl, options.haToken, fnArgs.entity_id, fnArgs.hours_ago || 24);
+                            }
+                            actionsTaken.push({
+                                type: 'logbook',
+                                entity_id: fnArgs.entity_id || 'logbook',
+                                service: 'logbook.get_events',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'capture_camera_snapshot') {
+                            if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            } else {
+                                const snap = await fetchHACameraSnapshot(options.haUrl, options.haToken, fnArgs.camera_entity_id);
+                                // Queue real multimodal image block for Gemini vision (NEVER dump base64 into tool JSON!)
+                                pendingVisionImages.push({ entityId: snap.entity_id, dataUrl: snap.dataUrl });
+                                toolResult = {
+                                    success: true,
+                                    entity_id: snap.entity_id,
+                                    message: `Live snapshot van ${snap.entity_id} opgehaald. Het beeld wordt direct meegestuurd voor visuele analyse.`
+                                };
+                                actionsTaken.push({
+                                    type: 'camera',
+                                    entity_id: snap.entity_id,
+                                    service: 'camera.snapshot',
+                                    data: { entity_id: snap.entity_id, snapshot_data_url: snap.dataUrl, has_image: true },
+                                    result: 'success',
+                                    executedLocally: true
+                                });
+                            }
+                        } else if (fnName === 'manage_todo_list') {
+                            if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            } else if (fnArgs.action === 'list') {
+                                toolResult = await fetchHATodoItems(options.haUrl, options.haToken, fnArgs.list_entity_id);
+                            } else {
+                                let targetList = fnArgs.list_entity_id;
+                                if (!targetList) {
+                                    const discovered = await fetchHATodoItems(options.haUrl, options.haToken);
+                                    targetList = (discovered as any)?.list_entity_id || 'todo.shopping_list';
+                                }
+                                toolResult = await manageHATodoItem(options.haUrl, options.haToken, fnArgs.action, {
+                                    listEntityId: targetList,
+                                    item: fnArgs.item
+                                });
+                            }
+                            actionsTaken.push({
+                                type: 'todo',
+                                entity_id: toolResult?.list_entity_id || fnArgs.list_entity_id || 'todo.shopping_list',
+                                service: `todo.${fnArgs.action}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'get_calendar_events') {
+                            if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            } else {
+                                toolResult = await fetchHACalendarEvents(options.haUrl, options.haToken, fnArgs.calendar_entity_id, fnArgs.days_ahead || 7);
+                            }
+                            actionsTaken.push({
+                                type: 'calendar',
+                                entity_id: toolResult?.calendar_entity_id || fnArgs.calendar_entity_id || 'calendar',
+                                service: 'calendar.get_events',
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'create_home_assistant_automation') {
+                            const draft = {
+                                id: `butler_auto_${Date.now()}`,
+                                alias: fnArgs.alias || 'Butler Automatisering',
+                                description: fnArgs.description || '',
+                                trigger: Array.isArray(fnArgs.trigger) ? fnArgs.trigger : [],
+                                condition: Array.isArray(fnArgs.condition) ? fnArgs.condition : [],
+                                action: Array.isArray(fnArgs.action) ? fnArgs.action : [],
+                                mode: fnArgs.mode || 'single'
+                            };
+                            toolResult = { ...draft, ready_for_user_review: true };
+                            actionsTaken.push({
+                                type: 'automation',
+                                entity_id: draft.id,
+                                service: 'automation.create',
+                                data: draft,
+                                result: 'pending',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'set_timer_or_alarm') {
+                            if (fnArgs.kind === 'timer') {
+                                const secs = Math.max(1, Number(fnArgs.duration_seconds) || 60);
+                                actionsTaken.push({
+                                    type: 'set_timer',
+                                    entity_id: 'device.timer',
+                                    service: 'timer.start',
+                                    data: { duration: secs, message: fnArgs.label || 'Butler Timer' },
+                                    result: 'success',
+                                    executedLocally: false
+                                });
+                                toolResult = { success: true, kind: 'timer', duration_seconds: secs, label: fnArgs.label || 'Butler Timer' };
+                            } else {
+                                const hour = Number(fnArgs.hour);
+                                const minute = Number(fnArgs.minute) || 0;
+                                if (!Number.isFinite(hour) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+                                    toolResult = { error: 'Ongeldige wekkertijd (uur 0-23, minuut 0-59).' };
+                                } else {
+                                    actionsTaken.push({
+                                        type: 'set_alarm',
+                                        entity_id: 'device.alarm',
+                                        service: 'alarm.set',
+                                        data: { hour, minute, message: fnArgs.label || 'Butler Wekker' },
+                                        result: 'success',
+                                        executedLocally: false
+                                    });
+                                    toolResult = { success: true, kind: 'alarm', hour, minute, label: fnArgs.label || 'Butler Wekker' };
+                                }
+                            }
+                        } else if (fnName === 'create_graph') {
+                            const entityIds = Array.isArray(fnArgs.entity_ids) ? fnArgs.entity_ids : [];
+                            const period = fnArgs.period || '24h';
+                            const series = entityIds.map((eid: string) => ({
+                                entity_id: eid,
+                                label: options.devices.find(d => d.entity_id === eid)?.attributes?.friendly_name || eid
+                            }));
+                            actionsTaken.push({
+                                type: 'create_graph',
+                                entity_id: entityIds[0] || 'graph',
+                                service: 'graph.create',
+                                data: { title: fnArgs.title || 'Grafiek', period, series },
+                                result: 'success',
+                                executedLocally: false
+                            });
+                            toolResult = { success: true, title: fnArgs.title, period, entity_ids: entityIds };
+                        } else if (fnName === 'run_proactive_worker') {
+                            if (!options.connectionId) {
+                                toolResult = { error: 'Geen actieve connectie om proactieve worker op uit te voeren.' };
+                            } else {
+                                const workerRes = await triggerProactiveWorker(
+                                    fnArgs.worker as ProactiveWorkerId,
+                                    options.connectionId,
+                                    fnArgs.extra_params || {}
+                                );
+                                toolResult = workerRes;
+                                actionsTaken.push({
+                                    type: 'proactive_worker',
+                                    entity_id: `worker.${fnArgs.worker}`,
+                                    service: `worker.${fnArgs.worker}`,
+                                    data: workerRes,
+                                    result: workerRes.success ? 'success' : 'error',
+                                    executedLocally: true
+                                });
+                            }
+                        } else {
+                            toolResult = { error: `Onbekende tool: ${fnName}` };
+                        }
+                    } catch (toolErr: any) {
+                        toolResult = { error: toolErr?.message || String(toolErr) };
+                    }
 
-                let toolResult: any = null;
+                    return { callId, fnName, result: toolResult };
+                })
+            );
 
-                if (fnName === 'get_weather') {
-                    toolResult = await executeWeatherTool(fnArgs, options.location);
-                    actionsTaken.push({
-                        type: 'weather',
-                        entity_id: 'weather.open_meteo',
-                        service: 'weather.get_forecast',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'get_energy_prices') {
-                    toolResult = await executeEnergyPricesTool(fnArgs, {
-                        devices: options.devices,
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'energy',
-                        entity_id: 'sensor.energy_prices',
-                        service: 'energy.get_prices',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'get_entity_state') {
-                    toolResult = await executeGetEntityStateTool(fnArgs, {
-                        devices: options.devices,
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                } else if (fnName === 'control_home_device') {
-                    const devRes = await executeDeviceControl(fnArgs, {
-                        haWebSocket: options.haWebSocket,
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    toolResult = devRes;
-                    actionsTaken.push({
-                        ...devRes.action,
-                        result: devRes.success ? 'success' : 'error',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'manage_core_memory') {
-                    toolResult = executeCoreMemoryTool(fnArgs);
-                } else if (fnName === 'get_navigation_eta') {
-                    toolResult = await executeNavigationTool(fnArgs, options.location);
-                    actionsTaken.push({
-                        type: 'navigation',
-                        entity_id: 'device.navigation',
-                        service: 'navigation.eta',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'get_ha_history_and_statistics') {
-                    toolResult = await executeHistoryTool(fnArgs, {
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'history',
-                        entity_id: fnArgs.entity_id,
-                        service: 'history.period',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'get_ha_logbook') {
-                    toolResult = await executeLogbookTool(fnArgs, {
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'logbook',
-                        entity_id: fnArgs.entity_id || 'logbook',
-                        service: 'logbook.get_events',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'capture_camera_snapshot') {
-                    toolResult = await executeCameraSnapshotTool(fnArgs, {
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'camera',
-                        entity_id: fnArgs.camera_entity_id,
-                        service: 'camera.snapshot',
-                        data: toolResult,
-                        result: toolResult?.has_image ? 'success' : 'error',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'manage_todo_list') {
-                    toolResult = await executeTodoListTool(fnArgs, {
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'todo',
-                        entity_id: fnArgs.list_entity_id || 'todo.shopping_list',
-                        service: `todo.${fnArgs.action}`,
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'get_calendar_events') {
-                    toolResult = await executeCalendarEventsTool(fnArgs, {
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                    actionsTaken.push({
-                        type: 'calendar',
-                        entity_id: fnArgs.calendar_entity_id || 'calendar.default',
-                        service: 'calendar.get_events',
-                        data: toolResult,
-                        result: 'success',
-                        executedLocally: true
-                    });
-                } else if (fnName === 'search_home_entities') {
-                    toolResult = await executeSearchEntitiesTool(fnArgs, {
-                        devices: options.devices,
-                        haUrl: options.haUrl,
-                        haToken: options.haToken
-                    });
-                } else if (fnName === 'create_home_assistant_automation') {
-                    toolResult = executeCreateAutomationTool(fnArgs);
-                    actionsTaken.push({
-                        type: 'automation',
-                        entity_id: toolResult.id,
-                        service: 'automation.create',
-                        data: toolResult,
-                        result: 'pending',
-                        executedLocally: true
-                    });
-                } else {
-                    toolResult = { error: `Onbekende tool: ${fnName}` };
-                }
-
-                log(`📤 Tool ${fnName} result: ${JSON.stringify(toolResult).substring(0, 200)}...`);
-
-                // Append tool response message
-                const callId = toolCall.id || `call_${Date.now()}`;
+            // Append pure JSON tool results (NO forced Dutch stop-instruction breaking multi-step plans!)
+            for (const tr of toolResults) {
                 messages.push({
                     role: 'tool',
-                    tool_call_id: callId,
-                    name: fnName,
-                    content: `${JSON.stringify(toolResult)}\n\n[Instructie: Geef nu direct een vriendelijk, volledig en gesproken antwoord in het Nederlands met de gevraagde gegevens aan de gebruiker.]`
+                    tool_call_id: tr.callId,
+                    name: tr.fnName,
+                    content: JSON.stringify(tr.result)
                 });
             }
-            // Loop back to send tool results to the model
+
+            // If a camera snapshot was captured, attach it as a true multimodal image_url message!
+            if (pendingVisionImages.length > 0) {
+                const visionParts: any[] = [
+                    { type: 'text', text: 'Hier zijn de opgehaalde live camerabeelden. Analyseer wat je ziet en beantwoord de vraag van de gebruiker.' }
+                ];
+                for (const img of pendingVisionImages) {
+                    visionParts.push({
+                        type: 'image_url',
+                        image_url: { url: img.dataUrl }
+                    });
+                }
+                messages.push({ role: 'user', content: visionParts });
+            }
+
             continue;
         }
 
-        // If no tool calls, this is the final natural language answer
-        finalResponseText = assistantMsg.content || '';
-        log(`✅ ReAct loop finished in turn ${turn}. Response length: ${finalResponseText.length}`);
+        // Natural language final answer
+        finalResponseText = (assistantMsg.content || '').trim();
+        log(`✅ ReAct finished in turn ${turn} (${finalResponseText.length} chars)`);
         break;
     }
 
-    if (!finalResponseText && actionsTaken.length > 0) {
-        log('🤖 Requesting LLM to formulate conversational answer directly from tool results...');
+    // If loop ended without text (e.g., hit MAX_TURNS after tool calls), ask LLM directly with tools disabled
+    if (!finalResponseText) {
+        log('🤖 Requesting final natural language synthesis from LLM...');
         messages.push({
             role: 'user',
-            content: 'Formuleer nu direct je natuurlijke, gesproken antwoord aan de gebruiker in het Nederlands op basis van de opgehaalde tool-gegevens. Beantwoord direct en uitsluitend wat de gebruiker heeft gevraagd.'
+            content: 'Geef nu direct een beknopt, natuurlijk antwoord aan de gebruiker op basis van alle opgehaalde gegevens.'
         });
         try {
-            const finalRes = await fetch(endpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    model,
-                    messages,
-                    temperature: provider === 'gemini' ? 1.0 : 0.3,
-                    max_tokens: 4000
-                })
-            });
-            if (finalRes.ok) {
-                const finalData = await finalRes.json();
-                finalResponseText = finalData.choices?.[0]?.message?.content || '';
-                log(`✅ LLM formulated response length: ${finalResponseText.length}`);
-            }
+            const { data } = await callLLMWithFailover(config, messages, false, log);
+            finalResponseText = (data?.choices?.[0]?.message?.content || '').trim();
         } catch (e: any) {
-            log(`❌ LLM synthesis call error: ${e.message}`);
+            log(`❌ Final synthesis call error: ${e?.message}`);
         }
     }
 
     return {
-        text: finalResponseText,
+        text: finalResponseText || 'Ik kon geen antwoord genereren. Probeer het nog eens.',
         actions: actionsTaken,
         language: options.language || 'nl',
         confidence: 1.0,

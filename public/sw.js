@@ -1,61 +1,45 @@
-const CACHE_NAME = 'ha-ai-v1'
+const CACHE_NAME = 'butler-v2';
 const urlsToCache = [
   '/',
   '/index.html',
   '/manifest.json',
-]
+];
 
-// Install event: cache basisbestanden
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(urlsToCache).catch(() => {
-        // Offline first, don't fail if some resources aren't available
-        return Promise.resolve()
-      })
-    })
-  )
-  self.skipWaiting()
-})
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(urlsToCache).catch(() => Promise.resolve()))
+  );
+  self.skipWaiting();
+});
 
-// Activate event: oude caches opruimen
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName)
-          }
-        })
-      )
-    })
-  )
-  self.clients.claim()
-})
+    caches.keys().then((cacheNames) =>
+      Promise.all(cacheNames.map((name) => (name !== CACHE_NAME ? caches.delete(name) : Promise.resolve())))
+    )
+  );
+  self.clients.claim();
+});
 
-// Fetch event: network-first strategy
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') {
-    return
-  }
+  if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+  // Only cache same-origin static assets; NEVER cache cross-origin API calls (HA/Supabase/Gemini/OpenRouter)
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/functions/')) return;
 
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        const responseClone = response.clone()
-        // ✅ Alleen http(s) requests cachen, geen chrome-extension://
-        if (event.request.url.startsWith('http')) {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone)
-          })
+        if (response.ok && response.type === 'basic') {
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
         }
-        return response
+        return response;
       })
-      .catch(() => {
-        return caches.match(event.request).then((response) => {
-          return response || new Response('Offline', { status: 503 })
-        })
-      })
-  )
-})
+      .catch(() =>
+        caches.match(event.request).then((cached) => cached || new Response('Offline', { status: 503 }))
+      )
+  );
+});

@@ -80,7 +80,7 @@ export async function getCurrentWeather(lat: number, lon: number, lang: string =
                     humidity: data.main.humidity,
                     description: data.weather[0].description,
                     icon: data.weather[0].icon,
-                    wind_speed: data.wind.speed
+                    wind_speed: Math.round((data.wind?.speed || 0) * 3.6)
                 };
             }
         } catch {

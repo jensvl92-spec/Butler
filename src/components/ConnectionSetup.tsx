@@ -2,8 +2,7 @@ import React, { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useApp } from '../lib/AppContext'
 import { processHASync } from '../utils/ha-api'
-
-// @ts-ignore
+import { normalizeHAUrl, sanitizeHAToken, fetchWithTimeout } from '../utils/home-assistant'
 import { logger } from '../utils/logger'
 
 interface ConnectionSetupProps {
@@ -21,73 +20,57 @@ export function ConnectionSetup({ onConnectionAdded }: ConnectionSetupProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    if (!user?.id) {
+      setError('Je bent niet ingelogd. Log eerst opnieuw in.')
+      return
+    }
+
     setLoading(true)
 
     try {
-      // Trim whitespace and handle full browser URLs
-      let cleanUrl = apiUrl.trim()
-      // Auto-prefix http:// if omitted for Tailscale IPs (100.x) or domain names
-      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-        cleanUrl = 'http://' + cleanUrl
+      let rawUrl = apiUrl.trim()
+      if (!/^https?:\/\//i.test(rawUrl)) {
+        rawUrl = 'http://' + rawUrl
       }
-      try {
-        const urlObj = new URL(cleanUrl)
-        // FORCE the URL to be just protocol + host + port
-        // This strips /config/dashboard, /lovelace, etc. automatically
-        cleanUrl = urlObj.origin
-      } catch (e) {
-        // Invalid URL, keep input
+      const cleanUrl = normalizeHAUrl(rawUrl)
+      const trimmedToken = sanitizeHAToken(apiToken)
+
+      if (!trimmedToken) {
+        throw new Error('Vul een geldige Long-Lived Access Token in.')
       }
 
-      // SMART TOKEN EXTRACTION
-      // Users often copy labels like "Token: eyJ..." or "Long-Lived Access Token: eyJ..."
-      // HA tokens are JWTs starting with 'eyJ' and are ~183 chars
-      // Extract just the token part using regex
-      const jwtMatch = apiToken.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)
-      const extractedToken = jwtMatch ? jwtMatch[0] : apiToken
-
-      // Then sanitize: remove ALL whitespace and non-ASCII
-      const trimmedToken = extractedToken.replace(/\s/g, '').replace(/[^\x00-\x7F]/g, "")
-
-      // Note: We skip the connection test here because direct browser requests 
-      // to Home Assistant fail due to CORS. The connection will be validated 
-      // when actually used through the Vite proxy.
-
-      // VERIFY AUTHENTICATION (Pre-flight)
+      // Pre-flight check with 8s timeout
       try {
         logger.info(`Testing Connection: ${cleanUrl}`)
-        const testRes = await fetch(`${cleanUrl}/api/`, {
+        const testRes = await fetchWithTimeout(`${cleanUrl}/api/`, {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${trimmedToken}`,
+            Authorization: `Bearer ${trimmedToken}`,
             'Content-Type': 'application/json'
           }
-        })
+        }, 8000)
 
-        if (testRes.status === 401) {
-          throw new Error('❌ Authentication Failed: Invalid Token. Please verify your Long-Lived Access Token.')
+        if (testRes.status === 401 || testRes.status === 403) {
+          throw new Error('❌ Authenticatie mislukt (401/403): ongeldige Long-Lived Access Token.')
         }
 
-        if (testRes.ok) {
-          logger.info('✅ Connection Verified!')
+        if (!testRes.ok) {
+          throw new Error(`❌ Home Assistant gaf foutstatus HTTP ${testRes.status}. Controleer de URL.`)
         }
+
+        logger.info('✅ Connection Verified!')
       } catch (testErr: any) {
-        // ERROR HANDLING UPGRADE:
-        if (testErr.message.includes('Authentication Failed')) {
+        if (testErr?.message?.includes('❌')) {
           throw testErr
         }
-
-        // 2. Network / DNS / Host Unreachable Error
-        logger.warn('Connection Test Failed (non-fatal):', testErr)
-        // LEGACY BEHAVIOR RESTORED:
-        if (confirm('Connection test failed (possibly due to CORS or local network). Save anyway?')) {
-          // proceed
-        } else {
-          throw new Error(`❌ Network Error: Could not reach server. \nCheck: \n1. Is your phone on the same WiFi? \n2. Does your router block loopback? (Try 192.168.x.x) \n3. Is the URL correct?`)
+        logger.warn('Connection Test Failed:', testErr)
+        const proceed = window.confirm('Verbindingstest mislukt (mogelijk CORS of lokaal netwerk). Toch opslaan?')
+        if (!proceed) {
+          throw new Error('❌ Kon Home Assistant niet bereiken. Controleer WiFi/Tailscale en URL.')
         }
       }
 
-      // Save connection to database
       const { data, error: dbError } = await supabase
         .from('ha_connections')
         .insert({
@@ -98,57 +81,61 @@ export function ConnectionSetup({ onConnectionAdded }: ConnectionSetupProps) {
         })
         .select()
 
-      if (dbError) {
+      if (dbError || !data || data.length === 0) {
         logger.error('Failed to insert connection', dbError)
-        throw dbError
+        throw dbError || new Error('Kon verbinding niet opslaan.')
       }
 
       addConnection(data[0])
 
-      // 🔄 Trigger Initial Sync
+      // Trigger Initial Sync (writes Dashboard-compatible deviceGroups tiles!)
+      let hadCorsError = false
       try {
         await processHASync(data[0].id, cleanUrl, trimmedToken, user.id)
       } catch (syncErr: any) {
-        // Check for likely CORS error (TypeError: Failed to fetch is the standard CORS error message in Chrome)
         if (syncErr instanceof TypeError && syncErr.message === 'Failed to fetch') {
-          setError(`Connection saved, but HA refused connection (CORS). Please add "${window.location.origin}" to your HA configuration.yaml (http: cors_allowed_origins).`)
-          logger.warn('Initial Sync CORS Error', { origin: window.location.origin })
+          hadCorsError = true
+          setError(`Verbinding opgeslagen, maar Home Assistant weigerde directe sync (CORS). Voeg "${window.location.origin}" toe aan cors_allowed_origins in configuration.yaml.`)
         } else {
           logger.error('Initial sync failed', syncErr)
         }
       }
 
-      setName('')
-      setApiUrl('')
-      setApiToken('')
-      onConnectionAdded()
+      if (!hadCorsError) {
+        setName('')
+        setApiUrl('')
+        setApiToken('')
+        onConnectionAdded()
+      }
     } catch (err: any) {
-      const msg = err instanceof Error ? err.message : 'An error occurred'
+      const msg = err instanceof Error ? err.message : 'Er trad een fout op'
       setError(msg)
-      logger.error('Connection Setup Failed', { error: msg, stack: err.stack })
+      logger.error('Connection Setup Failed', { error: msg })
     } finally {
       setLoading(false)
     }
   }
+
+  const isTailscale = /(^|\/\/)100\./.test(apiUrl) || apiUrl.includes('.ts.net')
 
   return (
     <div className="setup-container">
       <form onSubmit={handleSubmit}>
         <input
           type="text"
-          placeholder="Connection Name"
+          placeholder="Naam verbinding (bv. Thuis)"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
         />
         <input
           type="text"
-          placeholder="Home Assistant URL (bv. http://100.x.y.z:8123 of http://192.168.1.x:8123)"
+          placeholder="Home Assistant URL (bv. http://100.x.y.z:8123 of https://ha.mijndomein.be)"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           required
         />
-        {(apiUrl.includes('100.') || apiUrl.includes('.ts.net')) && (
+        {isTailscale && (
           <p style={{ color: '#10b981', fontSize: '0.8rem', marginTop: '4px' }}>
             🛡️ <b>Tailscale gedetecteerd:</b> Zorg dat de Tailscale VPN-app op deze telefoon verbonden is.
           </p>
@@ -166,10 +153,10 @@ export function ConnectionSetup({ onConnectionAdded }: ConnectionSetupProps) {
           required
         />
         <button type="submit" disabled={loading}>
-          {loading ? 'Connecting...' : 'Connect'}
+          {loading ? 'Verbinden...' : 'Verbinden'}
         </button>
       </form>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" style={{ marginTop: '10px' }}>{error}</p>}
     </div>
   )
 }

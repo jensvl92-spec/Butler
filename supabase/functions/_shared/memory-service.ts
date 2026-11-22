@@ -27,20 +27,28 @@ export interface DynamicWorkingContext {
     }>;
 }
 
-/**
- * Determine season from date and latitude (defaulting to Northern Hemisphere)
- */
 function getSeason(date: Date): string {
-    const month = date.getMonth(); // 0-11
+    const month = date.getMonth();
     if (month >= 2 && month <= 4) return 'lente';
     if (month >= 5 && month <= 7) return 'zomer';
     if (month >= 8 && month <= 10) return 'herfst';
     return 'winter';
 }
 
-/**
- * Determine time of day in Dutch
- */
+function getLocalHour(date: Date, timezone: string): number {
+    try {
+        const hourStr = new Intl.DateTimeFormat('en-GB', {
+            timeZone: timezone,
+            hour: '2-digit',
+            hour12: false
+        }).format(date);
+        const h = parseInt(hourStr, 10);
+        return Number.isFinite(h) ? h % 24 : date.getUTCHours();
+    } catch {
+        return date.getUTCHours();
+    }
+}
+
 function getTimeOfDay(hours: number): 'ochtend' | 'middag' | 'avond' | 'nacht' {
     if (hours >= 6 && hours < 12) return 'ochtend';
     if (hours >= 12 && hours < 18) return 'middag';
@@ -48,11 +56,6 @@ function getTimeOfDay(hours: number): 'ochtend' | 'middag' | 'avond' | 'nacht' {
     return 'nacht';
 }
 
-/**
- * Build State-of-the-Art Dynamic Working Context (Tier 1 + Tier 2)
- * Live from Home Assistant topology, client payload, and persistent memory table.
- * NO HARDCODED STRINGS (no fake "Amsterdam" persona).
- */
 export async function buildDynamicWorkingContext(
     supabase: any,
     connectionId: string,
@@ -100,14 +103,20 @@ export async function buildDynamicWorkingContext(
         return ['light', 'switch', 'climate', 'media_player', 'cover'].includes(domain) && d.state && d.state !== 'unavailable' && d.state !== 'off';
     }).length;
 
-    // 4. Load Explicit Core Memory Blocks (Tier 2) from database
+    // 4. Load Explicit Core Memory Blocks (Tenant-scoped by connection_id)
     let coreMemories: Array<{ id: string; type: string; content: string }> = [];
     try {
-        const { data, error } = await supabase
+        let query = supabase
             .from('memories')
             .select('id, type, content, metadata')
             .order('created_at', { ascending: false })
             .limit(15);
+
+        if (connectionId) {
+            query = query.eq('connection_id', connectionId);
+        }
+
+        const { data, error } = await query;
 
         if (!error && data) {
             coreMemories = data.map((row: any) => ({
@@ -120,6 +129,8 @@ export async function buildDynamicWorkingContext(
         console.warn('[Memory] Failed to load explicit core memories:', e);
     }
 
+    const localHour = getLocalHour(now, timezone);
+
     return {
         userPersona: {
             name: 'Eigenaar',
@@ -130,7 +141,7 @@ export async function buildDynamicWorkingContext(
         homeState: {
             currentTime: now.toLocaleString('nl-NL', { timeZone: timezone }),
             season: getSeason(now),
-            timeOfDay: getTimeOfDay(now.getHours()),
+            timeOfDay: getTimeOfDay(localHour),
             presenceSummary,
             activeDevicesCount: activeControllable
         },
@@ -138,9 +149,6 @@ export async function buildDynamicWorkingContext(
     };
 }
 
-/**
- * Render Working Context into authoritative system prompt block
- */
 export function formatWorkingMemoryPrompt(context: DynamicWorkingContext): string {
     const locStr = context.userPersona.location
         ? `${context.userPersona.location.lat.toFixed(4)}, ${context.userPersona.location.lon.toFixed(4)}${context.userPersona.location.name ? ` (${context.userPersona.location.name})` : ''}`
@@ -163,31 +171,29 @@ ${memoryBlocks}
 `.trim();
 }
 
-/**
- * Save an explicit Core Memory fact (Preference, Household fact, Routine rule)
- */
 export async function saveCoreMemory(
     supabase: any,
     content: string,
     type: 'preference' | 'household' | 'routine' | 'rule' = 'preference',
-    metadata: Record<string, any> = {}
+    metadata: Record<string, any> = {},
+    connectionId?: string
 ): Promise<{ success: boolean; id?: string }> {
+    if (!content || !content.trim()) return { success: false };
     try {
         let embedding: number[] | null = null;
         try {
             embedding = await createEmbedding(content);
         } catch {
-            // embedding is optional if offline/fails
+            // optional
         }
 
         const payload: any = {
-            content,
+            content: content.trim(),
             type,
             metadata
         };
-        if (embedding) {
-            payload.embedding = embedding;
-        }
+        if (connectionId) payload.connection_id = connectionId;
+        if (embedding) payload.embedding = embedding;
 
         const { data, error } = await supabase
             .from('memories')
@@ -206,18 +212,33 @@ export async function saveCoreMemory(
     }
 }
 
-/**
- * Delete a Core Memory fact by ID or text match
- */
-export async function deleteCoreMemory(supabase: any, memoryIdOrText: string): Promise<boolean> {
+export async function deleteCoreMemory(
+    supabase: any,
+    memoryIdOrText: string,
+    connectionId?: string
+): Promise<boolean> {
+    const trimmed = (memoryIdOrText || '').trim();
+    if (!trimmed) return false;
+
     try {
-        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(memoryIdOrText);
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
         if (isUUID) {
-            const { error } = await supabase.from('memories').delete().eq('id', memoryIdOrText);
+            let query = supabase.from('memories').delete().eq('id', trimmed);
+            if (connectionId) query = query.eq('connection_id', connectionId);
+            const { error } = await query;
             return !error;
         }
-        // Delete by content match
-        const { error } = await supabase.from('memories').delete().ilike('content', `%${memoryIdOrText}%`);
+
+        // Guard against wildcard or overly short deletes that would wipe all memories
+        const sanitized = trimmed.replace(/[%_*]/g, '').trim();
+        if (sanitized.length < 3) {
+            console.warn('[Memory] Refusing overly broad memory delete pattern');
+            return false;
+        }
+
+        let query = supabase.from('memories').delete().ilike('content', `%${sanitized}%`);
+        if (connectionId) query = query.eq('connection_id', connectionId);
+        const { error } = await query;
         return !error;
     } catch (e) {
         console.error('[Memory] Delete exception:', e);
@@ -225,10 +246,7 @@ export async function deleteCoreMemory(supabase: any, memoryIdOrText: string): P
     }
 }
 
-/**
- * Semantic Vector Search (Tier 4 Archival Memory)
- */
-export async function retrieveMemories(query: string, supabase: any): Promise<string> {
+export async function retrieveMemories(query: string, supabase: any, connectionId?: string): Promise<string> {
     try {
         const embedding = await createEmbedding(query);
         if (!embedding) return '';
@@ -238,7 +256,10 @@ export async function retrieveMemories(query: string, supabase: any): Promise<st
             match_count: 5
         });
         if (memories && memories.length > 0) {
-            return memories.map((m: any) => `- ${m.content}`).join('\n');
+            const scoped = connectionId
+                ? memories.filter((m: any) => !m.connection_id || m.connection_id === connectionId)
+                : memories;
+            return scoped.map((m: any) => `- ${m.content}`).join('\n');
         }
     } catch {
         /* ignore */
@@ -246,23 +267,13 @@ export async function retrieveMemories(query: string, supabase: any): Promise<st
     return '';
 }
 
-/**
- * Save chat history with resilient schema mapping
- */
 export async function saveChatHistory(req: any, res: any, actions: any[], supabase: any) {
     try {
-        const safeRes = {
-            text: res.text || '',
-            actions: res.actions || [],
-            scheduled_actions: res.scheduled_actions || [],
-            language: res.language || req.language
-        };
-
         const payload = {
             connection_id: req.connection_id,
             user_message: req.user_message,
-            ai_response: JSON.stringify(safeRes),
-            actions_taken: actions,
+            ai_response: typeof res?.text === 'string' ? res.text : JSON.stringify(res || ''),
+            actions_taken: actions || [],
             language: req.language || 'nl-BE'
         };
 

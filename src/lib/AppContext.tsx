@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react'
 import { supabase } from './supabase'
 import { HAConnection, Room, UIState, ChatMessage, Suggestion } from '../types'
 import { HAWebSocket } from '../utils/ha-websocket'
 import { Preferences } from '@capacitor/preferences'
 import { syncGoogleTokens } from '../utils/auth'
-
-
+import { buildHAUrl, sanitizeHAToken, fetchWithTimeout } from '../utils/home-assistant'
+import { clearPushTokenForConnection } from '../utils/pushNotifications'
 
 interface AppContextType {
   user: any
@@ -15,21 +15,20 @@ interface AppContextType {
   rooms: Room[]
   chatHistory: ChatMessage[]
   uiState: UIState
-  entityStates: Record<string, any> // Store live HA states
+  entityStates: Record<string, any>
   haWebSocket: HAWebSocket | null
-  // Registries
   haAreas: any[]
   haDevices: any[]
   haEntitiesRegistry: any[]
 
   activeSuggestion: Suggestion | null
-  setActiveSuggestion: (suggestion: Suggestion | null) => void // Shared setter
+  setActiveSuggestion: (suggestion: Suggestion | null) => void
   setActiveConnection: (conn: HAConnection | null) => void
   addConnection: (conn: HAConnection) => void
-  deleteConnection: (id: string) => void
+  deleteConnection: (id: string) => Promise<void>
   addRoom: (room: Room) => void
-  deleteRoom: (id: string) => void
-  updateRoom: (room: Room) => void
+  deleteRoom: (id: string) => Promise<void>
+  updateRoom: (room: Room) => Promise<void>
   updateUIState: (state: Partial<UIState>) => void
   addChatMessage: (msg: ChatMessage) => void
   shouldTriggerVoice: boolean
@@ -46,326 +45,379 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [rooms, setRooms] = useState<Room[]>([])
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
   const [uiState, setUIState] = useState<UIState>({
-    language: navigator.language || 'en-US',
+    language: navigator.language || 'nl-BE',
     labels: {},
     placeholders: {},
     messages: {},
   })
   const [entityStates, setEntityStates] = useState<Record<string, any>>({})
-  // HA Data
   const [haWebSocket, setHaWebSocket] = useState<HAWebSocket | null>(null)
   const [haAreas, setHaAreas] = useState<any[]>([])
   const [haDevices, setHaDevices] = useState<any[]>([])
   const [haEntitiesRegistry, setHaEntitiesRegistry] = useState<any[]>([])
-
   const [activeSuggestion, setActiveSuggestion] = useState<Suggestion | null>(null)
+  const [shouldTriggerVoice, setShouldTriggerVoice] = useState(false)
 
+  // Auth lifecycle
   useEffect(() => {
+    let mounted = true
     const loadUser = async () => {
-      const { data } = await supabase.auth.getSession()
-      setUser(data?.session?.user || null)
-      if (data?.session) syncGoogleTokens(data.session)
-      setLoading(false)
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (!mounted) return
+        setUser(data?.session?.user || null)
+        if (data?.session?.provider_token) {
+          syncGoogleTokens(data.session).catch(() => {})
+        }
+      } catch (e) {
+        console.error('Failed to load session:', e)
+        if (mounted) setUser(null)
+      } finally {
+        if (mounted) setLoading(false)
+      }
     }
 
     loadUser()
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+    } = supabase.auth.onAuthStateChange((event: string, session: any) => {
+      if (!mounted) return
       setUser(session?.user || null)
-      if (session) syncGoogleTokens(session)
+
+      if (event === 'SIGNED_OUT' || !session?.user) {
+        // Full teardown to prevent cross-user state/token leakage on shared devices
+        setConnections([])
+        setActiveConnection(null)
+        setRooms([])
+        setChatHistory([])
+        setEntityStates({})
+        setHaAreas([])
+        setHaDevices([])
+        setHaEntitiesRegistry([])
+        setActiveSuggestion(null)
+        Preferences.remove({ key: 'ButlerWidget.ha_url' }).catch(() => {})
+        Preferences.remove({ key: 'ButlerWidget.ha_token' }).catch(() => {})
+      } else if (session?.provider_token) {
+        syncGoogleTokens(session).catch(() => {})
+      }
     })
 
-    return () => subscription?.unsubscribe()
+    return () => {
+      mounted = false
+      subscription?.unsubscribe()
+    }
   }, [])
 
+  // Load user's HA connections
   useEffect(() => {
-    if (!user) return
+    if (!user?.id) {
+      setConnections([])
+      return
+    }
 
+    let cancelled = false
     const loadConnections = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('ha_connections')
         .select('*')
         .eq('user_id', user.id)
 
+      if (cancelled) return
+      if (error) {
+        console.error('❌ Failed to load connections:', error)
+        return
+      }
       setConnections(data || [])
     }
 
     loadConnections()
-  }, [user])
+    return () => { cancelled = true }
+  }, [user?.id])
 
+  const activeConnectionId = activeConnection?.id || null
+  const activeApiUrl = activeConnection?.api_url || ''
+  const activeApiToken = activeConnection?.api_token || (activeConnection as any)?.token || ''
+
+  // Active connection lifecycle: cache hydration, REST states, Rooms, and WebSocket
   useEffect(() => {
-    if (!activeConnection) {
+    if (!activeConnectionId) {
       setRooms([])
       setEntityStates({})
+      setHaWebSocket(null)
+      setHaAreas([])
+      setHaDevices([])
+      setHaEntitiesRegistry([])
+      setActiveSuggestion(null)
       return
     }
+
+    let isCancelled = false
+    let ws: HAWebSocket | null = null
+    let syncTimer: ReturnType<typeof setTimeout> | null = null
 
     // Sync HA credentials to native widget SharedPreferences
     const syncWidgetCredentials = async () => {
       try {
-        await Preferences.set({ key: 'ButlerWidget.ha_url', value: activeConnection.api_url });
-        await Preferences.set({ key: 'ButlerWidget.ha_token', value: activeConnection.api_token });
-        console.log('📱 Widget credentials synced');
-      } catch (e) {
-        // Preferences not available (web mode) - safe to ignore
+        await Preferences.set({ key: 'ButlerWidget.ha_url', value: activeApiUrl })
+        await Preferences.set({ key: 'ButlerWidget.ha_token', value: sanitizeHAToken(activeApiToken) })
+      } catch {
+        // Safe to ignore in web mode
       }
-    };
-    syncWidgetCredentials();
+    }
+    syncWidgetCredentials()
 
-    // 0. Instantly populate entityStates from local cache so app never starts with 0 devices
+    // 0. Instant hydration from connection-scoped local cache
     try {
-      const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnection.id}`);
+      const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnectionId}`)
       if (cachedStatesRaw) {
-        setEntityStates(JSON.parse(cachedStatesRaw));
+        const parsed = JSON.parse(cachedStatesRaw)
+        if (parsed && typeof parsed === 'object') {
+          setEntityStates(parsed)
+        }
       } else {
-        const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`) || localStorage.getItem('dashboard-tiles');
+        const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnectionId}`)
         if (cachedTilesRaw) {
-          const tiles = JSON.parse(cachedTilesRaw);
-          const initialObj: Record<string, any> = {};
-          tiles.forEach((t: any) => {
-            if (Array.isArray(t.devices)) {
-              t.devices.forEach((d: any) => {
-                if (d.entity_id) initialObj[d.entity_id] = d;
-              });
-            }
-          });
+          const tiles = JSON.parse(cachedTilesRaw)
+          const initialObj: Record<string, any> = {}
+          if (Array.isArray(tiles)) {
+            tiles.forEach((t: any) => {
+              if (Array.isArray(t.deviceGroups)) {
+                t.deviceGroups.forEach((g: any) => {
+                  (g.entities || []).forEach((d: any) => {
+                    const eid = d.entityId || d.entity_id
+                    if (eid) initialObj[eid] = { entity_id: eid, state: 'unknown', attributes: { friendly_name: d.name } }
+                  })
+                })
+              } else if (Array.isArray(t.devices)) {
+                t.devices.forEach((d: any) => {
+                  const eid = d.entityId || d.entity_id
+                  if (eid) initialObj[eid] = { entity_id: eid, state: d.state || 'unknown', attributes: { friendly_name: d.name } }
+                })
+              }
+            })
+          }
           if (Object.keys(initialObj).length > 0) {
-            setEntityStates(initialObj);
+            setEntityStates(initialObj)
           }
         }
       }
     } catch { }
 
-    // Fast background REST states fetch (ensures entities exist even if WebSocket is connecting/lagging)
+    // 1. Fresh REST states fetch — fresh states MUST override stale cache!
     const fetchStatesViaRest = async () => {
-      const apiUrl = activeConnection.api_url;
-      const apiToken = activeConnection.api_token || (activeConnection as any).token;
-      if (!apiUrl || !apiToken) return;
+      if (!activeApiUrl || !activeApiToken) return
       try {
-        const cleanUrl = apiUrl.replace(/\/+$/, '');
-        const res = await fetch(`${cleanUrl}/api/states`, {
+        const res = await fetchWithTimeout(buildHAUrl('/api/states', activeApiUrl), {
           headers: {
-            'Authorization': `Bearer ${apiToken}`,
+            Authorization: `Bearer ${sanitizeHAToken(activeApiToken)}`,
             'Content-Type': 'application/json'
           }
-        });
-        if (res.ok) {
-          const states = await res.json();
-          if (Array.isArray(states) && states.length > 0) {
-            const statesObj: Record<string, any> = {};
-            states.forEach((s: any) => {
-              statesObj[s.entity_id] = s;
-            });
-            setEntityStates(prev => ({ ...statesObj, ...prev }));
-            localStorage.setItem(`ha_entity_states_${activeConnection.id}`, JSON.stringify(statesObj));
-          }
-        }
-      } catch { }
-    };
-    fetchStatesViaRest();
+        }, 15000)
+        if (isCancelled || !res.ok) return
+        const states = await res.json()
+        if (isCancelled || !Array.isArray(states) || states.length === 0) return
 
+        const statesObj: Record<string, any> = {}
+        states.forEach((s: any) => {
+          if (s?.entity_id) statesObj[s.entity_id] = s
+        })
+        // Fresh states override old cache entries
+        setEntityStates(prev => ({ ...prev, ...statesObj }))
+        try {
+          localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
+        } catch { }
+      } catch { }
+    }
+    fetchStatesViaRest()
+
+    // 2. Load Supabase rooms
     const loadRooms = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('rooms')
         .select('*')
-        .eq('connection_id', activeConnection.id)
+        .eq('connection_id', activeConnectionId)
 
+      if (isCancelled) return
+      if (error) {
+        console.error('❌ Failed to load rooms:', error)
+        return
+      }
       setRooms(data || [])
     }
-
     loadRooms()
 
-    // 🔌 Initialize WebSocket
-    let ws: HAWebSocket | null = null;
-
+    // 3. Initialize WebSocket (with strict cancellation guard against React StrictMode / fast switches)
     const initWebSocket = async () => {
-      const { logger } = await import('../utils/logger'); // Dynamic import for safety
+      const { logger } = await import('../utils/logger')
+      if (isCancelled) return
 
-      // Define Fetch Data Logic
-      const fetchHAData = async () => {
-        if (!ws) return;
+      let stateQueue: Record<string, any> = {}
+      let isFlushing = false
+
+      const flushStateQueue = async () => {
+        if (isCancelled || isFlushing) return
+        const entries = Object.entries(stateQueue)
+        if (entries.length === 0) return
+
+        isFlushing = true
+        stateQueue = {}
+
+        // Send in controlled chunks to avoid startup edge-function storms
+        const chunkSize = 150
         try {
-          const { logger } = await import('../utils/logger');
-          logger.info('🔄 Fetching HA Data (States & Registries)...')
-          const [statesRes, areasRes, devicesRes, entitiesRes] = await Promise.all([
-            ws!.sendMessage({ type: 'get_states' }),
-            ws!.sendMessage({ type: 'config/area_registry/list' }),
-            ws!.sendMessage({ type: 'config/device_registry/list' }),
-            ws!.sendMessage({ type: 'config/entity_registry/list' })
-          ])
-
-          // 1. States
-          if (statesRes.success && Array.isArray(statesRes.result)) {
-            const statesObj: Record<string, any> = {}
-            statesRes.result.forEach((state: any) => {
-              statesObj[state.entity_id] = state;
-              // Force sync initial state to DB
-              queueStateUpdate(state.entity_id, state);
+          for (let i = 0; i < entries.length; i += chunkSize) {
+            if (isCancelled) break
+            const chunk = entries.slice(i, i + chunkSize).map(([entity_id, state]) => ({
+              entity_id,
+              state: state?.state,
+              attributes: state?.attributes
+            }))
+            const { error } = await supabase.functions.invoke('mcp-librarian/sync-states', {
+              body: {
+                connection_id: activeConnectionId,
+                states: chunk
+              }
             })
-            setEntityStates(statesObj)
-            try {
-              localStorage.setItem(`ha_entity_states_${activeConnection.id}`, JSON.stringify(statesObj));
-            } catch { }
-            logger.info(`✅ Loaded & Queued States: ${statesRes.result.length}`)
-          } else {
-            logger.warn('⚠️ Failed to get states:', statesRes)
+            if (error) console.warn('[StateSync] Sync Error:', error.message)
           }
-
-          // 2. Registries (Store in State)
-          if (areasRes.success) {
-            setHaAreas(areasRes.result);
-            logger.info(`✅ Loaded Areas: ${areasRes.result.length}`)
-          }
-
-          if (devicesRes.success) {
-            setHaDevices(devicesRes.result);
-            logger.info(`✅ Loaded Devices: ${devicesRes.result.length}`)
-          }
-
-          if (entitiesRes.success) {
-            setHaEntitiesRegistry(entitiesRes.result);
-            logger.info(`✅ Loaded Entities Reg: ${entitiesRes.result.length}`)
-          }
-
-          logger.info('✅ HA Metadata Loading Complete')
-
-        } catch (err: any) {
-          const { logger } = await import('../utils/logger');
-          logger.error('❌ Error fetching HA data:', { message: err.message })
+        } catch (e) {
+          console.warn('[StateSync] Failed to sync states:', e)
+        } finally {
+          isFlushing = false
         }
       }
 
-      // ==========================================
-      // STATE SYNC SERVICE (Batched Updates)
-      // ==========================================
-      let stateQueue: Record<string, any> = {};
-      let syncTimer: any = null;
-      let lastSyncTime = 0;
-
-      const flushStateQueue = async () => {
-        const queueSize = Object.keys(stateQueue).length;
-        if (queueSize === 0) return;
-
-        // Prepare batch
-        const statesToSync = Object.entries(stateQueue).map(([entity_id, state]) => ({
-          entity_id,
-          state: state.state,
-          attributes: state.attributes
-        }));
-
-        // Clear queue immediately to avoid duplicates (optimistic)
-        stateQueue = {};
-        lastSyncTime = Date.now();
-
-        try {
-          // const { logger } = await import('../utils/logger');
-          // console.log(`[StateSync] Flushing ${statesToSync.length} updates...`, statesToSync);
-          // logger.debug(`[StateSync] Flushing ${statesToSync.length} updates...`);
-
-          const { error } = await supabase.functions.invoke('mcp-librarian/sync-states', {
-            body: {
-              connection_id: activeConnection.id,
-              states: statesToSync
-            }
-          });
-
-          if (error) console.error('[StateSync] Sync Error:', error);
-
-        } catch (e) {
-          console.error('[StateSync] Failed to sync states:', e);
-          // Retry logic could be added here, but for now we skip to avoid jams
-        }
-      };
-
       const queueStateUpdate = (entityId: string, newState: any) => {
-        // Add to queue
-        stateQueue[entityId] = newState;
-
-        // If timer not running, start it
+        if (isCancelled) return
+        stateQueue[entityId] = newState
         if (!syncTimer) {
           syncTimer = setTimeout(() => {
-            syncTimer = null;
-            flushStateQueue();
-          }, 2000); // 2 second debounce/buffer
+            syncTimer = null
+            flushStateQueue()
+          }, 3000)
         }
+      }
 
-        // Force flush if queue gets too big (e.g. startup storm)
-        if (Object.keys(stateQueue).length > 50) {
-          if (syncTimer) clearTimeout(syncTimer);
-          syncTimer = null;
-          flushStateQueue();
+      const fetchHAData = async () => {
+        if (isCancelled || !ws) return
+        try {
+          logger.info('🔄 Fetching HA Data (States & Registries)...')
+          const [statesRes, areasRes, devicesRes, entitiesRes] = await Promise.all([
+            ws.sendMessage({ type: 'get_states' }),
+            ws.sendMessage({ type: 'config/area_registry/list' }),
+            ws.sendMessage({ type: 'config/device_registry/list' }),
+            ws.sendMessage({ type: 'config/entity_registry/list' })
+          ])
+
+          if (isCancelled) return
+
+          if (statesRes.success && Array.isArray(statesRes.result)) {
+            const statesObj: Record<string, any> = {}
+            statesRes.result.forEach((state: any) => {
+              if (state?.entity_id) statesObj[state.entity_id] = state
+            })
+            setEntityStates(statesObj)
+            try {
+              localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
+            } catch { }
+            logger.info(`✅ Loaded States via WS: ${statesRes.result.length}`)
+          }
+
+          if (areasRes.success && Array.isArray(areasRes.result)) {
+            setHaAreas(areasRes.result)
+          }
+          if (devicesRes.success && Array.isArray(devicesRes.result)) {
+            setHaDevices(devicesRes.result)
+          }
+          if (entitiesRes.success && Array.isArray(entitiesRes.result)) {
+            setHaEntitiesRegistry(entitiesRes.result)
+          }
+        } catch (err: any) {
+          if (!isCancelled) {
+            logger.error('❌ Error fetching HA data:', { message: err?.message || String(err) })
+          }
         }
-      };
+      }
 
-      // Clean up previous connection if any (though effect cleanup handles it)
-      // Pass fetchHAData as the onReady callback (4th arg)
-      ws = new HAWebSocket(activeConnection.api_url, activeConnection.api_token, (entityId, newState) => {
-        // 1. Update React UI
-        setEntityStates(prev => ({
-          ...prev,
-          [entityId]: newState
-        }));
+      const createdWs = new HAWebSocket(
+        activeApiUrl,
+        activeApiToken,
+        (entityId, newState) => {
+          if (isCancelled) return
+          setEntityStates(prev => ({
+            ...prev,
+            [entityId]: newState
+          }))
+          queueStateUpdate(entityId, newState)
+        },
+        fetchHAData
+      )
 
-        // 2. Queue for Cloud Sync
-        queueStateUpdate(entityId, newState);
-      }, fetchHAData)
+      if (isCancelled) {
+        createdWs.close()
+        return
+      }
 
-      ws.connect()
-        .then(async () => {
-          const { logger } = await import('../utils/logger');
-          logger.info('✅ AppContext WS Connected')
-          // fetchHAData is called automatically by onReady
+      ws = createdWs
+      setHaWebSocket(createdWs)
+
+      createdWs.connect()
+        .then(() => {
+          if (!isCancelled) logger.info('✅ AppContext WS Connected')
         })
         .catch(err => {
-          // For the catch block of connect():
-          console.error('❌ AppContext WS Error', err)
+          if (!isCancelled) console.warn('⚠️ AppContext WS initial connect error (REST fallback active):', err)
         })
-
-      setHaWebSocket(ws)
     }
 
-    initWebSocket();
+    initWebSocket()
 
     return () => {
-      if (ws) ws.close()
+      isCancelled = true
+      if (syncTimer) {
+        clearTimeout(syncTimer)
+        syncTimer = null
+      }
+      if (ws) {
+        ws.close()
+        ws = null
+      }
+      setHaWebSocket(null)
     }
-  }, [activeConnection])
+  }, [activeConnectionId, activeApiUrl, activeApiToken])
 
   // Load connection-specific Chat History
   useEffect(() => {
-    if (!activeConnection) {
+    if (!activeConnectionId) {
       setChatHistory([])
       return
     }
 
+    let cancelled = false
     const loadHistory = async () => {
-      console.log('🔄 Loading Chat History for:', activeConnection.id)
       const { data, error } = await supabase
         .from('chat_history')
         .select('*')
-        .eq('connection_id', activeConnection.id)
+        .eq('connection_id', activeConnectionId)
         .order('created_at', { ascending: false })
         .limit(50)
 
+      if (cancelled) return
       if (error) {
         console.error('❌ Error loading chat history:', error)
         return
       }
 
-      if (data) {
-        console.log(`✅ Loaded ${data.length} messages.`)
-        // Map DB format (json) to UI format (string)
-        const mapped: ChatMessage[] = data.reverse().map((d: any) => {
-          let aiText = "";
+      if (Array.isArray(data)) {
+        const mapped: ChatMessage[] = [...data].reverse().map((d: any) => {
+          let aiText = ''
           if (typeof d.ai_response === 'string') {
-            aiText = d.ai_response;
-          } else if (d.ai_response && d.ai_response.text) {
-            aiText = d.ai_response.text;
-          } else {
-            // Fallback for weird formats
-            aiText = JSON.stringify(d.ai_response || "");
+            aiText = d.ai_response
+          } else if (d.ai_response && typeof d.ai_response.text === 'string') {
+            aiText = d.ai_response.text
+          } else if (d.ai_response) {
+            aiText = JSON.stringify(d.ai_response)
           }
 
           return {
@@ -373,96 +425,105 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             connection_id: d.connection_id,
             user_message: d.user_message,
             ai_response: aiText,
-            language: d.metadata?.language || 'en',
+            language: d.language || d.metadata?.language || 'nl',
             actions_taken: d.actions_taken || [],
+            scheduled_actions: d.scheduled_actions || [],
             created_at: d.created_at
           }
         })
         setChatHistory(mapped)
-      } else {
-        console.warn('⚠️ No chat history found.')
       }
     }
 
     loadHistory()
-  }, [activeConnection])
+    return () => { cancelled = true }
+  }, [activeConnectionId])
 
+  const addConnection = useCallback((conn: HAConnection) => {
+    setConnections(prev => [...prev, conn])
+    setActiveConnection(conn)
+  }, [])
 
-
-
-
-
-  const addConnection = (conn: HAConnection) => {
-    setConnections([...connections, conn])
-  }
-
-  const deleteConnection = async (id: string) => {
-    await supabase.from('ha_connections').delete().eq('id', id)
-    setConnections(connections.filter((c) => c.id !== id))
-    if (activeConnection?.id === id) {
-      setActiveConnection(null)
+  const deleteConnection = useCallback(async (id: string) => {
+    await clearPushTokenForConnection(id)
+    const { error } = await supabase.from('ha_connections').delete().eq('id', id)
+    if (error) {
+      throw new Error(error.message)
     }
-  }
+    try {
+      localStorage.removeItem(`ha_entity_states_${id}`)
+      localStorage.removeItem(`dashboard_tiles_${id}`)
+      localStorage.removeItem(`ha_topology_${id}`)
+    } catch { }
+    setConnections(prev => prev.filter(c => c.id !== id))
+    setActiveConnection(prev => (prev?.id === id ? null : prev))
+  }, [])
 
-  const addRoom = (room: Room) => {
-    setRooms([...rooms, room])
-  }
+  const addRoom = useCallback((room: Room) => {
+    setRooms(prev => [...prev, room])
+  }, [])
 
-  const deleteRoom = async (id: string) => {
-    await supabase.from('rooms').delete().eq('id', id)
-    setRooms(rooms.filter((r) => r.id !== id))
-  }
+  const deleteRoom = useCallback(async (id: string) => {
+    const { error } = await supabase.from('rooms').delete().eq('id', id)
+    if (error) throw new Error(error.message)
+    setRooms(prev => prev.filter(r => r.id !== id))
+  }, [])
 
-  const updateRoom = async (room: Room) => {
-    await supabase.from('rooms').update(room).eq('id', room.id)
-    setRooms(rooms.map((r) => (r.id === room.id ? room : r)))
-  }
+  const updateRoom = useCallback(async (room: Room) => {
+    const { error } = await supabase
+      .from('rooms')
+      .update({ name: room.name, description: room.description })
+      .eq('id', room.id)
+    if (error) throw new Error(error.message)
+    setRooms(prev => prev.map(r => (r.id === room.id ? room : r)))
+  }, [])
 
-  const updateUIState = (state: Partial<UIState>) => {
-    setUIState((prev) => ({ ...prev, ...state }))
-  }
+  const updateUIState = useCallback((state: Partial<UIState>) => {
+    setUIState(prev => ({ ...prev, ...state }))
+  }, [])
 
-  const addChatMessage = (msg: ChatMessage) => {
-    setChatHistory([...chatHistory, msg])
-  }
+  const addChatMessage = useCallback((msg: ChatMessage) => {
+    setChatHistory(prev => [...prev, msg])
+  }, [])
 
-  // Voice Trigger State (Global)
-  const [shouldTriggerVoice, setShouldTriggerVoice] = useState(false)
+  const contextValue = useMemo<AppContextType>(() => ({
+    user,
+    loading,
+    connections,
+    activeConnection,
+    rooms,
+    chatHistory,
+    uiState,
+    entityStates,
+    haWebSocket,
+    haAreas,
+    haDevices,
+    haEntitiesRegistry,
+    activeSuggestion,
+    setActiveSuggestion,
+    setActiveConnection,
+    addConnection,
+    deleteConnection,
+    addRoom,
+    deleteRoom,
+    updateRoom,
+    updateUIState,
+    addChatMessage,
+    shouldTriggerVoice,
+    setShouldTriggerVoice,
+  }), [
+    user, loading, connections, activeConnection, rooms, chatHistory,
+    uiState, entityStates, haWebSocket, haAreas, haDevices, haEntitiesRegistry,
+    activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
+    updateRoom, updateUIState, addChatMessage, shouldTriggerVoice
+  ])
 
   return (
-    <AppContext.Provider
-      value={{
-        user,
-        loading,
-        connections,
-        activeConnection,
-        rooms,
-        chatHistory,
-        uiState,
-        entityStates,
-        haWebSocket,
-        haAreas,
-        haDevices,
-        haEntitiesRegistry,
-        activeSuggestion,
-        setActiveSuggestion,
-        setActiveConnection,
-        addConnection,
-        deleteConnection,
-        addRoom,
-        deleteRoom,
-        updateRoom,
-        updateUIState,
-        addChatMessage,
-        shouldTriggerVoice,
-        setShouldTriggerVoice,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   )
 }
-
 
 export function useApp() {
   const context = useContext(AppContext)

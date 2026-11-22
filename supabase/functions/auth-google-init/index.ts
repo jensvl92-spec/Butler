@@ -1,11 +1,11 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { signOAuthState, CORS_HEADERS } from "../_shared/auth.ts";
 
 const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID') || '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-// Scopes for Google APIs
-// NOTE: Google Keep API is enterprise-only, using Tasks API instead for note/task functionality
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/calendar.events',
@@ -14,38 +14,44 @@ const SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/drive.readonly',  // For listing files
-  'https://www.googleapis.com/auth/tasks'  // For task management (alternative to Keep)
+  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/tasks'
 ].join(' ');
 
 serve(async (req) => {
-  const url = new URL(req.url);
+  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
-  // Dynamic redirect URI based on where the function is running
+  const url = new URL(req.url);
+  const authHeader = (req.headers.get('Authorization') || '').trim();
+  const token = authHeader.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : (url.searchParams.get('access_token') || '').trim();
+
+  if (!token) {
+    return new Response('Unauthorized: user access_token required to start OAuth flow.', { status: 401 });
+  }
+
+  const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data?.user?.id) {
+    return new Response('Unauthorized: invalid or expired session token.', { status: 401 });
+  }
+
+  const state = await signOAuthState(data.user.id);
   const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/auth-google-callback`;
 
-  const requestedUserId = url.searchParams.get('user_id') || '';
-  // Generate state containing user_id if provided
-  const state = requestedUserId ? `${requestedUserId}:${crypto.randomUUID()}` : crypto.randomUUID();
-
-  // Construct Auth URL
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: GOOGLE_CLIENT_ID,
     scope: SCOPES,
     redirect_uri: REDIRECT_URI,
-    state: state,
-    access_type: 'offline', // CRITICAL for refresh tokens
-    prompt: 'consent',     // Force consent to ensure we get refresh token
+    state,
+    access_type: 'offline',
+    prompt: 'consent',
   });
 
-  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-
-  // Redirect user
   return new Response(null, {
     status: 302,
-    headers: {
-      'Location': googleAuthUrl,
-    },
+    headers: { 'Location': `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` },
   });
 });

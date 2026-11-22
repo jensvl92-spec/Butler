@@ -187,9 +187,10 @@ const GraphCard = React.memo(({ graph, data, onDelete, loading, error }: {
 export function Graphs({ onBack }: GraphsProps) {
     const { activeConnection } = useApp();
     const [graphs, setGraphs] = useState<GraphConfig[]>(() => {
-        const stored = localStorage.getItem(STORAGE_KEY);
         try {
-            return stored ? JSON.parse(stored) : [];
+            const stored = localStorage.getItem(STORAGE_KEY);
+            const parsed = stored ? JSON.parse(stored) : [];
+            return Array.isArray(parsed) ? parsed : [];
         } catch (e) {
             console.error('Failed to parse stored graphs:', e);
             return [];
@@ -199,17 +200,27 @@ export function Graphs({ onBack }: GraphsProps) {
     const [loading, setLoading] = useState<Record<string, boolean>>({});
     const [errors, setErrors] = useState<Record<string, string>>({});
 
+    // Stay in sync when a graph is created while Graphs view is already open
+    useEffect(() => {
+        const handleExternalUpdate = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (Array.isArray(detail)) {
+                setGraphs(detail);
+            }
+        };
+        window.addEventListener('butler-graphs-updated', handleExternalUpdate);
+        return () => window.removeEventListener('butler-graphs-updated', handleExternalUpdate);
+    }, []);
+
     // Save graphs to localStorage when they change
     useEffect(() => {
-        if (graphs.length > 0) {
+        try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(graphs));
-        } else {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(graphs));
-        }
+        } catch { }
     }, [graphs]);
 
     // Fetch HA history for a graph
-    const fetchGraphData = async (graph: GraphConfig) => {
+    const fetchGraphData = async (graph: GraphConfig, signal?: AbortSignal) => {
         if (!activeConnection) return;
 
         setLoading(prev => ({ ...prev, [graph.id]: true }));
@@ -217,78 +228,82 @@ export function Graphs({ onBack }: GraphsProps) {
 
         try {
             const now = new Date();
-            const startTime = new Date(now.getTime() - periodToMs[graph.period]);
-            const cleanUrl = new URL(activeConnection.api_url).origin;
+            const periodMs = periodToMs[graph.period] || periodToMs['24h'];
+            const startTime = new Date(now.getTime() - periodMs);
+            const cleanBase = (activeConnection.api_url || '').trim().replace(/\/+$/, '');
+            const token = (activeConnection.api_token || activeConnection.token || '').trim();
 
             const allSeriesData: Record<string, { x: number; y: number }[]> = {};
             let hasAnyData = false;
-            let failedEntities: string[] = [];
+            const failedEntities: string[] = [];
 
-            // Fetch history for each entity
             await Promise.all(graph.series.map(async (s) => {
                 try {
-                    const url = `${cleanUrl}/api/history/period/${startTime.toISOString()}?filter_entity_id=${s.entity_id}&end_time=${now.toISOString()}`;
+                    const url = `${cleanBase}/api/history/period/${encodeURIComponent(startTime.toISOString())}?filter_entity_id=${encodeURIComponent(s.entity_id)}&end_time=${encodeURIComponent(now.toISOString())}`;
 
                     const res = await fetch(url, {
-                        headers: { 'Authorization': `Bearer ${activeConnection.api_token}` }
+                        headers: { Authorization: `Bearer ${token}` },
+                        signal
                     });
 
                     if (!res.ok) {
-                        console.error(`Failed to fetch history for ${s.entity_id}: ${res.status}`);
                         failedEntities.push(s.entity_id);
                         allSeriesData[s.entity_id] = [];
                         return;
                     }
 
                     const data = await res.json();
-                    const history = data[0] || [];
+                    const history = Array.isArray(data?.[0]) ? data[0] : [];
 
-                    // Convert to chart format
                     const points = history
-                        .filter((p: any) => !isNaN(parseFloat(p.state)) && !isNaN(new Date(p.last_changed).getTime()))
+                        .filter((p: any) => !isNaN(Number(p.state)) && !isNaN(new Date(p.last_changed || p.last_updated).getTime()))
                         .map((p: any) => ({
-                            x: new Date(p.last_changed).getTime(),
-                            y: parseFloat(p.state)
+                            x: new Date(p.last_changed || p.last_updated).getTime(),
+                            y: Number(p.state)
                         }));
 
                     allSeriesData[s.entity_id] = points;
                     if (points.length > 0) hasAnyData = true;
-                } catch (e) {
-                    console.error(`Error fetching ${s.entity_id}:`, e);
+                } catch (e: any) {
+                    if (e?.name === 'AbortError') return;
                     failedEntities.push(s.entity_id);
                     allSeriesData[s.entity_id] = [];
                 }
             }));
 
+            if (signal?.aborted) return;
             setChartData(prev => ({ ...prev, [graph.id]: allSeriesData }));
 
             if (!hasAnyData) {
                 const msg = failedEntities.length > 0
-                    ? `Sensors not found: ${failedEntities.join(', ')}`
-                    : 'No data available for selected period';
+                    ? `Sensoren niet gevonden: ${failedEntities.join(', ')}`
+                    : 'Geen data beschikbaar voor deze periode';
                 setErrors(prev => ({ ...prev, [graph.id]: msg }));
             }
-        } catch (e) {
-            console.error('Failed to fetch graph data:', e);
-            setErrors(prev => ({ ...prev, [graph.id]: 'Failed to load data' }));
+        } catch (e: any) {
+            if (e?.name === 'AbortError') return;
+            setErrors(prev => ({ ...prev, [graph.id]: 'Kon grafiekdata niet laden' }));
         } finally {
-            setLoading(prev => ({ ...prev, [graph.id]: false }));
+            if (!signal?.aborted) {
+                setLoading(prev => ({ ...prev, [graph.id]: false }));
+            }
         }
     };
 
-    // Fetch data for all graphs on mount and when graphs change
-    useEffect(() => {
-        graphs.forEach(g => fetchGraphData(g));
-    }, [graphs.length, activeConnection]);
+    const graphSignature = graphs.map(g => `${g.id}:${g.period}`).join('|');
 
-    // Delete a graph
+    useEffect(() => {
+        const controller = new AbortController();
+        graphs.forEach(g => fetchGraphData(g, controller.signal));
+        return () => controller.abort();
+    }, [graphSignature, activeConnection?.id]);
+
     const deleteGraph = (id: string) => {
         setGraphs(prev => prev.filter(g => g.id !== id));
     };
 
     return (
         <div style={{ padding: '16px', minHeight: '100vh', background: 'var(--bg-primary)' }}>
-            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
                 <button
                     onClick={onBack}
@@ -301,15 +316,14 @@ export function Graphs({ onBack }: GraphsProps) {
                         cursor: 'pointer'
                     }}
                 >
-                    ← Back
+                    ← Terug
                 </button>
-                <h1 style={{ margin: 0, fontSize: '1.5rem' }}>📊 Graphs</h1>
+                <h1 style={{ margin: 0, fontSize: '1.5rem' }}>📊 Grafieken</h1>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                     ({graphs.length}/{MAX_GRAPHS})
                 </span>
             </div>
 
-            {/* Empty State */}
             {graphs.length === 0 && (
                 <div style={{
                     textAlign: 'center',
@@ -319,16 +333,14 @@ export function Graphs({ onBack }: GraphsProps) {
                     border: '1px solid var(--border)'
                 }}>
                     <div style={{ fontSize: '3rem', marginBottom: '16px' }}>📈</div>
-                    <h2 style={{ margin: '0 0 8px 0' }}>No Graphs Yet</h2>
+                    <h2 style={{ margin: '0 0 8px 0' }}>Nog geen grafieken</h2>
                     <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
-                        Ask Butler to create a graph, e.g.<br />
-                        <em>"Show me living room temperature for the last 3 days"</em>
+                        Vraag Butler om een grafiek te maken, bv.<br />
+                        <em>"Toon een grafiek van de woonkamertemperatuur van de laatste 24 uur"</em>
                     </p>
                 </div>
-            )
-            }
+            )}
 
-            {/* Graph Cards */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {graphs.map(graph => (
                     <GraphCard
@@ -340,7 +352,6 @@ export function Graphs({ onBack }: GraphsProps) {
                         error={errors[graph.id]}
                     />
                 ))}
-                {/* AIChat Section */}
                 <div style={{
                     marginTop: '24px',
                     background: 'var(--bg-card)',
@@ -354,14 +365,14 @@ export function Graphs({ onBack }: GraphsProps) {
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
                         <span style={{ fontSize: '1.2rem' }}>🤖</span>
-                        <h3 style={{ margin: 0, fontSize: '1rem' }}>Ask Butler about these graphs</h3>
+                        <h3 style={{ margin: 0, fontSize: '1rem' }}>Vraag Butler over deze grafieken</h3>
                     </div>
                     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                        <AIChat />
+                        <AIChat disableGlobalVoiceListeners />
                     </div>
                 </div>
             </div>
-        </div >
+        </div>
     );
 }
 

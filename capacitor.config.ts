@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.aiha.app',
-  appName: 'AIHA',
+  appName: 'Butler',
   webDir: 'dist',
   plugins: {
     CapacitorHttp: {
@@ -12,7 +12,6 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: 'https',
     cleartext: true,
-    allowNavigation: ['*']
   }
 };
 

@@ -43,12 +43,7 @@ export async function getDirections(
         try {
             return await tryLegacyDirectionsApi(origin, destination, mode, lang);
         } catch (legacyError: any) {
-            // Throw a combined error that helps the user
-            throw new Error(`Navigation failed.
-1. Routes API error: ${e.message}
-2. Directions API error: ${legacyError.message}
-
-Please ensure BOTH 'Routes API' and 'Directions API' are enabled in your Google Cloud Console for project 1043698090132.`);
+            throw new Error(`Navigation failed. Routes API: ${e.message}. Directions API: ${legacyError.message}`);
         }
     }
 }
@@ -61,7 +56,6 @@ async function tryRoutesApi(
 ): Promise<DirectionsResult> {
     const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
-    // Map travel modes
     const travelModeMap: Record<string, string> = {
         'driving': 'DRIVE',
         'walking': 'WALK',
@@ -74,14 +68,16 @@ async function tryRoutesApi(
         destination: { address: destination },
         travelMode: travelModeMap[mode] || 'DRIVE',
         routingPreference: mode === 'driving' ? 'TRAFFIC_AWARE' : 'ROUTING_PREFERENCE_UNSPECIFIED',
-        languageCode: lang === 'nl-BE' ? 'nl' : lang, // Handle specific dialects
+        languageCode: lang === 'nl-BE' ? 'nl' : lang,
         units: 'METRIC'
     };
 
-    // If origin is coordinates
-    if (origin.includes(',')) {
-        const [lat, lng] = origin.split(',').map(s => parseFloat(s.trim()));
-        if (!isNaN(lat) && !isNaN(lng)) {
+    // Only treat origin as coordinates when it strictly matches "lat,lng"
+    const coordMatch = origin.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
             payload.origin = {
                 location: {
                     latLng: { latitude: lat, longitude: lng }
@@ -107,22 +103,19 @@ async function tryRoutesApi(
     }
 
     const data = await response.json();
-
     if (!data.routes || !data.routes.length) throw new Error('No route found');
 
     const route = data.routes[0];
-
-    // Format distance and duration for backward compatibility
     const totalDistanceKm = (route.distanceMeters / 1000).toFixed(1);
-    const totalDurationSeconds = parseInt(route.duration.replace('s', ''));
+    const totalDurationSeconds = parseInt(String(route.duration || '0').replace('s', ''), 10);
     const totalDurationText = formatSeconds(totalDurationSeconds, lang);
 
     return {
-        origin: origin,
-        destination: destination,
+        origin,
+        destination,
         distance: `${totalDistanceKm} km`,
         duration: totalDurationText,
-        duration_in_traffic: totalDurationText, // Routes API with TRAFFIC_AWARE includes traffic in duration
+        duration_in_traffic: totalDurationText,
         steps: route.legs?.[0]?.steps?.map((step: any) => step.navigationInstruction?.instructions).filter(Boolean) || []
     };
 }
@@ -139,7 +132,7 @@ async function tryLegacyDirectionsApi(
     const response = await fetch(url);
     const data = await response.json();
 
-    if (data.status !== 'OK' || !data.routes.length) {
+    if (data.status !== 'OK' || !data.routes?.length) {
         throw new Error(`${data.status}: ${data.error_message || 'No route found'}`);
     }
 
@@ -154,9 +147,6 @@ async function tryLegacyDirectionsApi(
     };
 }
 
-/**
- * Format seconds to a readable string (e.g. "1 uur 30 min" or "45 min").
- */
 function formatSeconds(seconds: number, lang: string): string {
     const minutes = Math.round(seconds / 60);
     const hrs = Math.floor(minutes / 60);
@@ -171,9 +161,6 @@ function formatSeconds(seconds: number, lang: string): string {
     return `${mins} min`;
 }
 
-/**
- * Get just the ETA to a destination.
- */
 export async function getETA(
     origin: string,
     destination: string,
@@ -181,8 +168,6 @@ export async function getETA(
     lang: string = 'en'
 ): Promise<ETAResult> {
     const directions = await getDirections(origin, destination, mode, lang);
-
-    // Calculate arrival time
     const durationMinutes = parseDurationToMinutes(directions.duration_in_traffic || directions.duration);
     const arrivalTime = new Date(Date.now() + durationMinutes * 60 * 1000);
 
@@ -194,9 +179,6 @@ export async function getETA(
     };
 }
 
-/**
- * Get ETA from coordinates.
- */
 export async function getETAFromCoords(
     lat: number,
     lon: number,
@@ -207,19 +189,15 @@ export async function getETAFromCoords(
     return getETA(`${lat},${lon}`, destination, mode, lang);
 }
 
-/**
- * Parse duration string to minutes.
- */
 function parseDurationToMinutes(duration: string): number {
-    // Example: "1 hour 30 mins" or "45 mins"
     let minutes = 0;
-    const hourMatch = duration.match(/(\d+)\s*hour/i);
-    const minMatch = duration.match(/(\d+)\s*min/i);
+    const hourMatch = duration.match(/(\d+)\s*(hour|hr|uur|u\b)/i);
+    const minMatch = duration.match(/(\d+)\s*(min|m\b)/i);
 
-    if (hourMatch) minutes += parseInt(hourMatch[1]) * 60;
-    if (minMatch) minutes += parseInt(minMatch[1]);
+    if (hourMatch) minutes += parseInt(hourMatch[1], 10) * 60;
+    if (minMatch) minutes += parseInt(minMatch[1], 10);
 
-    return minutes || 30; // Default 30 min if parsing fails
+    return minutes || 30;
 }
 
 /**

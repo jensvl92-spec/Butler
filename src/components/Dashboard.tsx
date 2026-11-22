@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } f
 import { useApp } from '../lib/AppContext'
 import { logger } from '../utils/logger'
 import { callHAService } from '../utils/home-assistant'
-import { HADevice } from '../types'
+import { saveHAAutomation } from '../utils/ha-api'
 import './Dashboard.css' // Import new styles
 import { SuggestionPopup } from './SuggestionPopup'
 import { Suggestion } from '../types'
@@ -47,6 +47,32 @@ interface DashboardTile {
     deviceGroups: DeviceGroup[]
 }
 
+function normalizeStoredTiles(raw: any): DashboardTile[] {
+    if (!Array.isArray(raw)) return []
+    return raw.map((tile: any, idx: number) => {
+        if (Array.isArray(tile?.deviceGroups)) {
+            return { ...tile, order: typeof tile.order === 'number' ? tile.order : idx }
+        }
+        // Gracefully migrate legacy flat `tile.devices` into `deviceGroups`
+        const legacyDevices: RoomDevice[] = Array.isArray(tile?.devices) ? tile.devices : []
+        const deviceGroups: DeviceGroup[] = legacyDevices.map((d) => ({
+            id: `legacy-${d.id || d.entityId || Math.random().toString(36).slice(2)}`,
+            name: d.name || d.entityId || 'Device',
+            primaryEntity: d,
+            entities: [d]
+        }))
+        return {
+            id: tile?.id || `room-${idx}`,
+            type: tile?.type === 'add' ? 'add' : 'room',
+            roomId: tile?.roomId,
+            roomName: tile?.roomName || 'Room',
+            roomIcon: tile?.roomIcon || '🏠',
+            order: typeof tile?.order === 'number' ? tile.order : idx,
+            deviceGroups
+        }
+    })
+}
+
 const DEFAULT_TILES: DashboardTile[] = []
 
 const ROOM_ICONS: Record<string, string> = {
@@ -63,23 +89,20 @@ const DEVICE_TYPES = [
     { id: 'sensor', name: 'Sensor', icon: '👁️', description: 'Read-only sensors', domain: 'sensor' },
 ]
 
-export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
+export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
     const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry } = useApp()
-
-    console.log('[Dashboard] RENDER. ActiveConnection:', !!activeConnection, 'EntityCount:', Object.keys(entityStates).length);
 
     // State
     const [tiles, setTiles] = useState<DashboardTile[]>(DEFAULT_TILES)
-    const [editMode, setEditMode] = useState(false)
+    const [editMode] = useState(false)
     const [showAddRoomModal, setShowAddRoomModal] = useState(false)
     const [newRoomName, setNewRoomName] = useState('')
 
-    const [toastMsg, setToastMsg] = useState<string | null>(null) // NEW: Toast state
+    const [toastMsg, setToastMsg] = useState<string | null>(null)
     const [configTileId, setConfigTileId] = useState<string | null>(null)
     const [showDevicePicker, setShowDevicePicker] = useState(false)
     const [editingDevice, setEditingDevice] = useState<RoomDevice | null>(null)
     const [selectedEntityId, setSelectedEntityId] = useState('')
-
 
     // Detail Modal State
     const [detailTileId, setDetailTileId] = useState<string | null>(null)
@@ -89,10 +112,8 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
     // Suggestion State
     const [headerSuggestions, setHeaderSuggestions] = useState<Suggestion[]>([])
 
-
-
-    // Auto-Sync Ref
-    const hasSyncedRef = useRef(false)
+    // Track which connection's tiles are currently loaded to prevent cross-connection overwrite on switch
+    const loadedConnectionIdRef = useRef<string | null>(null)
 
     // Derived State
     const availableEntities = Object.entries(entityStates).map(([id, state]) => ({
@@ -104,17 +125,28 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
 
     // Load tiles on mount and Sync with DB Rooms
     useEffect(() => {
-        if (!activeConnection?.id) return
+        if (!activeConnection?.id) {
+            loadedConnectionIdRef.current = null
+            setTiles([])
+            return
+        }
 
         const stored = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`)
-        let localTiles: DashboardTile[] = stored ? JSON.parse(stored) : []
+        let localTiles: DashboardTile[] = []
+        if (stored) {
+            try {
+                localTiles = normalizeStoredTiles(JSON.parse(stored))
+            } catch (e) {
+                logger.warn('[Dashboard] Corrupted localStorage tiles, resetting', e)
+                localTiles = []
+            }
+        }
 
         if (rooms.length > 0) {
             const mergedTiles = [...localTiles]
             let changed = false
 
             rooms.forEach(dbRoom => {
-                // Check for existing by ID, roomId, OR roomName (normalized)
                 const normalizedDbName = dbRoom.name?.toLowerCase().trim()
                 const exists = mergedTiles.find(t =>
                     t.id === dbRoom.id ||
@@ -122,31 +154,28 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                     t.roomName?.toLowerCase().trim() === normalizedDbName
                 )
                 if (!exists) {
-                    // Create new tile for this DB room
                     mergedTiles.push({
-                        id: dbRoom.id, // Use DB ID
+                        id: dbRoom.id,
                         type: 'room',
                         roomId: dbRoom.id,
                         roomName: dbRoom.name,
                         roomIcon: Object.entries(ROOM_ICONS).find(([k]) => dbRoom.name.toLowerCase().includes(k))?.[1] || ROOM_ICONS.default,
                         order: mergedTiles.length,
-                        deviceGroups: [] // Empty initially
+                        deviceGroups: []
                     })
                     changed = true
                 }
             })
 
-            // Also deduplicate existing tiles by roomName (keep the one with more devices)
             const deduped: DashboardTile[] = []
-            const seenNames = new Map<string, number>() // name -> index in deduped
+            const seenNames = new Map<string, number>()
             mergedTiles.forEach(tile => {
                 const normName = tile.roomName?.toLowerCase().trim() || tile.id
                 if (seenNames.has(normName)) {
-                    // Duplicate found - keep the one with more deviceGroups
                     const existingIdx = seenNames.get(normName)!
                     const existing = deduped[existingIdx]
                     if ((tile.deviceGroups?.length || 0) > (existing.deviceGroups?.length || 0)) {
-                        deduped[existingIdx] = tile // Replace with the fuller one
+                        deduped[existingIdx] = tile
                         changed = true
                     }
                 } else {
@@ -158,7 +187,6 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             if (changed || (!stored && deduped.length > 0)) {
                 setTiles(deduped)
             } else if (stored && deduped.length !== mergedTiles.length) {
-                // Deduplication happened
                 setTiles(deduped)
             } else if (stored) {
                 setTiles(localTiles)
@@ -168,15 +196,17 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
         } else {
             setTiles([])
         }
-    }, [activeConnection, rooms])
+
+        loadedConnectionIdRef.current = activeConnection.id
+    }, [activeConnection?.id, rooms])
 
 
-    // Save tiles on change
+    // Save tiles on change (only after the active connection's tiles have loaded)
     useEffect(() => {
-        if (activeConnection?.id) {
+        if (activeConnection?.id && loadedConnectionIdRef.current === activeConnection.id) {
             localStorage.setItem(`dashboard_tiles_${activeConnection.id}`, JSON.stringify(tiles))
         }
-    }, [tiles, activeConnection])
+    }, [tiles, activeConnection?.id])
 
     // Load Pending Suggestions
     useEffect(() => {
@@ -189,45 +219,57 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                 .order('created_at', { ascending: false })
 
             if (data && data.length > 0) {
-                // @ts-ignore
-                setHeaderSuggestions(data)
+                setHeaderSuggestions(data as Suggestion[])
+            } else {
+                setHeaderSuggestions([])
             }
         }
         loadSuggestions()
-    }, [activeConnection])
+    }, [activeConnection?.id])
 
     const handleSuggestionAction = async (id: string, action: 'accept' | 'reject') => {
-        // Optimistic UI
         const target = headerSuggestions.find(s => s.id === id)
         setHeaderSuggestions(prev => prev.filter(s => s.id !== id))
 
-        if (action === 'accept' && target) {
-            // Execute the 'create_automation' action immediately (or schedule it)
-            // Ideally we call the backend to 'apply' it
+        if (action === 'accept' && target && activeConnection) {
             try {
-                // Determine if it's an automation create
-                const automationAction = target.actions.find((a: any) => a.type === 'create_automation')
-                if (automationAction) {
-                    // Insert into automations table
-                    const autoData = automationAction.data
-                    await supabase.from('automations').insert({
-                        connection_id: activeConnection?.id,
-                        alias: autoData.alias,
-                        description: autoData.description,
-                        trigger: autoData.trigger,
-                        action: autoData.action,
-                        mode: 'single'
-                    })
-                    setToastMsg(`✅ Automation "${autoData.alias}" Created!`)
+                const actions = Array.isArray(target.actions) ? target.actions : []
+                let applied = false
+
+                for (const act of actions) {
+                    const autoConfig = act.ha_automation || (act.type === 'create_automation' ? (act.data || act.config) : null)
+                    if (autoConfig && (autoConfig.alias || autoConfig.trigger || autoConfig.triggers)) {
+                        const result = await saveHAAutomation(
+                            activeConnection.api_url,
+                            activeConnection.api_token,
+                            { alias: target.title, mode: 'single', ...autoConfig }
+                        )
+                        if (!result.success) throw new Error(result.message || 'HA automation save failed')
+                        applied = true
+                    } else if (act.domain && act.service) {
+                        const svcData = act.data || (act.entity_id ? { entity_id: act.entity_id } : {})
+                        await callHAService(act.domain, act.service, svcData, activeConnection.api_url, activeConnection.api_token)
+                        applied = true
+                    }
                 }
-            } catch (e) {
-                console.error("Failed to apply suggestion", e)
-                setToastMsg("❌ Failed to apply suggestion")
+
+                if (applied) {
+                    setToastMsg(`✅ "${target.title}" uitgevoerd in Home Assistant!`)
+                    setTimeout(() => setToastMsg(null), 3000)
+                }
+            } catch (e: any) {
+                logger.error('Failed to apply suggestion', e)
+                setToastMsg(`❌ Kon voorstel niet uitvoeren: ${e?.message || 'Fout'}`)
+                setTimeout(() => setToastMsg(null), 4000)
+                return
             }
         }
 
-        // Update DB Status
-        await supabase.from('suggestions').update({ status: action === 'accept' ? 'accepted' : 'rejected' }).eq('id', id)
+        await supabase
+            .from('suggestions')
+            .update({ status: action === 'accept' ? 'accepted' : 'rejected' })
+            .eq('id', id)
+            .eq('connection_id', activeConnection?.id || '')
     }
 
     // --- Actions ---
@@ -470,8 +512,9 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                     const isLastBatch = batchIndex === totalBatches - 1;
 
                     // Determine sync_mode for accumulation
-                    let sync_mode: 'start' | 'append' | 'complete' = 'append';
-                    if (isFirstBatch) sync_mode = 'start';
+                    let sync_mode: 'start' | 'append' | 'complete' | 'replace' = 'append';
+                    if (totalBatches === 1) sync_mode = 'replace';
+                    else if (isFirstBatch) sync_mode = 'start';
                     else if (isLastBatch) sync_mode = 'complete';
 
                     const batch = syncQueue.slice(i, i + BATCH_SIZE);
@@ -924,7 +967,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                                     ha?.attributes?.device_class === 'window' ||
                                     ha?.attributes?.device_class === 'garage_door'
                                 )) {
-                                    stateDisplay = ha.state === 'on' ? 'Open' : 'Closed'
+                                    stateDisplay = ha?.state === 'on' ? 'Open' : 'Closed'
                                 }
 
                                 else if (config.type === 'light') stateDisplay = isActive ? 'On' : 'Off'
@@ -953,21 +996,11 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                                 if (config.id.includes('motion')) stateDisplay = isActive ? 'Detected' : 'Clear'
 
                                 return (
-                                    <div key={group.id} className="entity-row" onClick={e => {
-                                        // Navigate to detail view on click (handled by parent div, but explicit here?)
-                                        // Actually, parent div `room-card` has onClick => setDetailTileId.
-                                        // Clicking a specific row could just propagate to parent.
-                                        // UNLESS it's a switch we want to toggle.
-                                        if (!isSensor) e.stopPropagation(); // But if we stop prop, we can't open detail?
-                                        // Wait, usually clicking the row opens the detail (more sensors),
-                                        // clicking the Toggle Switch toggles.
-                                        // So we SHOULD propagate unless it's the toggle button itself.
-                                    }}>
+                                    <div key={group.id} className="entity-row">
                                         <div className="entity-main">
                                             <div className={`entity-icon ${isActive ? 'active' : ''} ${isWarm ? 'warm' : ''}`}>
                                                 {config.icon}
                                             </div>
-                                            {/* FIX: Use Entity Name (config.name) instead of Device Group Name (group.name) which can be generic */}
                                             <div className="entity-name">{config.name || group.name}</div>
                                         </div>
 
@@ -991,6 +1024,18 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
         )
     }
 
+    const handleClimateTemp = async (entityId: string, newTemp: number) => {
+        if (!entityId || !activeConnection) return
+        try {
+            await callHAService('climate', 'set_temperature', { entity_id: entityId, temperature: newTemp }, activeConnection.api_url, activeConnection.api_token)
+            setToastMsg(`🌡️ ${entityId} → ${newTemp}°C`)
+            setTimeout(() => setToastMsg(null), 2000)
+        } catch (err: any) {
+            setToastMsg(`Error: ${err.message}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
     // UPDATED: Inline Detail View (Not Modal)
     const renderDetailView = () => {
         const tile = tiles.find(t => t.id === detailTileId)
@@ -1000,11 +1045,11 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
         const allEntities = tile.deviceGroups.flatMap(g => g.entities)
 
         // 2. Categorize
-        // Split Primary vs Diagnostic
         const primaryDevices = allEntities.filter(d => !d.isDiagnostic)
         const diagnosticDevices = allEntities.filter(d => d.isDiagnostic)
 
         const covers = primaryDevices.filter(e => e.type === 'cover')
+        const climateDevices = primaryDevices.filter(e => e.type === 'climate')
         const controls = primaryDevices.filter(e => e.type === 'light' || e.type === 'switch' || e.type === 'input_boolean' || e.type === 'lock' || e.type === 'media')
         const sensors = primaryDevices.filter(e => e.type === 'sensor' || e.type === 'binary_sensor')
 
@@ -1012,25 +1057,42 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
             const ha = entityStates[config.entityId || '']
             if (!ha) return null
 
-            const isOn = ha.state === 'on' || ha.state === 'playing' || ha.state === 'open'
+            const isOn = ha.state === 'on' || ha.state === 'playing' || ha.state === 'open' || ha.state === 'unlocked'
             const isLight = config.type === 'light'
             const isCover = config.type === 'cover'
+            const isClimate = config.type === 'climate'
+            const isLock = config.type === 'lock'
+            const isMedia = config.type === 'media'
             const isSensor = config.type === 'sensor' || config.type === 'binary_sensor'
             const brightness = ha.attributes?.brightness ? Math.round((ha.attributes.brightness / 255) * 100) : 0
 
-            // Check if this device has associated diagnostics
-            const myDiagnostics = diagnosticDevices.filter(d => d.deviceId === config.deviceId)
+            // Only match diagnostics when deviceId is actually defined
+            const myDiagnostics = config.deviceId
+                ? diagnosticDevices.filter(d => d.deviceId === config.deviceId)
+                : []
 
             // Value Display
             let valueDisplay = ha.state
-            if (ha.attributes?.unit_of_measurement) valueDisplay += ` ${ha.attributes.unit_of_measurement}`
-            if (isCover) valueDisplay = ha.state === 'open' ? 'Open' : ha.state === 'closed' ? 'Closed' : ha.state
-            if (brightness > 0 && isLight) valueDisplay += ` • ${brightness}%`
-            if (isOn && !isSensor && !isCover) valueDisplay = 'On'
-            if (!isOn && !isSensor && !isCover) valueDisplay = 'Off'
+            if (isCover) {
+                valueDisplay = ha.state === 'open' ? 'Open' : ha.state === 'closed' ? 'Closed' : ha.state
+            } else if (isClimate) {
+                const cur = ha.attributes?.current_temperature
+                const target = ha.attributes?.temperature
+                valueDisplay = `${ha.state}${cur !== undefined ? ` • ${cur}°` : ''}${target !== undefined ? ` → ${target}°` : ''}`
+            } else if (isLight) {
+                valueDisplay = isOn ? (brightness > 0 ? `On • ${brightness}%` : 'On') : 'Off'
+            } else if (isLock) {
+                valueDisplay = ha.state === 'locked' ? 'Locked' : ha.state === 'unlocked' ? 'Unlocked' : ha.state
+            } else if (isMedia) {
+                valueDisplay = ha.attributes?.media_title ? `${ha.state} • ${ha.attributes.media_title}` : ha.state
+            } else if (!isSensor) {
+                valueDisplay = isOn ? 'On' : 'Off'
+            } else if (ha.attributes?.unit_of_measurement) {
+                valueDisplay += ` ${ha.attributes.unit_of_measurement}`
+            }
 
-            // Icon Color
-            const iconColor = isOn || (isCover && ha.state === 'open') ? 'var(--accent)' : 'var(--text-secondary)'
+            const iconColor = isOn || (isCover && ha.state === 'open') || (isClimate && ha.state !== 'off') ? 'var(--accent)' : 'var(--text-secondary)'
+            const targetTemp = typeof ha.attributes?.temperature === 'number' ? ha.attributes.temperature : 20
 
             return (
                 <div key={config.id} className="detail-card" style={{ position: 'relative' }}>
@@ -1043,15 +1105,28 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                             <div className="detail-state">{valueDisplay}</div>
                         </div>
 
-                        {/* Toggle for simple switches/lights */}
-                        {(isLight || config.type === 'switch') && (
+                        {/* Toggle for switches, lights, input_boolean, locks, and media players */}
+                        {(isLight || config.type === 'switch' || config.type === 'input_boolean' || isLock || isMedia) && (
                             <div className={`toggle-switch compact ${isOn ? 'on' : ''} detail-toggle`}
                                 onClick={(e) => { e.stopPropagation(); handleToggle(config.entityId!, ha.state || 'off') }}>
                             </div>
                         )}
                     </div>
 
-                    {/* Controls Row */}
+                    {/* Climate Controls */}
+                    {isClimate && (
+                        <div className="detail-controls-row" style={{ paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
+                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleClimateTemp(config.entityId!, Math.round((targetTemp - 0.5) * 2) / 2) }}>
+                                −
+                            </div>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 44, textAlign: 'center' }}>{targetTemp}°</div>
+                            <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleClimateTemp(config.entityId!, Math.round((targetTemp + 0.5) * 2) / 2) }}>
+                                +
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Cover Controls Row */}
                     {isCover && (
                         <div className="detail-controls-row" style={{ paddingLeft: myDiagnostics.length > 0 ? 32 : 0 }}>
                             <div className="control-btn-icon" onClick={(e) => { e.stopPropagation(); handleCoverAction(config.entityId!, 'open') }}>
@@ -1109,7 +1184,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                 flexDirection: 'column',
                 height: '100%',
                 flex: 1,
-                width: '100%' // Ensure full width
+                width: '100%'
             }}>
                 {/* Header */}
                 <div className="detail-header" style={{ display: 'flex', alignItems: 'center', marginBottom: '24px', gap: '16px' }}>
@@ -1119,6 +1194,18 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                 </div>
 
                 <div className="device-list-scroller" style={{ padding: '0 4px' }}>
+
+                    {/* Climate Section */}
+                    {climateDevices.length > 0 && (
+                        <div className="detail-section">
+                            <div className="detail-section-title">
+                                <span>🌡️</span> Climate
+                            </div>
+                            <div className="detail-grid">
+                                {climateDevices.map(renderCard)}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Covers Section */}
                     {covers.length > 0 && (
@@ -1132,7 +1219,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                         </div>
                     )}
 
-                    {/* Controls Section (Lights/Switches) */}
+                    {/* Controls Section (Lights/Switches/Locks/Media) */}
                     {controls.length > 0 && (
                         <div className="detail-section">
                             <div className="detail-section-title">
@@ -1156,7 +1243,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                         </div>
                     )}
 
-                    {!covers.length && !controls.length && !sensors.length && (
+                    {!climateDevices.length && !covers.length && !controls.length && !sensors.length && (
                         <div style={{ textAlign: 'center', opacity: 0.5, marginTop: 40 }}>
                             No devices found in this room.
                         </div>
@@ -1223,7 +1310,6 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                         {activeConnection ? activeConnection.name : 'Disconnected'}
                     </div>
                 </div>
-                {/* Controls Removed - Moved to Global Header */}
             </div>
 
 
@@ -1246,7 +1332,7 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                 </div>
             ) : (
                 <div className="room-grid">
-                    {tiles.sort((a, b) => a.order - b.order).map(tile => renderRoomCard(tile))}
+                    {[...tiles].sort((a, b) => a.order - b.order).map(tile => renderRoomCard(tile))}
 
                     {/* Add Room Button */}
                     {editMode && (
@@ -1271,15 +1357,17 @@ export const Dashboard = forwardRef<DashboardRef>((props, ref) => {
                             <>
                                 <div className="device-list">
                                     <h3>Devices</h3>
-                                    {tiles.find(t => t.id === configTileId)?.deviceGroups.flatMap(g => g.entities).map(device => (
-                                        <div key={device.id} className="device-row">
+                                    {tiles.find(t => t.id === configTileId)?.deviceGroups.flatMap(g =>
+                                        g.entities.map(device => ({ groupId: g.id, device }))
+                                    ).map(({ groupId, device }) => (
+                                        <div key={`${groupId}-${device.id}`} className="device-row">
                                             <span>{device.icon} {device.name}</span>
                                             <div>
                                                 <button onClick={() => {
                                                     setEditingDevice(device)
                                                     setSelectedEntityId(device.entityId || '')
                                                 }}>Edit</button>
-                                                <button className="delete-btn" onClick={() => removeDevice(configTileId, 'manual-group', device.id)}>Remove</button>
+                                                <button className="delete-btn" onClick={() => removeDevice(configTileId, groupId, device.id)}>Remove</button>
                                             </div>
                                         </div>
                                     ))}

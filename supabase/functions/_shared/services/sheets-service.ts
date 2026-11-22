@@ -90,7 +90,7 @@ export async function listSpreadsheets(userId: string, limit: number = 10) {
     try {
         const token = await getAccessToken(userId);
 
-        const url = `https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.spreadsheet'&pageSize=${limit}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,webViewLink)`;
+        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent("mimeType='application/vnd.google-apps.spreadsheet' and trashed = false")}&pageSize=${limit}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,webViewLink)`;
 
         const response = await fetch(url, {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -274,16 +274,20 @@ export async function batchUpdate(userId: string, spreadsheetId: string, request
 export async function createChart(
     userId: string,
     spreadsheetId: string,
-    sheetId: number = 0,
-    chartType: 'pie' | 'bar' | 'line' | 'column' | 'area' = 'bar',
+    sheetId: number,
+    chartType: 'pie' | 'bar' | 'line' | 'column' | 'area',
     title: string,
     dataRange: { startRow: number; endRow: number; startCol: number; endCol: number },
     anchorCell: { row: number; col: number } = { row: 0, col: 4 }
 ) {
+    const resolvedSheetId = sheetId ?? 0;
+    const resolvedChartType = chartType || 'bar';
+    const seriesTargetAxis = resolvedChartType === 'bar' ? 'BOTTOM_AXIS' : 'LEFT_AXIS';
+
     const chartSpec: any = {
         title,
         basicChart: {
-            chartType: chartType.toUpperCase(),
+            chartType: resolvedChartType.toUpperCase(),
             legendPosition: 'BOTTOM_LEGEND',
             axis: [
                 { position: 'BOTTOM_AXIS', title: '' },
@@ -293,7 +297,7 @@ export async function createChart(
                 domain: {
                     sourceRange: {
                         sources: [{
-                            sheetId,
+                            sheetId: resolvedSheetId,
                             startRowIndex: dataRange.startRow,
                             endRowIndex: dataRange.endRow,
                             startColumnIndex: dataRange.startCol,
@@ -306,7 +310,7 @@ export async function createChart(
                 series: {
                     sourceRange: {
                         sources: [{
-                            sheetId,
+                            sheetId: resolvedSheetId,
                             startRowIndex: dataRange.startRow,
                             endRowIndex: dataRange.endRow,
                             startColumnIndex: dataRange.endCol - 1,
@@ -314,19 +318,18 @@ export async function createChart(
                         }]
                     }
                 },
-                targetAxis: 'LEFT_AXIS'
+                targetAxis: seriesTargetAxis
             }]
         }
     };
 
-    // Use pie chart spec for pie charts
-    if (chartType === 'pie') {
+    if (resolvedChartType === 'pie') {
         chartSpec.pieChart = {
             legendPosition: 'LABELED_LEGEND',
             domain: {
                 sourceRange: {
                     sources: [{
-                        sheetId,
+                        sheetId: resolvedSheetId,
                         startRowIndex: dataRange.startRow,
                         endRowIndex: dataRange.endRow,
                         startColumnIndex: dataRange.startCol,
@@ -337,7 +340,7 @@ export async function createChart(
             series: {
                 sourceRange: {
                     sources: [{
-                        sheetId,
+                        sheetId: resolvedSheetId,
                         startRowIndex: dataRange.startRow,
                         endRowIndex: dataRange.endRow,
                         startColumnIndex: dataRange.endCol - 1,
@@ -356,7 +359,7 @@ export async function createChart(
                 position: {
                     overlayPosition: {
                         anchorCell: {
-                            sheetId,
+                            sheetId: resolvedSheetId,
                             rowIndex: anchorCell.row,
                             columnIndex: anchorCell.col
                         }
@@ -375,7 +378,7 @@ export async function createChart(
 export async function formatCells(
     userId: string,
     spreadsheetId: string,
-    sheetId: number = 0,
+    sheetId: number,
     range: { startRow: number; endRow: number; startCol: number; endCol: number },
     format: {
         bold?: boolean;
@@ -387,6 +390,7 @@ export async function formatCells(
         numberFormat?: { type: string; pattern?: string };
     }
 ) {
+    const resolvedSheetId = sheetId ?? 0;
     const cellFormat: any = {};
     const fields: string[] = [];
 
@@ -430,7 +434,7 @@ export async function formatCells(
     const request = {
         repeatCell: {
             range: {
-                sheetId,
+                sheetId: resolvedSheetId,
                 startRowIndex: range.startRow,
                 endRowIndex: range.endRow,
                 startColumnIndex: range.startCol,
@@ -447,11 +451,11 @@ export async function formatCells(
 /**
  * Auto-resize columns to fit content.
  */
-export async function autoResizeColumns(userId: string, spreadsheetId: string, sheetId: number = 0, startCol: number, endCol: number) {
+export async function autoResizeColumns(userId: string, spreadsheetId: string, sheetId: number, startCol: number, endCol: number) {
     const request = {
         autoResizeDimensions: {
             dimensions: {
-                sheetId,
+                sheetId: sheetId ?? 0,
                 dimension: 'COLUMNS',
                 startIndex: startCol,
                 endIndex: endCol

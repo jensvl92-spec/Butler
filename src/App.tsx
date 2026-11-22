@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
+import { Browser } from '@capacitor/browser'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { useApp } from './lib/AppContext'
 import { Auth } from './components/Auth'
 import { ConnectionSetup } from './components/ConnectionSetup'
@@ -8,42 +10,47 @@ import { Dashboard, DashboardRef } from './components/Dashboard'
 import { ButlerSuggestions } from './components/ButlerSuggestions'
 import { SuggestionPopup } from './components/SuggestionPopup'
 import { Settings } from './components/Settings'
-import { Graphs, GraphConfig } from './components/Graphs'
-import { signOut } from './utils/auth'
+import { Graphs } from './components/Graphs'
 import { registerPushNotifications, setActionListener, setSuggestionsListener } from './utils/pushNotifications'
 import { setGraphCreateCallback } from './lib/hooks/useAIChatLogic'
 import { supabase } from './lib/supabase'
 import { syncGoogleTokens } from './utils/auth'
+import { normalizeHAUrl, sanitizeHAToken, callHAService, fetchWithTimeout } from './utils/home-assistant'
+import { saveHAAutomation } from './utils/ha-api'
+import { logger } from './utils/logger'
 import './App.css'
 
-// @ts-ignore
-import { logger } from './utils/logger'
+interface TimerPluginInterface {
+  setAlarm(options: { hour: number; minute: number; message?: string; days?: number[] }): Promise<{ success: boolean }>
+}
+const TimerPlugin = registerPlugin<TimerPluginInterface>('TimerPlugin')
 
-// Global state for shared text (accessible from AIChat component)
-export let sharedTextForTranslation: string | null = null;
-export const clearSharedText = () => { sharedTextForTranslation = null; };
+// Global state for shared text (kept for backwards compatibility)
+export let sharedTextForTranslation: string | null = null
+export const clearSharedText = () => { sharedTextForTranslation = null }
 
 function App() {
   const { user, loading, connections, activeConnection, setActiveConnection, deleteConnection, setShouldTriggerVoice } = useApp()
   const [showConnectionModal, setShowConnectionModal] = useState(false)
   const [showConnectionDropdown, setShowConnectionDropdown] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [showDebug, setShowDebug] = useState(false) // Debug State
-  const [showGraphs, setShowGraphs] = useState(false) // Graphs Page
-  const [pendingGraphs, setPendingGraphs] = useState<Omit<GraphConfig, 'id' | 'createdAt'>[]>([])
+  const [showGraphs, setShowGraphs] = useState(false)
   const dashboardRef = useRef<DashboardRef>(null)
   const [pendingSuggestions, setPendingSuggestions] = useState<any[]>([])
+  const userDisconnectedRef = useRef(false)
 
-  // Theme State (Hoisted for Global Header)
-  const [theme, setTheme] = useState(localStorage.getItem('app-theme') || 'dark')
+  // Theme State (guarded localStorage)
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('app-theme') || 'dark' } catch { return 'dark' }
+  })
 
   // AI Section Resize State - Default to ~35% of screen height
   const [aiSectionHeight, setAiSectionHeight] = useState(() => {
     if (typeof window !== 'undefined') {
-      return Math.floor(window.innerHeight * 0.35);
+      return Math.floor(window.innerHeight * 0.35)
     }
-    return 300;
-  });
+    return 300
+  })
   const isResizingAi = useRef(false)
   const startY = useRef(0)
   const startHeight = useRef(0)
@@ -55,346 +62,362 @@ function App() {
     document.body.style.userSelect = 'none'
   }
 
-  const handleResizeMove = (clientY: number) => {
-    if (!isResizingAi.current) return
-    const delta = clientY - startY.current
-    const newHeight = Math.max(200, Math.min(window.innerHeight * 0.8, startHeight.current + delta))
-    setAiSectionHeight(newHeight)
-  }
-
-  const handleResizeEnd = () => {
-    isResizingAi.current = false
-    document.body.style.userSelect = ''
-  }
-
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => handleResizeMove(e.clientY)
-    const onTouchMove = (e: TouchEvent) => handleResizeMove(e.touches[0].clientY)
-    const onUp = () => handleResizeEnd()
+    const onMove = (clientY: number) => {
+      if (!isResizingAi.current) return
+      const delta = clientY - startY.current
+      const newHeight = Math.max(200, Math.min(window.innerHeight * 0.8, startHeight.current + delta))
+      setAiSectionHeight(newHeight)
+    }
+    const onMouseMove = (e: MouseEvent) => onMove(e.clientY)
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches && e.touches.length > 0) onMove(e.touches[0].clientY)
+    }
+    const onEnd = () => {
+      isResizingAi.current = false
+      document.body.style.userSelect = ''
+    }
 
     window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onUp)
-    window.addEventListener('touchmove', onTouchMove)
-    window.addEventListener('touchend', onUp)
+    window.addEventListener('mouseup', onEnd)
+    window.addEventListener('touchmove', onTouchMove, { passive: true })
+    window.addEventListener('touchend', onEnd)
+    window.addEventListener('touchcancel', onEnd)
 
     return () => {
+      document.body.style.userSelect = ''
       window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('mouseup', onEnd)
       window.removeEventListener('touchmove', onTouchMove)
-      window.removeEventListener('touchend', onUp)
+      window.removeEventListener('touchend', onEnd)
+      window.removeEventListener('touchcancel', onEnd)
     }
-  }, [aiSectionHeight])
+  }, [])
 
   useEffect(() => {
-    document.body.className = ''
+    document.body.classList.remove('theme-light', 'theme-midnight', 'theme-amoled')
     if (theme !== 'dark') document.body.classList.add(`theme-${theme}`)
-    localStorage.setItem('app-theme', theme)
+    try { localStorage.setItem('app-theme', theme) } catch { }
   }, [theme])
 
-  // ... existing state ...
-
-  // Deep Link Listener (Widget Support & Auth Callback)
+  // Deep Link Listener (Widget Support & Auth Callback — redacts OAuth tokens from logs & supports PKCE + Implicit)
   useEffect(() => {
     const handleDeepLink = async (url: string) => {
-      logger.info('📱 Deep Link Opened:', url);
+      const safeLogUrl = url.split('#')[0].split('?')[0]
+      logger.info('📱 Deep Link Opened:', safeLogUrl)
 
       // 1. Voice Widget
       if (url.includes('butler://voice')) {
-        logger.info("🎤 Triggering Voice Mode");
-        setShouldTriggerVoice(true);
+        logger.info('🎤 Triggering Voice Mode')
+        setShouldTriggerVoice(true)
+        return
       }
-      // 2. Auth Callback (Google OAuth)
-      else if (url.includes('butler://auth/callback')) {
-        logger.info("🔐 Auth Callback detected");
-        // Extract hash params (Implicit Flow) or query params
-        // Supabase often returns tokens in hash: #access_token=...&refresh_token=...
-        const hashIndex = url.indexOf('#');
-        if (hashIndex !== -1) {
-          const hash = url.substring(hashIndex + 1);
-          const params = new URLSearchParams(hash);
-          const access_token = params.get('access_token');
-          const refresh_token = params.get('refresh_token');
-          const provider_token = params.get('provider_token');
-          const provider_refresh_token = params.get('provider_refresh_token');
 
-          if (access_token && refresh_token) {
-            logger.info("🔐 Setting Supabase Session...");
-            const { data, error } = await supabase.auth.setSession({
-              access_token,
-              refresh_token
-            });
+      // 2. Auth Callback (Google OAuth — supports both PKCE ?code= and Implicit #access_token=)
+      if (url.includes('butler://auth/callback')) {
+        logger.info('🔐 Auth Callback detected')
+        if (Capacitor.isNativePlatform()) {
+          Browser.close().catch(() => {})
+        }
+
+        try {
+          const parsedUrl = new URL(url.replace(/^butler:\/\//, 'https://butler.local/'))
+          const errorParam = parsedUrl.searchParams.get('error_description') || parsedUrl.searchParams.get('error')
+          if (errorParam) {
+            logger.error('❌ OAuth callback error', errorParam)
+            alert(`Google autorisatie mislukt: ${errorParam}`)
+            return
+          }
+
+          // PKCE code flow
+          const authCode = parsedUrl.searchParams.get('code')
+          if (authCode) {
+            const { data, error } = await supabase.auth.exchangeCodeForSession(authCode)
             if (error) {
-              logger.error("❌ Failed to set session", error);
-              alert("Authorization Failed: " + error.message);
-            } else {
-              if (data.session) {
-                syncGoogleTokens(data.session, {
-                  access_token: provider_token || '',
-                  refresh_token: provider_refresh_token || undefined
-                });
+              logger.error('❌ PKCE exchange failed', error)
+              alert('Autorisatie mislukt: ' + error.message)
+              return
+            }
+            if (data.session?.provider_token) {
+              await syncGoogleTokens(data.session)
+            }
+            logger.info('✅ PKCE Session restored from deep link!')
+            return
+          }
+
+          // Implicit hash flow
+          const hashIndex = url.indexOf('#')
+          if (hashIndex !== -1) {
+            const params = new URLSearchParams(url.substring(hashIndex + 1))
+            const access_token = params.get('access_token')
+            const refresh_token = params.get('refresh_token')
+            const provider_token = params.get('provider_token')
+            const provider_refresh_token = params.get('provider_refresh_token')
+
+            if (access_token && refresh_token) {
+              const { data, error } = await supabase.auth.setSession({
+                access_token,
+                refresh_token
+              })
+              if (error) {
+                logger.error('❌ Failed to set session', error)
+                alert('Autorisatie mislukt: ' + error.message)
+                return
               }
-              logger.info("✅ Session restored from deep link!");
-              alert("Google Authorization Successful! You can now use Calendar/Tasks.");
+              if (data.session && provider_token) {
+                const syncRes = await syncGoogleTokens(data.session, {
+                  access_token: provider_token,
+                  refresh_token: provider_refresh_token || undefined
+                })
+                if (!syncRes.success) {
+                  logger.warn('⚠️ Google token sync warning:', syncRes.error)
+                }
+              }
+              logger.info('✅ Session restored from deep link!')
             }
           }
+        } catch (e: any) {
+          logger.error('❌ Deep link auth parsing error', e)
         }
       }
-    };
-
-    // Check launch URL
-    CapacitorApp.getLaunchUrl().then(launchUrl => {
-      if (launchUrl?.url) handleDeepLink(launchUrl.url);
-    });
-
-    // Listen for runtime URL opens
-    const listener = CapacitorApp.addListener('appUrlOpen', (data: any) => {
-      handleDeepLink(data.url);
-    });
-
-    return () => {
-      listener.then(l => l.remove());
-    };
-  }, []);
-
-  // Check for shared text from other apps (e.g., Line, WhatsApp)
-  useEffect(() => {
-    const checkSharedIntent = async () => {
-      try {
-        // @ts-ignore - checkSendIntentReceived exists on Android, not in web types
-        const result = await SendIntent.checkSendIntentReceived();
-        if (result && result.title) {
-          // If text was shared, store it for auto-translation
-          const sharedText = result.title;
-          logger.info(`📥 Received shared text: "${sharedText.substring(0, 50)}..."`);
-          sharedTextForTranslation = sharedText;
-        }
-      } catch (e: any) {
-        // No shared intent - this is normal when app opens normally
-        logger.info('No shared intent detected');
-      }
-    };
-    checkSharedIntent();
-  }, []);
-
-  // Wire up graph creation callback
-  useEffect(() => {
-    setGraphCreateCallback((config: any) => {
-      // Add graph to localStorage and open Graphs page
-      const STORAGE_KEY = 'butler_graphs';
-      const stored = localStorage.getItem(STORAGE_KEY);
-      const graphs = stored ? JSON.parse(stored) : [];
-
-      const newGraph = {
-        ...config,
-        id: `graph_${Date.now()}`,
-        createdAt: Date.now()
-      };
-
-      // Remove oldest if at max (5)
-      const updated = graphs.length >= 5
-        ? [...graphs.slice(1), newGraph]
-        : [...graphs, newGraph];
-
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setShowGraphs(true);
-      logger.info('📊 Graph created and navigating to Graphs page');
-    });
-  }, []);
-
-
-  // Helper to ensure clean origin
-  const getCleanUrl = (url: string) => {
-    try { return new URL(url).origin } catch { return url }
-  }
-
-  useEffect(() => {
-    if (connections.length > 0 && !activeConnection) {
-      setActiveConnection(connections[0])
     }
 
-    // ... existing code ...
+    CapacitorApp.getLaunchUrl().then(launchUrl => {
+      if (launchUrl?.url) handleDeepLink(launchUrl.url)
+    }).catch(() => {})
 
-    // Register Push & Action Listener if we have an active connection
-    if (activeConnection) {
-      registerPushNotifications(activeConnection.id)
+    const listener = CapacitorApp.addListener('appUrlOpen', (data: any) => {
+      if (data?.url) handleDeepLink(data.url)
+    })
 
-      // 👻 GHOST RUNNER BOOTSTRAP (Ensures the reusable script exists)
-      const cleanApiUrl = getCleanUrl(activeConnection.api_url);
-      const bootstrapGhostRunner = async () => {
-        try {
-          // Check if exists (by trying to get it, or just blindly overwriting - overwriting is safer/easier)
-          // We use the ID 'ai_ghost_runner'
-          const ghostScript = {
-            alias: "AI Ghost Runner",
-            mode: "parallel",
-            icon: "mdi:ghost",
-            fields: {
-              delay: { description: "Time to wait (HH:MM:SS)", example: "00:00:30" },
-              service: { description: "Service to call", example: "light.turn_on" },
-              entity: { description: "Entity ID", example: "light.kitchen" }
-            },
-            sequence: [
-              { delay: "{{ delay }}" },
-              { service: "{{ service }}", target: { entity_id: "{{ entity }}" } }
-            ]
-          };
+    return () => {
+      listener.then(l => l.remove()).catch(() => {})
+    }
+  }, [setShouldTriggerVoice])
 
-          // Idempotent creation (overwrites if exists)
-          await fetch(`${cleanApiUrl}/api/config/script/config/ai_ghost_runner`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${activeConnection.api_token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(ghostScript)
-          });
-          logger.info("👻 Ghost Runner Configured: script.ai_ghost_runner");
-        } catch (e) {
-          logger.error("Failed to bootstrap Ghost Runner:", e);
+  // Wire up graph creation callback with live refresh event
+  useEffect(() => {
+    setGraphCreateCallback((config: any) => {
+      try {
+        const STORAGE_KEY = 'butler_graphs'
+        const stored = localStorage.getItem(STORAGE_KEY)
+        const graphs = stored ? JSON.parse(stored) : []
+        const safeGraphs = Array.isArray(graphs) ? graphs : []
+
+        const newGraph = {
+          ...config,
+          id: `graph_${Date.now()}`,
+          createdAt: Date.now()
         }
-      };
-      // Run once on connect
-      bootstrapGhostRunner();
 
-      // GLOBAL BACKGROUND LISTENER (HTTP-based JSON)
-      setActionListener(async (actions: any[]) => {
-        logger.info("⚡ Global Action Listener Triggered:", actions);
-        if (!activeConnection) { logger.warn("No active connection for background action"); return; }
+        const updated = safeGraphs.length >= 5
+          ? [...safeGraphs.slice(1), newGraph]
+          : [...safeGraphs, newGraph]
 
-        const cleanApiUrl = getCleanUrl(activeConnection.api_url);
-        const flatActions = actions.flatMap(a => (a && Array.isArray(a.actions)) ? a.actions : [a]);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
+        window.dispatchEvent(new CustomEvent('butler-graphs-updated', { detail: updated }))
+        setShowGraphs(true)
+        logger.info('📊 Graph created and navigating to Graphs page')
+      } catch (e) {
+        logger.error('❌ Failed to create graph', e)
+      }
+    })
+    return () => setGraphCreateCallback(null as any)
+  }, [])
 
-        await Promise.allSettled(flatActions.map(async (action) => {
-          try {
-            // HANDLER: Set Alarm (Native)
-            if (action.type === 'set_alarm') {
-              const { hour, minute, message, days } = action.data || {};
-
-              if (typeof hour !== 'number' || typeof minute !== 'number') {
-                logger.error("Invalid alarm data:", action.data);
-                return;
-              }
-
-              logger.info(`⏰ Setting alarm for ${hour}:${minute.toString().padStart(2, '0')} - ${message || 'Alarm'}`);
-
-              try {
-                const intentUri = `intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${hour};i.android.intent.extra.alarm.MINUTES=${minute};S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(message || 'Alarm')};B.android.intent.extra.alarm.SKIP_UI=false;B.android.intent.extra.alarm.VIBRATE=true;end`;
-                try {
-                  window.location.href = intentUri;
-                } catch {
-                  window.open(intentUri, '_blank');
-                }
-                logger.info("✅ Alarm Intent Sent");
-              } catch (alarmError: any) {
-                logger.error("Failed to set alarm:", alarmError);
-                alert(`Failed to set alarm: ${alarmError.message || 'Unknown error'}`);
-              }
-              return;
-            }
-
-            // HANDLER: Create Native Script (Legacy/Fallback)
-            if (action.type === 'create_script') {
-              const idStr = action.data?.alias ? action.data.alias.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'ai_script';
-              const uniqueId = `${idStr}_${Date.now()}`;
-              const payload = {
-                alias: action.data?.alias || "AI Scheduled Task",
-                sequence: action.data?.sequence || []
-              };
-
-              logger.info(`🛠️ Creating Remote Script: ${cleanApiUrl}/api/config/script/config/${uniqueId}`);
-              // 1. Create
-              const createRes = await fetch(`${cleanApiUrl}/api/config/script/config/${uniqueId}`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${activeConnection.api_token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-
-              if (createRes.ok) {
-                // 2. Execute
-                logger.info(`▶️ Starting Remote Script: script.${uniqueId}`);
-                await fetch(`${cleanApiUrl}/api/services/script/turn_on`, {
-                  method: 'POST',
-                  headers: { 'Authorization': `Bearer ${activeConnection.api_token}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ entity_id: `script.${uniqueId}` })
-                });
-              } else {
-                const errText = await createRes.text();
-                logger.error("Script creation failed:", errText);
-              }
-              return;
-            }
-
-            // HANDLER: Standard Service Call (Handles Ghost Runner Calls too!)
-            // HANDLER: Standard Service Call (Handles Ghost Runner Calls too!)
-            if (!action.entity_id) return;
-
-            // Fix: Handle cases where 'service' is missing but 'type' is present (e.g. "switch.turn_on")
-            let domain = action.entity_id.split('.')[0];
-            let service = action.service;
-
-            if (!service && action.type && action.type.includes('.')) {
-              const parts = action.type.split('.');
-              service = parts.length > 1 ? parts[1] : parts[0];
-            }
-
-            // Fallback for missing service
-            if (!service) {
-              logger.warn("Action missing service:", action);
-              return;
-            }
-
-            const url = `${cleanApiUrl}/api/services/${domain}/${service}`;
-            logger.info(`📡 Background Fetch: ${url}`);
-
-            // 🛡️ Payload Clean: Don't allow entity_id override if we are calling a script directly
-            // (Unless it's a generic service like turn_on)
-            const payload: any = { ...action.data };
-            if (domain !== 'script' || ['turn_on', 'turn_off', 'toggle', 'reload'].includes(service)) {
-              payload.entity_id = action.entity_id;
-            }
-
-            await fetch(url, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${activeConnection.api_token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(payload)
-            });
-          } catch (e: any) {
-            logger.error(`❌ Background Action Failed:`, { message: e.message, stack: e.stack });
-          }
-        }));
-      });
-      // Register suggestions handler to load suggestions when notification is tapped
-      setSuggestionsListener(async () => {
-        if (!activeConnection?.id) return;
-        const { data } = await supabase
-          .from('suggestions')
-          .select('*')
-          .eq('connection_id', activeConnection.id)
-          .eq('status', 'pending')
-          .order('created_at', { ascending: false });
-        if (data && data.length > 0) {
-          setPendingSuggestions(data);
-          logger.info(`📋 Loaded ${data.length} suggestions from notification tap`);
-        }
-      });
+  // Auto-select first connection only on initial load (never override explicit user Disconnect!)
+  useEffect(() => {
+    if (connections.length > 0 && !activeConnection && !userDisconnectedRef.current) {
+      setActiveConnection(connections[0])
     }
   }, [connections, activeConnection, setActiveConnection])
 
+  // Connection-scoped Push, Ghost Runner & Background Action Listener
+  const activeConnId = activeConnection?.id || null
+  const activeConnUrl = activeConnection?.api_url || ''
+  const activeConnToken = activeConnection?.api_token || ''
+
+  useEffect(() => {
+    if (!activeConnId) {
+      setActionListener(null)
+      setSuggestionsListener(null)
+      return
+    }
+
+    registerPushNotifications(activeConnId)
+
+    const cleanApiUrl = normalizeHAUrl(activeConnUrl)
+    const cleanToken = sanitizeHAToken(activeConnToken)
+
+    // Bootstrap Ghost Runner script idempotently
+    const bootstrapGhostRunner = async () => {
+      if (!cleanApiUrl || !cleanToken) return
+      try {
+        const ghostScript = {
+          alias: 'AI Ghost Runner',
+          mode: 'parallel',
+          icon: 'mdi:ghost',
+          fields: {
+            delay: { description: 'Time to wait (HH:MM:SS)', example: '00:00:30' },
+            service: { description: 'Service to call', example: 'light.turn_on' },
+            entity: { description: 'Entity ID', example: 'light.kitchen' }
+          },
+          sequence: [
+            { delay: '{{ delay }}' },
+            { service: '{{ service }}', target: { entity_id: '{{ entity }}' } }
+          ]
+        }
+
+        const res = await fetchWithTimeout(`${cleanApiUrl}/api/config/script/config/ai_ghost_runner`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${cleanToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(ghostScript)
+        }, 10000)
+
+        if (res.ok) {
+          logger.info('👻 Ghost Runner Configured: script.ai_ghost_runner')
+        } else {
+          logger.warn(`Ghost Runner setup returned HTTP ${res.status}`)
+        }
+      } catch (e) {
+        logger.warn('Failed to bootstrap Ghost Runner (non-critical):', e)
+      }
+    }
+    bootstrapGhostRunner()
+
+    setActionListener(async (actions: any[]) => {
+      logger.info('⚡ Global Action Listener Triggered', { count: actions?.length })
+      const flatActions = actions.flatMap(a => (a && Array.isArray(a.actions)) ? a.actions : [a])
+
+      await Promise.allSettled(flatActions.map(async (action) => {
+        if (!action) return
+        try {
+          if (action.type === 'set_alarm') {
+            const { hour, minute, message, days } = action.data || {}
+            if (typeof hour !== 'number' || typeof minute !== 'number' || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+              logger.error('Invalid alarm data', action.data)
+              return
+            }
+            if (Capacitor.isNativePlatform()) {
+              await TimerPlugin.setAlarm({ hour, minute, message: message || 'Butler Wekker', days })
+              logger.info('✅ Native Alarm Set via TimerPlugin')
+            }
+            return
+          }
+
+          if (action.type === 'create_automation' && action.data) {
+            await saveHAAutomation(cleanApiUrl, cleanToken, action.data)
+            return
+          }
+
+          if (!action.entity_id) return
+          const entityStr = Array.isArray(action.entity_id) ? action.entity_id[0] : String(action.entity_id)
+          let domain = entityStr.split('.')[0]
+          let service = action.service
+
+          if (service && service.includes('.')) {
+            const parts = service.split('.')
+            domain = parts[0]
+            service = parts[1]
+          } else if (!service && action.type && action.type.includes('.')) {
+            const parts = action.type.split('.')
+            domain = parts[0]
+            service = parts[1]
+          }
+
+          if (!domain || !service) {
+            logger.warn('Action missing domain/service', action)
+            return
+          }
+
+          const payload: Record<string, any> = { ...(action.data || {}) }
+          if (domain !== 'script' || ['turn_on', 'turn_off', 'toggle', 'reload'].includes(service)) {
+            payload.entity_id = action.entity_id
+          }
+
+          await callHAService(domain, service, payload, cleanApiUrl, cleanToken)
+        } catch (e: any) {
+          logger.error('❌ Background Action Failed', { message: e?.message || String(e) })
+        }
+      }))
+    })
+
+    setSuggestionsListener(async () => {
+      const { data, error } = await supabase
+        .from('suggestions')
+        .select('*')
+        .eq('connection_id', activeConnId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        logger.error('Failed to load suggestions', error)
+        return
+      }
+      if (data && data.length > 0) {
+        setPendingSuggestions(data)
+        logger.info(`📋 Loaded ${data.length} suggestions from notification tap`)
+      }
+    })
+
+    return () => {
+      setActionListener(null)
+      setSuggestionsListener(null)
+    }
+  }, [activeConnId, activeConnUrl, activeConnToken])
+
   const handleDeleteConnection = async (e: React.MouseEvent, connId: string) => {
     e.stopPropagation()
-    if (window.confirm('Are you sure you want to delete this connection?')) {
+    if (window.confirm('Weet je zeker dat je deze verbinding wilt verwijderen?')) {
       try {
         await deleteConnection(connId)
         logger.info(`Deleted connection: ${connId}`)
       } catch (err: any) {
-        logger.error(`Failed to delete connection`, { id: connId, error: err.message })
-        alert(`Failed to delete: ${err.message}`)
+        logger.error('Failed to delete connection', { id: connId, error: err?.message })
+        alert(`Verwijderen mislukt: ${err?.message || 'Onbekende fout'}`)
       }
     }
   }
 
+  const handleExecutePendingSuggestion = async (id: string, decision: 'accept' | 'reject') => {
+    const target = pendingSuggestions.find(s => s.id === id)
+    if (decision === 'accept' && target && activeConnection) {
+      const cleanUrl = normalizeHAUrl(activeConnection.api_url)
+      const cleanToken = sanitizeHAToken(activeConnection.api_token)
+
+      try {
+        if (target.ha_automation && typeof target.ha_automation === 'object') {
+          await saveHAAutomation(cleanUrl, cleanToken, target.ha_automation)
+        } else if (Array.isArray(target.actions)) {
+          for (const act of target.actions) {
+            if (act?.type === 'create_automation' && act.data) {
+              await saveHAAutomation(cleanUrl, cleanToken, act.data)
+            } else if (act?.entity_id && act?.service) {
+              const parts = act.service.includes('.') ? act.service.split('.') : [act.entity_id.split('.')[0], act.service]
+              await callHAService(parts[0], parts[1], { ...(act.data || {}), entity_id: act.entity_id }, cleanUrl, cleanToken)
+            }
+          }
+        }
+      } catch (err: any) {
+        logger.error('❌ Failed executing accepted suggestion', err)
+        alert(`Kon suggestie niet uitvoeren: ${err?.message || 'Onbekende fout'}`)
+        return
+      }
+    }
+
+    const { error } = await supabase
+      .from('suggestions')
+      .update({ status: decision === 'accept' ? 'accepted' : 'rejected' })
+      .eq('id', id)
+
+    if (error) {
+      logger.error('Failed updating suggestion status', error)
+    }
+    setPendingSuggestions(prev => prev.filter(s => s.id !== id))
+  }
+
   if (loading) {
-    return <div className="loading">Loading...</div>
+    return <div className="loading">Laden...</div>
   }
 
   if (!user) {
@@ -403,17 +426,13 @@ function App() {
 
   return (
     <div className="app-container" style={{ flexDirection: 'column' }}>
-      {/* Setup Wizard (One-Click Install) */}
-
       {/* Hypermodern Dynamic Island Header */}
       <header className="dynamic-island-header">
-        {/* Brand Orb & Name */}
         <div className="header-brand" onClick={() => setShowConnectionDropdown(!showConnectionDropdown)}>
           <div className="brand-orb">⚡</div>
           <h1 className="brand-title">Butler</h1>
         </div>
 
-        {/* Center Connection Capsule */}
         <div style={{ position: 'relative' }}>
           <div className="connection-capsule" onClick={() => setShowConnectionDropdown(!showConnectionDropdown)}>
             <div className={`status-dot ${activeConnection ? '' : 'disconnected'}`} />
@@ -432,7 +451,7 @@ function App() {
                 Home Assistant Verbindingen
               </div>
               {connections.map(c => (
-                <div key={c.id} onClick={() => { setActiveConnection(c); setShowConnectionDropdown(false); }}
+                <div key={c.id} onClick={() => { userDisconnectedRef.current = false; setActiveConnection(c); setShowConnectionDropdown(false); }}
                   style={{
                     padding: '10px 14px', cursor: 'pointer', borderBottom: 'var(--glass-border)',
                     fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -458,7 +477,6 @@ function App() {
           )}
         </div>
 
-        {/* Right Header Actions */}
         <div className="header-actions">
           {activeConnection && (
             <button className="header-icon-btn" onClick={() => dashboardRef.current?.importLayoutFromHA()} title="Synchroniseer Home Assistant Layout">
@@ -475,7 +493,15 @@ function App() {
           </button>
 
           {activeConnection && (
-            <button className="header-icon-btn" onClick={() => setActiveConnection(null)} title="Ontkoppelen" style={{ color: '#ef4444' }}>
+            <button
+              className="header-icon-btn"
+              onClick={() => {
+                userDisconnectedRef.current = true
+                setActiveConnection(null)
+              }}
+              title="Ontkoppelen"
+              style={{ color: '#ef4444' }}
+            >
               ✕
             </button>
           )}
@@ -483,8 +509,6 @@ function App() {
       </header>
 
       <div className="main-content">
-        {/* AI Chat Section - Matches Screenshot Card Style */}
-        {/* AI Chat Section - Matches Screenshot Card Style */}
         <div className="ai-section" style={{ height: activeConnection ? aiSectionHeight : 'auto' }}>
           <div style={{
             background: 'var(--bg-card)',
@@ -498,82 +522,67 @@ function App() {
           }}>
             <div className="ai-section-header" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '16px 16px 8px 16px' }}>
               <div className="ai-icon" style={{ fontSize: '1.5rem', background: 'rgba(99, 102, 241, 0.2)', width: '36px', height: '36px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🤖</div>
-              <h2 style={{ fontSize: '1.2rem', margin: 0, color: 'var(--text-primary)' }}>AI Assistant</h2>
+              <h2 style={{ fontSize: '1.2rem', margin: 0, color: 'var(--text-primary)' }}>Butler AI</h2>
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <AIChat />
             </div>
-            {/* Resize Handle */}
             <div
               className="ai-resize-handle"
               onMouseDown={(e) => handleResizeStart(e.clientY)}
-              onTouchStart={(e) => handleResizeStart(e.touches[0].clientY)}
+              onTouchStart={(e) => {
+                if (e.touches && e.touches.length > 0) handleResizeStart(e.touches[0].clientY)
+              }}
             >
               <div className="handle-bar" />
             </div>
           </div>
         </div>
 
-
-        {/* Room Tiles Dashboard */}
         <div className="dashboard">
-
-
           {activeConnection && <Dashboard ref={dashboardRef} />}
 
           {!activeConnection && (
             <div className="empty-state" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <p>No connection selected.</p>
+              <p>Geen Home Assistant verbinding actief.</p>
               <button onClick={() => setShowConnectionModal(true)} style={{ marginTop: '16px' }}>
-                + Add Connection
+                + Verbinding Toevoegen
               </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Connection Setup Modal */}
       {showConnectionModal && (
         <div className="modal-overlay" onClick={() => setShowConnectionModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2>Add Home Assistant Connection</h2>
-            <ConnectionSetup onConnectionAdded={() => setShowConnectionModal(false)} />
+            <h2>Home Assistant Koppelen</h2>
+            <ConnectionSetup onConnectionAdded={() => { userDisconnectedRef.current = false; setShowConnectionModal(false); }} />
           </div>
         </div>
       )}
 
-      {/* Settings Modal */}
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
             <Settings onClose={() => setShowSettings(false)} />
           </div>
         </div>
       )}
 
-      {/* Graphs Full-Page */}
       {showGraphs && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 5000, background: 'var(--bg-primary)', overflow: 'auto' }}>
           <Graphs onBack={() => setShowGraphs(false)} />
         </div>
       )}
 
-      {/* Proactive Butler Suggestions (Floating) */}
       <ButlerSuggestions />
 
-      {/* Suggestions Popup (from push notification tap) */}
       {pendingSuggestions.length > 0 && (
         <SuggestionPopup
           suggestions={pendingSuggestions}
           onClose={() => setPendingSuggestions([])}
-          onAction={async (id, action) => {
-            // Update DB
-            await supabase.from('suggestions').update({
-              status: action === 'accept' ? 'accepted' : 'rejected'
-            }).eq('id', id);
-            // Remove from local state
-            setPendingSuggestions(prev => prev.filter(s => s.id !== id));
-          }}
+          onAction={handleExecutePendingSuggestion}
         />
       )}
     </div>

@@ -8,12 +8,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { chatCompletion } from "../_shared/llm-service.ts";
+import { verifyRequestAuth, verifyConnectionOwnership, CORS_HEADERS } from "../_shared/auth.ts";
 import {
     buildDynamicWorkingContext,
     formatWorkingMemoryPrompt,
     saveCoreMemory,
     deleteCoreMemory,
-    retrieveMemories,
     saveChatHistory
 } from "../_shared/memory-service.ts";
 import {
@@ -42,10 +42,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const corsHeaders = CORS_HEADERS;
 
 interface RequestPayload {
     connection_id: string;
@@ -85,7 +82,7 @@ const TOOLS = [
                     query_type: {
                         type: "string",
                         enum: ["current", "forecast", "dew_point", "rain_check"],
-                        description: "Type vraag: current (algemeen weer), forecast (komende dagen), dew_point (dauwpunt/vocht), rain_check (gaat het regenen)"
+                        description: "Type vraag: current, forecast, dew_point, rain_check"
                     },
                     latitude: { type: "number", description: "Breedtegraad (optioneel)" },
                     longitude: { type: "number", description: "Lengtegraad (optioneel)" }
@@ -102,7 +99,7 @@ const TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    destination: { type: "string", description: "De doelbestemming (stad, adres of punt, bv. 'Antwerpen', 'Kantoor', 'Leuven Station')" },
+                    destination: { type: "string", description: "De doelbestemming (stad, adres of punt)" },
                     mode: { type: "string", enum: ["driving", "walking", "bicycling"], description: "Vervoersmiddel (standaard driving)" }
                 },
                 required: ["destination"]
@@ -113,14 +110,14 @@ const TOOLS = [
         type: "function",
         function: {
             name: "control_home_device",
-            description: "Schakel of bedien een fysiek apparaat in Home Assistant (lampen, thermostaten, rolluiken, schakelaars).",
+            description: "Schakel of bedien een fysiek apparaat in Home Assistant.",
             parameters: {
                 type: "object",
                 properties: {
                     domain: { type: "string", description: "Home Assistant domein (bv. light, switch, climate, cover)" },
-                    service: { type: "string", description: "Service naam (bv. turn_on, turn_off, set_temperature, open_cover, close_cover)" },
-                    entity_id: { type: "string", description: "De exacte entity_id (bv. light.woonkamer, climate.thermostaat)" },
-                    service_data: { type: "object", description: "Optionele service parameters (bv. { brightness: 128 }, { temperature: 20 })" }
+                    service: { type: "string", description: "Service naam (bv. turn_on, turn_off, set_temperature)" },
+                    entity_id: { type: "string", description: "De exacte entity_id" },
+                    service_data: { type: "object", description: "Optionele service parameters" }
                 },
                 required: ["domain", "service", "entity_id"]
             }
@@ -130,13 +127,13 @@ const TOOLS = [
         type: "function",
         function: {
             name: "manage_core_memory",
-            description: "Sla een permanent feit of voorkeur op over de gebruiker in Core Memory, of vergeet een feit.",
+            description: "Sla een permanent feit of voorkeur op in Core Memory, of vergeet een feit.",
             parameters: {
                 type: "object",
                 properties: {
-                    action: { type: "string", enum: ["save", "delete"], description: "Actie: save of delete" },
-                    content: { type: "string", description: "Het feit of de voorkeur (bv. 'Favoriete kamertemperatuur is 20.5°C', 'Hond heet Max')" },
-                    category: { type: "string", enum: ["preference", "household", "routine", "rule"], description: "Categorie van het geheugen" }
+                    action: { type: "string", enum: ["save", "delete"] },
+                    content: { type: "string" },
+                    category: { type: "string", enum: ["preference", "household", "routine", "rule"] }
                 },
                 required: ["action", "content"]
             }
@@ -151,7 +148,7 @@ const TOOLS = [
                 type: "object",
                 properties: {
                     action: { type: "string", enum: ["list", "create"] },
-                    title: { type: "string", description: "Titel afspraak (bij create)" },
+                    title: { type: "string" },
                     date: { type: "string", description: "Datum YYYY-MM-DD" },
                     time: { type: "string", description: "Tijd HH:MM" },
                     duration: { type: "number", description: "Duur in minuten (standaard 60)" }
@@ -188,6 +185,14 @@ serve(async (req: Request) => {
     const logTime = (step: string) => log(`[TIMING] ${step}: ${Date.now() - startTime}ms`);
 
     try {
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) {
+            return new Response(JSON.stringify({ error: auth.error }), {
+                status: auth.status || 401,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+
         const payload: RequestPayload = await req.json();
         const {
             connection_id,
@@ -211,18 +216,22 @@ serve(async (req: Request) => {
             });
         }
 
-        // 1. Resolve User ID from Connection ID for security
-        let userId: string = '';
-        try {
-            const { data: conn } = await supabase
-                .from('ha_connections')
-                .select('user_id')
-                .eq('id', connection_id)
-                .single();
-            userId = conn?.user_id || '';
-        } catch { /* proceed */ }
+        if (!connection_id) {
+            return new Response(JSON.stringify({ error: 'connection_id required' }), {
+                status: 400,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
 
-        // 2. Build SOTA Dynamic Working Context (Tier 1 + Tier 2 Core Memory)
+        const ownership = await verifyConnectionOwnership(supabase, auth, connection_id);
+        if (!ownership.valid) {
+            return new Response(JSON.stringify({ error: ownership.error }), {
+                status: ownership.status || 403,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+        const userId: string = ownership.connection?.user_id || auth.userId || '';
+
         const workingContext = await buildDynamicWorkingContext(supabase, connection_id, {
             language,
             location,
@@ -233,7 +242,6 @@ serve(async (req: Request) => {
         const workingMemoryPrompt = formatWorkingMemoryPrompt(workingContext);
         logTime('Dynamic Core Memory assembled');
 
-        // 3. Fetch Multi-Turn Dialogue Context (Tier 3)
         let dialogueHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
         try {
             const { data: historyRows } = await supabase
@@ -257,20 +265,14 @@ serve(async (req: Request) => {
         } catch (e) {
             console.warn('[History] Failed to load chat history:', e);
         }
-        logTime('Chat history loaded');
 
-        // 4. Summarize Available Controllable Home Assistant Devices
         const controllableDomains = ['light', 'switch', 'climate', 'cover', 'media_player', 'scene'];
         const controllableDevices = (devices || [])
-            .filter((d: any) => {
-                const domain = d.entity_id?.split('.')[0];
-                return controllableDomains.includes(domain);
-            })
+            .filter((d: any) => controllableDomains.includes((d.entity_id || '').split('.')[0]))
             .slice(0, 150)
             .map((d: any) => `- ${d.entity_id}: "${d.attributes?.friendly_name || d.entity_id}" (status: ${d.state || 'onbekend'})`)
             .join('\n');
 
-        // 5. Construct Authoritative System Prompt
         const systemPrompt = `
 IDENTITY & DOEL:
 Je bent Butler, een hoogbegaafde, discrete en proactieve AI-assistent voor een slim huis.
@@ -280,55 +282,52 @@ Omdat jouw antwoorden worden uitgesproken via spraaksynthese (TTS), zijn je antw
 ${workingMemoryPrompt}
 
 [BESCHIKBARE APPARATEN IN HUIS]:
-${controllableDevices || 'Geen apparaten geregistreerd (woning in opbouw of leeg huis).'}
+${controllableDevices || 'Geen apparaten geregistreerd.'}
 
 BELANGRIJKE GEDRAGSREGELS:
 1. **Tool Calling Eerst**: Voor feitelijke data (weer, dauwpunt, reistijd, agenda, apparaatbediening, geheugen) roep je ALTIJD de bijbehorende tools aan. Verzin nooit data.
-2. **Weer & Dauwpunt**: Als de gebruiker vraagt naar het weer, temperatuur of dauwpunt, roep 'get_weather' aan. De server haalt de echte meetgegevens op via Open-Meteo.
-3. **Navigatie & Reistijd**: Als de gebruiker vraagt hoe lang het rijden is naar een bestemming, gebruik 'get_navigation_eta' met de gewenste bestemming.
-4. **Apparaten Bedienen**: Als de gebruiker vraagt een lamp, thermostaat of ander apparaat te bedienen, roep 'control_home_device' aan met het exacte entity_id.
-5. **Geheugen**: Als de gebruiker zegt "onthoud dat...", "mijn voorkeur is...", of vraagt iets te vergeten, roep 'manage_core_memory' aan.
-6. **Multi-turn Context**: Begrijp vervolgvragen zoals "probeer het nog eens" of "wat ik net vroeg" direct aan de hand van de gespreksgeschiedenis.
+2. **Multi-turn Context**: Begrijp vervolgvragen direct aan de hand van de gespreksgeschiedenis.
 `.trim();
 
-        // 6. Build Initial Messages Array
         const messages: any[] = [
             { role: 'system', content: systemPrompt },
             ...dialogueHistory,
             { role: 'user', content: user_message }
         ];
 
-        // 7. Execute ReAct Loop (Up to 3 iterations for tool calls)
         const collectedActions: any[] = [];
         let finalResponseText = '';
         let iteration = 0;
-        const maxIterations = 3;
+        const maxIterations = 4;
 
         while (iteration < maxIterations) {
             iteration++;
-            log(`[ReAct] Iteration ${iteration} calling Gemini 3 Flash...`);
+            log(`[ReAct] Iteration ${iteration} calling centralized fast_interactive tier...`);
 
             const llmResponse = await chatCompletion(
                 messages,
-                10000,
-                1.0,
+                8000,
+                0.5,
                 TOOLS,
                 undefined,
-                "google/gemini-3-flash-preview"
+                undefined,
+                { effort: 'low' },
+                'fast_interactive'
             );
 
-            // Case A: The model called one or more tools
             if (llmResponse?.tool_calls && llmResponse.tool_calls.length > 0) {
                 log(`[ReAct] Model selected ${llmResponse.tool_calls.length} tool(s)`);
 
-                // Append assistant turn with tool calls to dialog
-                messages.push({
+                const assistantTurn: any = {
                     role: 'assistant',
                     content: llmResponse.content || null,
                     tool_calls: llmResponse.tool_calls
-                });
+                };
+                if (llmResponse.reasoning_details) {
+                    assistantTurn.reasoning_details = llmResponse.reasoning_details;
+                }
+                messages.push(assistantTurn);
 
-                // Execute each tool call server-side
                 for (const toolCall of llmResponse.tool_calls) {
                     const fnName = toolCall.function?.name;
                     let args: any = {};
@@ -338,20 +337,22 @@ BELANGRIJKE GEDRAGSREGELS:
                         args = {};
                     }
 
-                    log(`[ToolCall] Executing: ${fnName} with args: ${JSON.stringify(args)}`);
+                    log(`[ToolCall] Executing: ${fnName}`);
                     let toolResultStr = '';
 
                     try {
                         if (fnName === 'get_weather') {
-                            const lat = args.latitude || workingContext.userPersona.location?.lat || 51.1488;
-                            const lon = args.longitude || workingContext.userPersona.location?.lon || 5.1271;
+                            const lat = args.latitude ?? workingContext.userPersona.location?.lat ?? 51.1488;
+                            const lon = args.longitude ?? workingContext.userPersona.location?.lon ?? 5.1271;
                             const weather = await getCurrentWeather(lat, lon, 'nl');
 
                             if (args.query_type === 'forecast') {
                                 const forecast = await getForecast(lat, lon, 'nl');
                                 toolResultStr = `Voorspelling: ${forecast.days.map(d => `${d.date}: min ${d.temp_min}°C, max ${d.temp_max}°C, ${d.description}`).join('; ')}`;
                             } else if (args.query_type === 'dew_point') {
-                                toolResultStr = `Het actuele dauwpunt is ${weather.dew_point !== undefined ? `${weather.dew_point}°C` : 'circa 5°C'} bij een buitentemperatuur van ${weather.temp}°C en luchtvochtigheid van ${weather.humidity}%. ${weather.description}.`;
+                                toolResultStr = weather.dew_point !== undefined
+                                    ? `Het actuele dauwpunt is ${weather.dew_point}°C bij een buitentemperatuur van ${weather.temp}°C en luchtvochtigheid van ${weather.humidity}%. ${weather.description}.`
+                                    : `Dauwpunt niet beschikbaar; actuele temperatuur ${weather.temp}°C, luchtvochtigheid ${weather.humidity}%.`;
                             } else if (args.query_type === 'rain_check') {
                                 const forecast = await getForecast(lat, lon, 'nl');
                                 const rain = willItRain(forecast);
@@ -361,8 +362,8 @@ BELANGRIJKE GEDRAGSREGELS:
                             }
                         } else if (fnName === 'get_navigation_eta') {
                             const destination = args.destination;
-                            const lat = workingContext.userPersona.location?.lat || 51.1488;
-                            const lon = workingContext.userPersona.location?.lon || 5.1271;
+                            const lat = workingContext.userPersona.location?.lat ?? 51.1488;
+                            const lon = workingContext.userPersona.location?.lon ?? 5.1271;
 
                             try {
                                 const resolved = await resolveDestination(lat, lon, destination);
@@ -373,31 +374,29 @@ BELANGRIJKE GEDRAGSREGELS:
                                 toolResultStr = `Kon route naar "${destination}" niet berekenen: ${navErr.message}`;
                             }
                         } else if (fnName === 'control_home_device') {
-                            // Collect physical action for client execution
                             const domain = args.domain?.toLowerCase();
                             const service = args.service?.toLowerCase();
                             const entityId = args.entity_id;
-                            const fullService = service.includes('.') ? service : `${domain}.${service}`;
+                            const fullService = service?.includes('.') ? service : `${domain}.${service}`;
 
                             collectedActions.push({
                                 entity_id: entityId,
                                 service: fullService,
                                 data: args.service_data || {}
                             });
-                            toolResultStr = `Actie ${fullService} op ${entityId} succesvol klaargezet voor uitvoering op Home Assistant.`;
+                            toolResultStr = `Actie ${fullService} op ${entityId} klaargezet voor Home Assistant.`;
                         } else if (fnName === 'manage_core_memory') {
                             if (args.action === 'save') {
-                                const saved = await saveCoreMemory(supabase, args.content, args.category || 'preference');
+                                const saved = await saveCoreMemory(supabase, args.content, args.category || 'preference', {}, connection_id);
                                 toolResultStr = saved.success ? `Onthouden in Core Memory: "${args.content}"` : 'Kon niet opslaan in geheugen.';
                             } else {
-                                const deleted = await deleteCoreMemory(supabase, args.content);
+                                const deleted = await deleteCoreMemory(supabase, args.content, connection_id);
                                 toolResultStr = deleted ? `Verwijderd uit geheugen: "${args.content}"` : 'Kon niet wissen uit geheugen.';
                             }
                         } else if (fnName === 'spotify_action') {
                             if (userId) {
                                 if (args.command === 'play') {
-                                    await searchAndPlay(userId, args.query || '');
-                                    toolResultStr = args.query ? `Muziek gestart: ${args.query}` : 'Muziek hervat.';
+                                    toolResultStr = await searchAndPlay(userId, args.query || '', log);
                                 } else if (args.command === 'pause') {
                                     await pause(userId);
                                     toolResultStr = 'Muziek gepauzeerd.';
@@ -416,11 +415,22 @@ BELANGRIJKE GEDRAGSREGELS:
                                 if (args.action === 'list') {
                                     const events = await getUpcomingEvents(userId, 5);
                                     toolResultStr = events && events.length > 0
-                                        ? `Afspraken: ${events.map((e: any) => `${e.summary} om ${new Date(e.start).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}`).join(', ')}`
+                                        ? `Afspraken: ${events.map((e: any) => `${e.summary} om ${new Date(e.start).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: workingContext.userPersona.timezone })}`).join(', ')}`
                                         : 'Je agenda is vandaag leeg.';
                                 } else if (args.action === 'create') {
-                                    const created = await createEvent(userId, args.title || 'Nieuwe afspraak', args.date, args.time, args.duration || 60);
-                                    toolResultStr = created ? `Afspraak "${args.title}" toegevoegd op ${args.date} om ${args.time}.` : 'Kon afspraak niet toevoegen.';
+                                    const startIso = args.date
+                                        ? `${args.date}T${args.time || '09:00'}:00`
+                                        : new Date().toISOString();
+                                    const created = await createEvent(
+                                        userId,
+                                        args.title || 'Nieuwe afspraak',
+                                        startIso,
+                                        Number(args.duration) || 60,
+                                        workingContext.userPersona.timezone
+                                    );
+                                    toolResultStr = created
+                                        ? `Afspraak "${args.title}" toegevoegd op ${args.date || 'vandaag'} om ${args.time || '09:00'}.`
+                                        : 'Kon afspraak niet toevoegen.';
                                 }
                             } else {
                                 toolResultStr = 'Google Agenda is nog niet gekoppeld voor deze gebruiker.';
@@ -433,7 +443,6 @@ BELANGRIJKE GEDRAGSREGELS:
                         toolResultStr = `Fout bij uitvoeren van ${fnName}: ${toolExecErr.message}`;
                     }
 
-                    // Feed tool result back into conversation
                     messages.push({
                         role: 'tool',
                         tool_call_id: toolCall.id,
@@ -442,11 +451,9 @@ BELANGRIJKE GEDRAGSREGELS:
                     });
                 }
 
-                // Continue loop so Gemini 3 Flash sees the tool outputs and generates speech
                 continue;
             }
 
-            // Case B: Model returned natural conversational text (no more tool calls)
             if (typeof llmResponse === 'string') {
                 finalResponseText = llmResponse.trim();
             } else if (llmResponse?.content) {
@@ -455,18 +462,11 @@ BELANGRIJKE GEDRAGSREGELS:
             break;
         }
 
-        // Resilient Fallback: If text is empty but actions were generated
         if (!finalResponseText) {
-            if (collectedActions.length > 0) {
-                finalResponseText = 'Ik heb het voor je in orde gemaakt.';
-            } else {
-                finalResponseText = 'Ik heb je verzoek verwerkt.';
-            }
+            finalResponseText = collectedActions.length > 0
+                ? 'Ik heb het voor je in orde gemaakt.'
+                : 'Ik heb je verzoek verwerkt.';
         }
-
-        logTime('ReAct loop completed');
-        log(`[Butler] Final Text: "${finalResponseText}"`);
-        log(`[Butler] Actions count: ${collectedActions.length}`);
 
         const responsePayload: AIResponse = {
             text: finalResponseText,
@@ -475,7 +475,6 @@ BELANGRIJKE GEDRAGSREGELS:
             logs
         };
 
-        // 8. Save to Chat History
         await saveChatHistory(
             { connection_id, user_message, language },
             responsePayload,

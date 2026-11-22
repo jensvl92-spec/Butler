@@ -112,51 +112,39 @@ export async function getUpcomingEvents(userId: string, limit: number = 10) {
     }
 }
 
+function addMinutesToWallClock(localIso: string, durationMinutes: number): string {
+    const m = localIso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) {
+        return new Date(Date.now() + durationMinutes * 60000).toISOString().replace('Z', '');
+    }
+    const utcMs = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) + durationMinutes * 60000;
+    const d = new Date(utcMs);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
 export async function createEvent(userId: string, summary: string, startTime: string, durationMinutes: number = 60, timezone?: string) {
     const token = await getAccessToken(userId);
 
-    // Parse the startTime and calculate end time
-    // If timezone provided, we use local time string with timezone
-    // Otherwise fall back to UTC
-    const start = new Date(startTime);
-    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-
-    // Format datetime for Google API (without Z suffix for timezone-aware)
-    const formatDateTime = (date: Date) => {
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-    };
-
-    // Build start/end objects with optional timezone
-    // Google Calendar API throws 400 Bad Request if you provide 'Z' (UTC) suffix AND a timeZone field.
-    // Also, dateTime MUST be RFC3339 compliant (e.g. T10:00:00).
-
-    // Normalize start time: Ensure it has seconds if missing (e.g. T14:00 -> T14:00:00) 
-    let startDateTime = startTime.includes('T') ? startTime : `${startTime}T00:00:00`;
-    // If it looks like HH:mm (len 5 after T), append :00
-    if (startDateTime.match(/T\d{2}:\d{2}$/)) {
+    let startDateTime = startTime.includes('T') ? startTime : `${startTime}T09:00:00`;
+    if (/T\d{2}:\d{2}$/.test(startDateTime)) {
         startDateTime += ':00';
     }
 
-    let endDateTime = formatDateTime(end);
+    let startObj: any;
+    let endObj: any;
 
     if (timezone) {
-        // Strip 'Z' if present
-        if (startDateTime.endsWith('Z')) startDateTime = startDateTime.slice(0, -1);
-
-        // Normalize end time similarly
-        // endDateTime from formatDateTime() already has seconds and no Z.
-        // Just ensuring.
-        endDateTime = endDateTime.replace('Z', '');
+        const cleanStart = startDateTime.replace(/Z$/i, '');
+        const cleanEnd = addMinutesToWallClock(cleanStart, durationMinutes);
+        startObj = { dateTime: cleanStart, timeZone: timezone };
+        endObj = { dateTime: cleanEnd, timeZone: timezone };
+    } else {
+        const start = new Date(startDateTime);
+        const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+        startObj = { dateTime: start.toISOString() };
+        endObj = { dateTime: end.toISOString() };
     }
-
-    const startObj: any = timezone
-        ? { dateTime: startDateTime, timeZone: timezone }
-        : { dateTime: start.toISOString() }; // Keep Z if no timezone (UTC)
-
-    const endObj: any = timezone
-        ? { dateTime: endDateTime, timeZone: timezone }
-        : { dateTime: end.toISOString() };
 
     const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
@@ -171,20 +159,29 @@ export async function createEvent(userId: string, summary: string, startTime: st
         })
     });
 
-
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
-
     return data;
 }
 
-export async function updateEvent(userId: string, eventId: string, summary: string, startTime: string, durationMinutes: number = 60) {
+export async function updateEvent(userId: string, eventId: string, summary: string, startTime: string, durationMinutes: number = 60, timezone?: string) {
     const token = await getAccessToken(userId);
 
-    const start = new Date(startTime);
-    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    let startObj: any;
+    let endObj: any;
+    if (timezone) {
+        let cleanStart = (startTime.includes('T') ? startTime : `${startTime}T09:00:00`).replace(/Z$/i, '');
+        if (/T\d{2}:\d{2}$/.test(cleanStart)) cleanStart += ':00';
+        startObj = { dateTime: cleanStart, timeZone: timezone };
+        endObj = { dateTime: addMinutesToWallClock(cleanStart, durationMinutes), timeZone: timezone };
+    } else {
+        const start = new Date(startTime);
+        const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+        startObj = { dateTime: start.toISOString() };
+        endObj = { dateTime: end.toISOString() };
+    }
 
-    const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
         method: 'PATCH',
         headers: {
             'Authorization': `Bearer ${token}`,
@@ -192,14 +189,13 @@ export async function updateEvent(userId: string, eventId: string, summary: stri
         },
         body: JSON.stringify({
             summary,
-            start: { dateTime: start.toISOString() },
-            end: { dateTime: end.toISOString() }
+            start: startObj,
+            end: endObj
         })
     });
 
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
-
     return data;
 }
 

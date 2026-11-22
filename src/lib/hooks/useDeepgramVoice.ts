@@ -1,9 +1,9 @@
 /**
  * useDeepgramVoice - High reliability Speech-to-Text hook
- * 
+ *
  * Uses @capacitor-community/speech-recognition on Android/iOS native platforms
- * with on-device / Google Speech Recognition engine for zero-latency, reliable Dutch STT.
- * Falls back to Web Speech API on browser/web environments.
+ * and falls back to Web Speech API in browser environments.
+ * Hardened against double-final emissions, unmount leaks, and 150ms timer leaks.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -14,9 +14,10 @@ import { logger } from '../../utils/logger';
 interface UseDeepgramVoiceProps {
     onTranscript: (text: string) => void;
     onFinalTranscript: (text: string) => void;
+    language?: string;
 }
 
-export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgramVoiceProps) {
+export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: UseDeepgramVoiceProps) {
     const [isListening, setIsListening] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
     const [partialTranscript, setPartialTranscript] = useState('');
@@ -25,86 +26,93 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
     const [audioLevel, setAudioLevel] = useState(0);
 
     const latestTranscriptRef = useRef<string>('');
-    const silenceTimerRef = useRef<any>(null);
+    const hasEmittedFinalRef = useRef<boolean>(false);
+    const isStoppingRef = useRef<boolean>(false);
+    const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const webRecognitionRef = useRef<any>(null);
     const callbacksRef = useRef({ onTranscript, onFinalTranscript });
-    const audioLevelIntervalRef = useRef<any>(null);
+    const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Keep callbacks ref updated
+    const effectiveLang = language && language.toLowerCase().startsWith('en') ? 'en-US' : 'nl-NL';
+
     useEffect(() => {
         callbacksRef.current = { onTranscript, onFinalTranscript };
     }, [onTranscript, onFinalTranscript]);
 
-    // Check permission on mount
-    useEffect(() => {
-        const checkPerms = async () => {
-            try {
-                if (Capacitor.isNativePlatform()) {
-                    const status = await SpeechRecognition.checkPermissions();
-                    if (status.speechRecognition !== 'granted') {
-                        await SpeechRecognition.requestPermissions();
-                    }
-                }
-            } catch (e) {
-                logger.warn('🎤 [Speech] Permission check error:', e);
-            }
-        };
-        checkPerms();
-
-        return () => {
-            stopListening('cleanup');
-        };
-    }, []);
-
-    const stopListening = useCallback(async (reason = 'manual') => {
-        logger.info(`🎤 [Speech] Stopping... (Reason: ${reason})`);
-
+    const clearTimers = useCallback(() => {
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
         }
-
         if (audioLevelIntervalRef.current) {
             clearInterval(audioLevelIntervalRef.current);
             audioLevelIntervalRef.current = null;
         }
         setAudioLevel(0);
+    }, []);
 
+    const emitFinalOnce = useCallback((candidate: string) => {
+        const trimmed = candidate.trim();
+        if (!trimmed || hasEmittedFinalRef.current) return;
+        hasEmittedFinalRef.current = true;
+        latestTranscriptRef.current = '';
+        setPartialTranscript('');
+        logger.info('🎤 [Speech] Emitting final transcript:', trimmed);
+        callbacksRef.current.onFinalTranscript(trimmed);
+    }, []);
+
+    const stopListening = useCallback(async (reason = 'manual') => {
+        if (isStoppingRef.current && reason !== 'cleanup') return;
+        isStoppingRef.current = true;
+
+        logger.info(`🎤 [Speech] Stopping... (Reason: ${reason})`);
+        clearTimers();
+
+        // Capture & clear transcript BEFORE calling stop() so native/web stop callbacks cannot double-emit!
         const finalCandidate = latestTranscriptRef.current.trim();
+        latestTranscriptRef.current = '';
+        const shouldEmit = reason !== 'cleanup' && reason !== 'error' && reason !== 'cancel';
 
         if (Capacitor.isNativePlatform()) {
             try {
-                await SpeechRecognition.stop();
                 await SpeechRecognition.removeAllListeners();
-            } catch (e) {
-                logger.warn('🎤 [Speech] Native stop error (ignorable):', e);
-            }
+                await SpeechRecognition.stop();
+            } catch { }
         } else if (webRecognitionRef.current) {
-            try {
-                webRecognitionRef.current.stop();
-            } catch (e) {
-                // Ignore
-            }
+            const rec = webRecognitionRef.current;
             webRecognitionRef.current = null;
+            rec.onresult = null;
+            rec.onerror = null;
+            rec.onend = null;
+            try {
+                rec.stop();
+            } catch { }
         }
 
-        setIsListening(false);
-        setIsConnecting(false);
-
-        // If we have a recognized transcript, trigger final callback
-        if (finalCandidate) {
-            logger.info('🎤 [Speech] Emitting final transcript:', finalCandidate);
-            latestTranscriptRef.current = '';
-            callbacksRef.current.onFinalTranscript(finalCandidate);
+        if (reason !== 'cleanup') {
+            setIsListening(false);
+            setIsConnecting(false);
             setPartialTranscript('');
         }
-    }, []);
+
+        if (shouldEmit && finalCandidate) {
+            emitFinalOnce(finalCandidate);
+        }
+
+        isStoppingRef.current = false;
+    }, [clearTimers, emitFinalOnce]);
+
+    // Cleanup on unmount ONLY (never emit transcripts on unmount, never spam permissions on mount)
+    useEffect(() => {
+        return () => {
+            stopListening('cleanup');
+        };
+    }, [stopListening]);
 
     const resetSilenceTimer = useCallback(() => {
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
         }
-        // Auto-finalize 1.8 seconds after user stops speaking
         silenceTimerRef.current = setTimeout(() => {
             if (latestTranscriptRef.current.trim()) {
                 logger.info('🎤 [Speech] Silence timeout reached, finalizing');
@@ -114,24 +122,22 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
     }, [stopListening]);
 
     const startListening = useCallback(async () => {
-        if (isListening || isConnecting) return;
+        if (isListening || isConnecting || isStoppingRef.current) return;
 
         setIsConnecting(true);
         setError('');
         setPartialTranscript('');
         latestTranscriptRef.current = '';
+        hasEmittedFinalRef.current = false;
         callbacksRef.current.onTranscript('');
 
-        // Visual audio level pulse while active
-        if (audioLevelIntervalRef.current) clearInterval(audioLevelIntervalRef.current);
+        clearTimers();
         audioLevelIntervalRef.current = setInterval(() => {
             setAudioLevel(Math.floor(25 + Math.random() * 45));
         }, 150);
 
         try {
             if (Capacitor.isNativePlatform()) {
-                logger.info('🎤 [Speech] Initializing native speech recognition...');
-
                 const perms = await SpeechRecognition.checkPermissions();
                 if (perms.speechRecognition !== 'granted') {
                     const req = await SpeechRecognition.requestPermissions();
@@ -165,35 +171,29 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
                         setIsConnecting(false);
                         setIsListening(true);
                     } else if (data.status === 'stopped') {
-                        // Check if we need to emit final
-                        if (latestTranscriptRef.current.trim()) {
-                            const final = latestTranscriptRef.current.trim();
-                            latestTranscriptRef.current = '';
-                            callbacksRef.current.onFinalTranscript(final);
-                            setPartialTranscript('');
+                        clearTimers();
+                        const final = latestTranscriptRef.current.trim();
+                        if (final) {
+                            emitFinalOnce(final);
                         }
                         setIsListening(false);
                         setIsConnecting(false);
+                        SpeechRecognition.removeAllListeners().catch(() => {});
                     }
                 });
 
                 await SpeechRecognition.start({
-                    language: 'nl-NL',
+                    language: effectiveLang,
                     maxResults: 1,
-                    prompt: 'Spreek je vraag in...',
+                    prompt: effectiveLang.startsWith('nl') ? 'Spreek je vraag in...' : 'Speak your command...',
                     popup: false,
                     partialResults: true
                 });
 
                 setIsConnecting(false);
                 setIsListening(true);
-                logger.info('🎤 [Speech] Native speech recognition started');
-
             } else {
-                // Web Speech API fallback for browser development/preview
-                logger.info('🎤 [Speech] Falling back to Web Speech API');
                 const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
                 if (!SpeechRecognitionClass) {
                     throw new Error('Web Speech API wordt niet ondersteund in deze browser.');
                 }
@@ -202,28 +202,21 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
                 webRecognitionRef.current = recognition;
                 recognition.continuous = false;
                 recognition.interimResults = true;
-                recognition.lang = 'nl-NL';
+                recognition.lang = effectiveLang;
 
                 recognition.onstart = () => {
-                    logger.info('🎤 [WebSpeech] Started');
                     setIsConnecting(false);
                     setIsListening(true);
                 };
 
                 recognition.onresult = (event: any) => {
-                    let interim = '';
-                    let final = '';
-
-                    for (let i = event.resultIndex; i < event.results.length; ++i) {
-                        const transcript = event.results[i][0].transcript;
-                        if (event.results[i].isFinal) {
-                            final += transcript;
-                        } else {
-                            interim += transcript;
-                        }
+                    let fullTranscript = '';
+                    // Start from 0 so earlier segments in the utterance are never lost!
+                    for (let i = 0; i < event.results.length; ++i) {
+                        fullTranscript += event.results[i][0]?.transcript || '';
                     }
 
-                    const current = (final || interim).trim();
+                    const current = fullTranscript.trim();
                     if (current) {
                         latestTranscriptRef.current = current;
                         setPartialTranscript(current);
@@ -234,32 +227,26 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript }: UseDeepgra
 
                 recognition.onerror = (event: any) => {
                     logger.warn('🎤 [WebSpeech] Error:', event.error);
-                    if (event.error !== 'no-speech') {
+                    if (event.error !== 'no-speech' && event.error !== 'aborted') {
                         setError(`Spraakfout: ${event.error}`);
                     }
                     stopListening('error');
                 };
 
                 recognition.onend = () => {
-                    logger.info('🎤 [WebSpeech] Ended');
                     stopListening('end');
                 };
 
                 recognition.start();
             }
-
         } catch (err: any) {
             logger.error('🎤 [Speech] Start failed:', err);
-            setError(err.message || 'Kon spraakherkenning niet starten');
+            setError(err?.message || 'Kon spraakherkenning niet starten');
             setIsConnecting(false);
             setIsListening(false);
-            if (audioLevelIntervalRef.current) {
-                clearInterval(audioLevelIntervalRef.current);
-                audioLevelIntervalRef.current = null;
-            }
-            setAudioLevel(0);
+            clearTimers();
         }
-    }, [isListening, isConnecting, stopListening, resetSilenceTimer]);
+    }, [isListening, isConnecting, clearTimers, emitFinalOnce, effectiveLang, stopListening, resetSilenceTimer]);
 
     return {
         isListening,

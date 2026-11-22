@@ -1,5 +1,6 @@
+import { normalizeHAUrl, sanitizeHAToken } from './home-assistant'
 
-export type HAEventType = 'state_changed' | 'auth_required' | 'auth_ok' | 'auth_invalid' | 'result'
+export type HAEventType = 'state_changed' | 'auth_required' | 'auth_ok' | 'auth_invalid' | 'result' | 'pong'
 
 export interface HAEvent {
     type: HAEventType
@@ -22,11 +23,16 @@ export interface HAEvent {
     }
 }
 
+interface QueuedMessage {
+    id: number
+    serialized: string
+}
+
 export class HAWebSocket {
     private ws: WebSocket | null = null
     private url: string
     private token: string
-    private idCounter = Date.now()
+    private idCounter = 1
     // Store resolve/reject for pending commands
     private pendingRequests = new Map<number, { resolve: (res: any) => void, reject: (err: any) => void }>()
     private onStateChange: (entityId: string, newState: any) => void
@@ -34,57 +40,83 @@ export class HAWebSocket {
     private connectionPromise: Promise<void> | null = null
     private authenticated = false
 
-    // Message Queue for buffering commands before Auth
-    private messageQueue: string[] = []
+    // Message Queue for buffering commands only during active auth handshake (evicted on timeout/close!)
+    private messageQueue: QueuedMessage[] = []
 
-    // Auto-reconnect properties
-    private reconnectTimer: any = null
+    // Auto-reconnect & heartbeat properties
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    private heartbeatTimer: ReturnType<typeof setInterval> | null = null
     private reconnectAttempts = 0
-    private maxReconnectAttempts = 5
+    private maxReconnectAttempts = 12
     private isClosedExplicitly = false
 
-    // Generic Event Subscriptions (ID -> Callback)
-    private eventSubscriptions = new Map<number, (event: any) => void>()
+    // Generic Event Subscriptions (ID -> { eventType, callback })
+    private eventSubscriptions = new Map<number, { eventType: string; callback: (event: any) => void }>()
+
+    // Network/visibility recovery handlers
+    private boundOnlineHandler: () => void
+    private boundVisibilityHandler: () => void
 
     constructor(url: string, token: string, onStateChange: (id: string, state: any) => void, onReady?: () => void) {
-        // Normalize URL: http(s) -> ws(s)
-        let wsUrl = url.replace(/^http/, 'ws')
-
-        // Remove trailing slash if present
-        if (wsUrl.endsWith('/')) wsUrl = wsUrl.slice(0, -1)
-
-        const knownSuffixes = ['/api/websocket', '/api', '/config/dashboard']
-        for (const suffix of knownSuffixes) {
-            if (wsUrl.endsWith(suffix)) {
-                wsUrl = wsUrl.slice(0, -suffix.length)
-            }
+        const cleanBase = normalizeHAUrl(url || '')
+        let wsUrl = cleanBase.replace(/^http(s?):\/\//i, 'ws$1://')
+        if (!/^wss?:\/\//i.test(wsUrl)) {
+            wsUrl = `ws://${wsUrl}`
         }
-
         wsUrl += '/api/websocket'
 
         this.url = wsUrl
-
-        // SMART TOKEN EXTRACTION (in case DB has corrupted data)
-        const jwtMatch = token.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)
-        const extracted = jwtMatch ? jwtMatch[0] : token
-
-        // Aggressively strip all whitespace (newlines from copy-paste)
-        this.token = extracted.replace(/\s/g, '').replace(/[^\x00-\x7F]/g, "")
+        this.token = sanitizeHAToken(token)
         this.onStateChange = onStateChange
         this.onReady = onReady
+
+        this.boundOnlineHandler = () => {
+            if (!this.isClosedExplicitly && !this.isConnected()) {
+                this.reconnectAttempts = 0
+                this.connect().catch(() => {})
+            }
+        }
+        this.boundVisibilityHandler = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible' && !this.isClosedExplicitly && !this.isConnected()) {
+                this.reconnectAttempts = 0
+                this.connect().catch(() => {})
+            }
+        }
+
+        if (typeof window !== 'undefined') {
+            window.addEventListener('online', this.boundOnlineHandler)
+            document.addEventListener('visibilitychange', this.boundVisibilityHandler)
+        }
     }
 
-    connect() {
+    connect(): Promise<void> {
+        if (this.isConnected()) return Promise.resolve()
         if (this.connectionPromise) return this.connectionPromise
 
         this.connectionPromise = new Promise((resolve, reject) => {
+            let settled = false
+            const safeResolve = () => {
+                if (!settled) {
+                    settled = true
+                    resolve()
+                }
+            }
+            const safeReject = (err: any) => {
+                if (!settled) {
+                    settled = true
+                    this.connectionPromise = null
+                    reject(err)
+                }
+            }
+
             console.log('🔌 Connecting to HA WebSocket:', this.url)
             this.isClosedExplicitly = false
 
             try {
                 this.ws = new WebSocket(this.url)
             } catch (e) {
-                console.error("Failed to create WebSocket", e)
+                console.error('Failed to create WebSocket', e)
+                safeReject(e)
                 this.scheduleReconnect()
                 return
             }
@@ -97,32 +129,32 @@ export class HAWebSocket {
             this.ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data)
-                    this.handleMessage(message, resolve, reject)
+                    this.handleMessage(message, safeResolve, safeReject)
                 } catch (e) {
-                    console.error("Error parsing WS message", e)
+                    console.error('Error parsing WS message', e)
                 }
             }
 
             this.ws.onerror = (error) => {
                 console.error('🔌 WS Error:', error)
-                // Reject only if it's the initial connection attempt
-                if (!this.authenticated) reject(error)
+                if (!this.authenticated) safeReject(error)
             }
 
             this.ws.onclose = () => {
                 console.log('🔌 WS Closed')
+                const wasAuthenticated = this.authenticated
                 this.authenticated = false
                 this.connectionPromise = null
+                this.stopHeartbeat()
 
-                // Reject all pending requests
+                // Reject all pending requests AND evict queued commands so stale commands never ghost-execute on reconnect!
                 this.pendingRequests.forEach((p) => p.reject(new Error('WebSocket closed')))
                 this.pendingRequests.clear()
+                this.messageQueue = []
 
-                // Clear subscriptions? They are invalid on new connection usually,
-                // but HA might need re-subscribing. 
-                // We should technically re-subscribe all.
-                // For now, let's just clear to avoid leaks/stale ID mappings (IDs reset on new connection).
-                this.eventSubscriptions.clear()
+                if (!wasAuthenticated) {
+                    safeReject(new Error('WebSocket closed before authentication'))
+                }
 
                 if (!this.isClosedExplicitly) {
                     this.scheduleReconnect()
@@ -133,24 +165,47 @@ export class HAWebSocket {
         return this.connectionPromise
     }
 
+    private startHeartbeat() {
+        this.stopHeartbeat()
+        this.heartbeatTimer = setInterval(() => {
+            if (!this.isConnected()) {
+                this.stopHeartbeat()
+                return
+            }
+            this.sendMessage({ type: 'ping' }, 6000).catch(() => {
+                console.warn('🔌 WS Heartbeat timeout — forcing reconnect')
+                try {
+                    this.ws?.close()
+                } catch { }
+            })
+        }, 30000)
+    }
+
+    private stopHeartbeat() {
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer)
+            this.heartbeatTimer = null
+        }
+    }
+
     private scheduleReconnect() {
+        if (this.isClosedExplicitly) return
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error('🔌 Max reconnect attempts reached')
+            console.warn('🔌 Max reconnect attempts reached (will retry on network/app resume)')
             return
         }
 
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
-        console.log(`🔌 Reconnecting in ${delay}ms...`)
+        console.log(`🔌 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`)
 
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
         this.reconnectTimer = setTimeout(() => {
             this.reconnectAttempts++
-            this.connect()
+            this.connect().catch(() => {})
         }, delay)
     }
 
-    private handleMessage(message: any, resolve: any, reject: any) {
-        // Auth Flow
+    private handleMessage(message: any, resolve: () => void, reject: (err: any) => void) {
         if (message.type === 'auth_required') {
             this.sendAuth()
             return
@@ -158,61 +213,65 @@ export class HAWebSocket {
 
         if (message.type === 'auth_ok') {
             this.authenticated = true
+            this.startHeartbeat()
             import('./logger').then(({ logger }) => logger.info('✅ Auth OK - Re-subscribing & Refreshing State'))
             this.subscribeStateChanges()
+            this.resubscribeGenericEvents()
             this.flushQueue()
             if (this.onReady) this.onReady()
-            resolve() // Connect promise resolves here
+            resolve()
             return
         }
 
         if (message.type === 'auth_invalid') {
             console.error('Auth Invalid:', message.message)
-            this.ws?.close()
+            // Set explicit close flag BEFORE calling ws.close() to prevent reconnect race
             this.isClosedExplicitly = true
-            reject(new Error(message.message))
+            this.ws?.close()
+            reject(new Error(message.message || 'Authentication invalid'))
+            return
+        }
+
+        if (message.type === 'pong' && message.id && this.pendingRequests.has(message.id)) {
+            const req = this.pendingRequests.get(message.id)!
+            this.pendingRequests.delete(message.id)
+            req.resolve(message)
             return
         }
 
         // Command Results
-        // HA returns 'id' for command results.
         if (message.id && this.pendingRequests.has(message.id)) {
             const { resolve: reqResolve, reject: reqReject } = this.pendingRequests.get(message.id)!
+            this.pendingRequests.delete(message.id)
 
             if (message.success === false) {
                 reqReject(new Error(message.error?.message || 'Command failed'))
             } else {
                 reqResolve(message)
             }
-
-            this.pendingRequests.delete(message.id)
-            // Do NOT return here if it's a subscription result? 
-            // Actually result comes separate from events.
             return
         }
 
         // Events
         if (message.type === 'event' && message.event) {
-
-            // Dispatch to generic subscribers (mapped by ID)
             if (message.id && this.eventSubscriptions.has(message.id)) {
-                this.eventSubscriptions.get(message.id)!(message.event)
+                this.eventSubscriptions.get(message.id)!.callback(message.event)
             }
 
-            // Keep Legacy Hardcoded State Changed for now (redundant if using subscription map but safe)
             if (message.event.event_type === 'state_changed') {
                 const { entity_id, new_state } = message.event.data
-                // import('./logger').then(({ logger }) => logger.info(`🔌 Event: ${entity_id} -> ${new_state?.state}`))
                 this.onStateChange(entity_id, new_state)
             }
         }
     }
 
     private sendAuth() {
-        this.ws?.send(JSON.stringify({
-            type: 'auth',
-            access_token: this.token
-        }))
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                type: 'auth',
+                access_token: this.token
+            }))
+        }
     }
 
     private subscribeStateChanges() {
@@ -226,11 +285,19 @@ export class HAWebSocket {
         })
     }
 
+    private resubscribeGenericEvents() {
+        const existing = Array.from(this.eventSubscriptions.values())
+        this.eventSubscriptions.clear()
+        existing.forEach(({ eventType, callback }) => {
+            this.subscribeEvents(eventType, callback).catch(() => {})
+        })
+    }
+
     private flushQueue() {
         while (this.messageQueue.length > 0) {
-            const msg = this.messageQueue.shift()
-            if (msg && this.ws?.readyState === WebSocket.OPEN) {
-                this.ws.send(msg)
+            const item = this.messageQueue.shift()
+            if (item && this.pendingRequests.has(item.id) && this.ws?.readyState === WebSocket.OPEN) {
+                this.ws.send(item.serialized)
             }
         }
     }
@@ -239,10 +306,11 @@ export class HAWebSocket {
         return new Promise((resolve, reject) => {
             const id = this.idCounter++
 
-            // Add timeout to prevent infinite hang
             const timeout = setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id)
+                    // Evict from messageQueue so timed-out command NEVER ghost-executes later!
+                    this.messageQueue = this.messageQueue.filter(m => m.id !== id)
                     console.warn(`⏱️ WebSocket timeout after ${timeoutMs}ms for message ID ${id}`)
                     reject(new Error(`WebSocket timeout after ${timeoutMs}ms`))
                 }
@@ -253,74 +321,79 @@ export class HAWebSocket {
                 reject: (err) => { clearTimeout(timeout); reject(err) }
             })
 
-            // Construct message
-            const message = JSON.stringify({
+            const serialized = JSON.stringify({
                 id,
                 ...payload
             })
 
-            // Only send if OPEN and AUTHENTICATED
             if (this.isConnected()) {
-                this.ws!.send(message)
+                this.ws!.send(serialized)
             } else {
-                // Buffer it
                 console.warn(`⚠️ WS Not Ready (Auth: ${this.authenticated}, State: ${this.ws?.readyState}). Buffering message ID ${id}`)
-                this.messageQueue.push(message)
+                this.messageQueue.push({ id, serialized })
 
-                // Trigger reconnect if it looks dead
-                if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
-                    this.connect();
+                if (!this.isClosedExplicitly && (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING)) {
+                    this.connect().catch(() => {})
                 }
             }
         })
     }
 
     public isConnected(): boolean {
-        return this.ws?.readyState === WebSocket.OPEN && this.authenticated;
+        return this.ws?.readyState === WebSocket.OPEN && this.authenticated
     }
 
     public getStatus(): string {
-        return `Authenticated: ${this.authenticated}, ReadyState: ${this.ws?.readyState}, Queue: ${this.messageQueue.length}`;
+        return `Authenticated: ${this.authenticated}, ReadyState: ${this.ws?.readyState}, Queue: ${this.messageQueue.length}`
     }
 
-    /**
-     * Subscribe to a specific event type.
-     * Returns an unsubscribe function.
-     */
     public async subscribeEvents(eventType: string, callback: (event: any) => void): Promise<() => void> {
         try {
-            // Send subscription command
             const result = await this.sendMessage({
                 type: 'subscribe_events',
                 event_type: eventType
-            });
+            })
 
-            // result.id is the subscription ID (same as command ID in HA)
-            const subscriptionId = result.id;
+            const subscriptionId = result.id
+            this.eventSubscriptions.set(subscriptionId, { eventType, callback })
 
-            // Register callback
-            this.eventSubscriptions.set(subscriptionId, callback);
-
-            console.log(`✅ Subscribed to ${eventType} (ID: ${subscriptionId})`);
-
-            // Return unsubscribe function
             return () => {
                 if (this.eventSubscriptions.has(subscriptionId)) {
-                    this.eventSubscriptions.delete(subscriptionId);
-                    // Optionally send unsubscribe command to HA if supported/needed
-                    // HA doesn't explicitly require unsubscribing for simple clients, 
-                    // but 'unsubscribe_events' command exists taking 'subscription': id
+                    this.eventSubscriptions.delete(subscriptionId)
+                    if (this.isConnected()) {
+                        this.sendMessage({
+                            type: 'unsubscribe_events',
+                            subscription: subscriptionId
+                        }, 3000).catch(() => {})
+                    }
                 }
-            };
+            }
         } catch (e) {
-            console.error(`❌ Failed to subscribe to ${eventType}`, e);
-            throw e;
+            console.error(`❌ Failed to subscribe to ${eventType}`, e)
+            throw e
         }
     }
 
     public close() {
         this.isClosedExplicitly = true
-        if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
-        this.ws?.close()
+        this.stopHeartbeat()
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = null
+        }
+        this.messageQueue = []
+        this.pendingRequests.forEach((p) => p.reject(new Error('WebSocket closed explicitly')))
+        this.pendingRequests.clear()
+        this.eventSubscriptions.clear()
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('online', this.boundOnlineHandler)
+            document.removeEventListener('visibilitychange', this.boundVisibilityHandler)
+        }
+        try {
+            this.ws?.close()
+        } catch { }
+        this.ws = null
+        this.authenticated = false
+        this.connectionPromise = null
     }
 }

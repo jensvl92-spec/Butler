@@ -1,8 +1,7 @@
 /// <reference types="vite/client" />
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useApp } from '../AppContext';
 import { ChatMessage, LLMResponse } from '../../types';
-// @ts-ignore
 import { logger } from '../../utils/logger';
 import { Geolocation } from '@capacitor/geolocation';
 import { Browser } from '@capacitor/browser';
@@ -13,21 +12,24 @@ import { supabase } from '../supabase';
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { runClientReActOrchestrator, resolveAIConfig } from '../services/clientOrchestrator';
 
-const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://rbriqijzyptjwsjrsqvc.supabase.co';
-const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicmlxaWp6eXB0andzanJzcXZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyMjY3MDgsImV4cCI6MjA4MDgwMjcwOH0.94wS30fbBgNXqtO4zqTAFPa7XVs7CEaegAwVu6nMk40';
+const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 
 // Module-level GPS cache so subsequent questions don't require GPS warm-up or server retry
 let lastKnownLocation: { lat: number; lon: number; timestamp: number } | null = null;
 
 // Global callback for graph creation (set by App.tsx)
 export let onGraphCreate: ((config: any) => void) | null = null;
-export const setGraphCreateCallback = (cb: (config: any) => void) => { onGraphCreate = cb; };
+export const setGraphCreateCallback = (cb: ((config: any) => void) | null) => { onGraphCreate = cb; };
 
 export function useAIChatLogic() {
-    const { activeConnection, entityStates, haWebSocket, addChatMessage, uiState, activeSuggestion } = useApp();
+    const { activeConnection, entityStates, haWebSocket, addChatMessage, uiState } = useApp();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [loading, setLoading] = useState(false);
-    const [conversationMode, setConversationMode] = useState(false); // Hands-free mode for recipes
+    const [conversationMode, setConversationMode] = useState(false);
+    const isSendingRef = useRef(false);
+    const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+    const activeAudioUrlRef = useRef<string | null>(null);
+    const ttsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const getDynamicCoordinates = (): { lat: number; lon: number } | null => {
         if (lastKnownLocation) return { lat: lastKnownLocation.lat, lon: lastKnownLocation.lon };
@@ -425,85 +427,121 @@ export function useAIChatLogic() {
         return { retryTriggered: false, generatedText };
     };
 
+    const stopCurrentSpeech = () => {
+        if (ttsTimeoutRef.current) {
+            clearTimeout(ttsTimeoutRef.current);
+            ttsTimeoutRef.current = null;
+        }
+        if (activeAudioRef.current) {
+            try {
+                activeAudioRef.current.pause();
+                activeAudioRef.current.onended = null;
+                activeAudioRef.current.onerror = null;
+            } catch { }
+            activeAudioRef.current = null;
+        }
+        if (activeAudioUrlRef.current) {
+            URL.revokeObjectURL(activeAudioUrlRef.current);
+            activeAudioUrlRef.current = null;
+        }
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            try { window.speechSynthesis.cancel(); } catch { }
+        }
+        if (Capacitor.isNativePlatform()) {
+            try { TextToSpeech.stop().catch(() => {}); } catch { }
+        }
+    };
+
     const playNativeTTS = async (text: string, language: string, autoListen: boolean, isWhisper?: boolean) => {
+        stopCurrentSpeech();
+        const isDutch = !language || language.toLowerCase().startsWith('nl');
+        const locale = isDutch ? 'nl-NL' : 'en-US';
+        const volume = isWhisper ? 0.3 : 1.0;
+        const rate = isWhisper ? 0.9 : 1.05;
+        const pitch = isWhisper ? 0.85 : 1.0;
+
         try {
-            const locale = (language && language.toLowerCase().includes('nl')) ? 'nl-NL' : 'en-US';
-            const volume = isWhisper ? 0.3 : 1.0;
-            const rate = isWhisper ? 0.9 : 1.05;
-            const pitch = isWhisper ? 0.85 : 1.0;
-
-            logger.info(`🔊 Plugin TTS: "${text.substring(0, 20)}..." (${locale}, vol: ${volume}, whisper: ${!!isWhisper})`);
-
-            await TextToSpeech.speak({
-                text: text,
-                lang: locale,
-                rate,
-                pitch,
-                volume,
-                category: 'ambient',
-            });
-
-            logger.info('🔊 Plugin TTS Finished');
-
-            if (autoListen) {
-                logger.info('🎙️ Triggering auto-listen after TTS');
-                (window as any).dispatchEvent(new CustomEvent('butler-auto-listen'));
+            if (Capacitor.isNativePlatform()) {
+                await TextToSpeech.speak({
+                    text,
+                    lang: locale,
+                    rate,
+                    pitch,
+                    volume,
+                    category: 'ambient',
+                });
+                if (autoListen) {
+                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                }
+                return;
             }
-
-        } catch (e: any) {
-            logger.error('❌ Plugin TTS failed, trying Web Speech fallback:', e);
-
-            if ('speechSynthesis' in window) {
+            throw new Error('Web platform - use Web Speech');
+        } catch {
+            if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
                 const utter = new SpeechSynthesisUtterance(text);
-                const locale = (language && language.toLowerCase().includes('nl')) ? 'nl-NL' : 'en-US';
                 utter.lang = locale;
-                utter.volume = isWhisper ? 0.3 : 1.0;
-                utter.rate = isWhisper ? 0.9 : 1.05;
-                utter.pitch = isWhisper ? 0.85 : 1.0;
+                utter.volume = volume;
+                utter.rate = rate;
+                utter.pitch = pitch;
 
                 const voices = window.speechSynthesis.getVoices();
-                const dutchVoice = voices.find(v => v.lang.startsWith('nl') || v.lang.includes('Dutch'));
-                if (dutchVoice) {
-                    utter.voice = dutchVoice;
+                const targetPrefix = isDutch ? 'nl' : 'en';
+                const matchingVoice = voices.find(v => v.lang.toLowerCase().startsWith(targetPrefix));
+                if (matchingVoice) {
+                    utter.voice = matchingVoice;
                 }
 
-                utter.onend = () => {
+                const finish = () => {
+                    if (ttsTimeoutRef.current) {
+                        clearTimeout(ttsTimeoutRef.current);
+                        ttsTimeoutRef.current = null;
+                    }
                     if (autoListen) {
-                        (window as any).dispatchEvent(new CustomEvent('butler-auto-listen'));
+                        window.dispatchEvent(new CustomEvent('butler-auto-listen'));
                     }
                 };
 
-                setTimeout(() => {
+                utter.onend = finish;
+                utter.onerror = finish;
+
+                ttsTimeoutRef.current = setTimeout(() => {
+                    ttsTimeoutRef.current = null;
                     if (window.speechSynthesis.speaking) {
-                        logger.warn('⚠️ Native TTS timed out (fallback)');
-                        if (autoListen) (window as any).dispatchEvent(new CustomEvent('butler-auto-listen'));
+                        window.speechSynthesis.cancel();
                     }
-                }, (text.length * 100) + 2000);
+                    if (autoListen) {
+                        window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                    }
+                }, Math.min(30000, (text.length * 100) + 4000));
 
                 window.speechSynthesis.speak(utter);
-            } else {
-                if (autoListen) {
-                    (window as any).dispatchEvent(new CustomEvent('butler-auto-listen'));
-                }
+            } else if (autoListen) {
+                globalThis.dispatchEvent(new CustomEvent('butler-auto-listen'));
             }
         }
     };
 
     const sendMessage = async (text: string, options?: { forcedLocation?: any; gpsUnavailable?: boolean; isWhisper?: boolean }) => {
         if (!activeConnection || !text.trim()) return;
+        if (isSendingRef.current && !options?.forcedLocation) {
+            logger.warn('⏳ Ignoring duplicate sendMessage while already processing');
+            return;
+        }
+        isSendingRef.current = true;
         setLoading(true);
-        // 0. Optimistic Update (Show user message immediately)
-        const tempId = Date.now().toString();
+        stopCurrentSpeech();
+
+        const tempId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
         try {
-            logger.info("Sending message", { text, connectionId: activeConnection.id, retry: !!options?.forcedLocation, gpsUnavailable: options?.gpsUnavailable });
+            logger.info('Sending message', { textLength: text.length, connectionId: activeConnection.id });
 
             const optimisticMsg: ChatMessage = {
                 id: tempId,
                 connection_id: activeConnection.id,
                 user_message: text,
-                ai_response: '', // Empty means loading
-                language: 'en', // Default, updated later
+                ai_response: '',
+                language: uiState.language || 'nl',
                 actions_taken: [],
                 created_at: new Date().toISOString()
             };
@@ -514,29 +552,38 @@ export function useAIChatLogic() {
                 entity_id: s.entity_id, ...s
             })).filter(d => d.entity_id);
 
-            // Fallback to cached dashboard tiles or cached states if entityStates is empty
             if (devices.length === 0 && activeConnection) {
                 try {
-                    const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`) || localStorage.getItem('dashboard-tiles');
-                    if (cachedTilesRaw) {
-                        const tiles = JSON.parse(cachedTilesRaw);
-                        const extracted: any[] = [];
-                        tiles.forEach((t: any) => {
-                            if (Array.isArray(t.devices)) {
-                                extracted.push(...t.devices);
-                            }
-                        });
-                        if (extracted.length > 0) {
-                            devices = extracted;
-                            logger.info(`📦 Loaded ${devices.length} devices from cached dashboard tiles`);
+                    const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnection.id}`);
+                    if (cachedStatesRaw) {
+                        const statesObj = JSON.parse(cachedStatesRaw);
+                        if (statesObj && typeof statesObj === 'object') {
+                            devices = Object.values(statesObj).filter((d: any) => d?.entity_id);
                         }
                     }
                     if (devices.length === 0) {
-                        const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnection.id}`);
-                        if (cachedStatesRaw) {
-                            const statesObj = JSON.parse(cachedStatesRaw);
-                            devices = Object.values(statesObj);
-                            logger.info(`📦 Loaded ${devices.length} devices from cached states`);
+                        const cachedTilesRaw = localStorage.getItem(`dashboard_tiles_${activeConnection.id}`);
+                        if (cachedTilesRaw) {
+                            const tiles = JSON.parse(cachedTilesRaw);
+                            const extracted: any[] = [];
+                            if (Array.isArray(tiles)) {
+                                tiles.forEach((t: any) => {
+                                    if (Array.isArray(t.deviceGroups)) {
+                                        t.deviceGroups.forEach((g: any) => {
+                                            (g.entities || []).forEach((d: any) => {
+                                                const eid = d.entityId || d.entity_id;
+                                                if (eid) extracted.push({ entity_id: eid, state: 'unknown', attributes: { friendly_name: d.name } });
+                                            });
+                                        });
+                                    } else if (Array.isArray(t.devices)) {
+                                        t.devices.forEach((d: any) => {
+                                            const eid = d.entityId || d.entity_id;
+                                            if (eid) extracted.push({ entity_id: eid, state: d.state || 'unknown', attributes: { friendly_name: d.name } });
+                                        });
+                                    }
+                                });
+                            }
+                            if (extracted.length > 0) devices = extracted;
                         }
                     }
                 } catch (cacheErr) {
@@ -544,43 +591,26 @@ export function useAIChatLogic() {
                 }
             }
 
-            // 2. Build payload for Supabase Edge Function
-            logger.info("Posting to process-ai-command", { deviceCount: devices.length });
-
-            // Get MCP proxy URL from connection (if configured)
-            const mcpProxyUrl = (activeConnection as any).mcp_proxy_url || undefined;
-
-            // Try to get user's GPS location for weather/navigation
+            // 2. Acquire GPS / home coordinates
             let userLocation: { lat: number; lon: number } | null = null;
-
             if (options?.forcedLocation) {
                 userLocation = options.forcedLocation;
                 lastKnownLocation = { ...options.forcedLocation, timestamp: Date.now() };
-                logger.info("📍 Using forced/fallback location", userLocation);
             } else if (lastKnownLocation && (Date.now() - lastKnownLocation.timestamp < 30 * 60 * 1000)) {
                 userLocation = { lat: lastKnownLocation.lat, lon: lastKnownLocation.lon };
-                logger.info("📍 Using cached location (< 30 mins old)", userLocation);
             } else if (!options?.gpsUnavailable) {
                 try {
                     const getLocationPromise = Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 1500 });
-                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 1200));
-
+                    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject('Timeout'), 1200));
                     const position: any = await Promise.race([getLocationPromise, timeoutPromise]);
                     userLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
                     lastKnownLocation = { ...userLocation, timestamp: Date.now() };
-                    logger.info("📍 Got GPS location", userLocation);
-                } catch {
-                    logger.info("📍 GPS skipped or timed out");
-                }
+                } catch { }
             }
 
-            // Fall back to Home Assistant coordinates (zone.home) if GPS was not acquired
             if (!userLocation) {
                 const dynCoords = getDynamicCoordinates();
-                if (dynCoords) {
-                    userLocation = dynCoords;
-                    logger.info("📍 Using Home Assistant home location for Crew AI context", userLocation);
-                }
+                if (dynCoords) userLocation = dynCoords;
             }
 
             const recentHistory = messages.slice(-6).map(m => ([
@@ -588,71 +618,43 @@ export function useAIChatLogic() {
                 { role: 'assistant', content: m.ai_response }
             ])).flat().filter(m => m.content && m.content.trim());
 
-            const payload = {
-                connection_id: activeConnection.id,
-                user_message: text,
-                recent_history: recentHistory,
-                language: uiState.language || 'nl',
-                devices: devices,
-                mcp_proxy_url: mcpProxyUrl,
-                ha_url: (activeConnection as any).api_url || '',
-                ha_token: (activeConnection as any).token || (activeConnection as any).api_token || '',
-                client_timestamp: new Date().toISOString(),
-                client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                location: userLocation,
-                gps_unavailable: options?.gpsUnavailable || false
-            };
-            logger.info("🔑 HA Credentials Debug:", {
-                ha_url_length: payload.ha_url?.length || 0,
-                ha_token_length: payload.ha_token?.length || 0,
-                api_url_exists: !!(activeConnection as any).api_url,
-                token_exists: !!(activeConnection as any).token,
-                api_token_exists: !!(activeConnection as any).api_token
-            });
-            logger.info("📤 Payload Preview:", JSON.stringify(payload).substring(0, 500) + "...");
-
             let aiData: LLMResponse = {} as LLMResponse;
-
-            // SOTA CLIENT-SIDE REACT ARCHITECTURE (OPTION B)
-            // Supports Google Gemini (AI Studio) and OpenRouter with local tool calls
             const aiConfig = resolveAIConfig();
 
             if (aiConfig.apiKey) {
                 try {
-                    logger.info(`🧠 Running Client-Side SOTA ReAct Orchestrator [${aiConfig.provider.toUpperCase()} - ${aiConfig.model}]...`);
+                    logger.info(`🧠 Running SOTA Unified ReAct [${aiConfig.provider.toUpperCase()} - ${aiConfig.model}] (${devices.length} entities)`);
                     aiData = await runClientReActOrchestrator({
                         apiKey: aiConfig.apiKey,
                         model: aiConfig.model,
                         provider: aiConfig.provider,
                         userMessage: text,
-                        recentHistory: recentHistory,
+                        recentHistory,
                         language: uiState.language || 'nl',
-                        devices: devices,
-                        haUrl: (activeConnection as any).api_url,
-                        haToken: (activeConnection as any).token || (activeConnection as any).api_token,
-                        haWebSocket: haWebSocket,
+                        devices,
+                        haUrl: activeConnection.api_url,
+                        haToken: activeConnection.api_token || activeConnection.token,
+                        haWebSocket,
                         location: userLocation,
                         connectionId: activeConnection.id
                     });
-                    logger.info("✅ Client ReAct Orchestrator Finished", aiData);
                 } catch (clientErr: any) {
-                    logger.error("Client ReAct Orchestrator error:", clientErr);
+                    logger.error('Client ReAct Orchestrator error:', clientErr);
                     aiData = {
                         text: (uiState.language || 'nl').startsWith('nl')
-                            ? `Fout bij uitvoeren van AI: ${clientErr.message || 'Onbekende fout'}. Controleer je Gemini / OpenRouter API-sleutel in Instellingen.`
-                            : `AI execution error: ${clientErr.message || 'Unknown error'}. Please check your Gemini / OpenRouter API key in Settings.`,
+                            ? `Fout bij uitvoeren van AI: ${clientErr?.message || 'Onbekende fout'}. Controleer je Gemini / OpenRouter API-sleutel in Instellingen.`
+                            : `AI execution error: ${clientErr?.message || 'Unknown error'}. Please check your Gemini / OpenRouter API key in Settings.`,
                         actions: [],
                         language: uiState.language || 'nl',
                         confidence: 0,
-                        logs: [`[Client] Error: ${clientErr.message}`]
+                        logs: [`[Client] Error: ${clientErr?.message}`]
                     };
                 }
             } else {
-                logger.warn("⚠️ No Gemini or OpenRouter API key configured");
                 aiData = {
                     text: (uiState.language || 'nl').startsWith('nl')
-                        ? 'Butler is geüpgraded naar directe Client-Side ReAct AI! Vul eenmalig je Gemini (of OpenRouter) API-sleutel in via Instellingen (⚙️) om de AI te activeren.'
-                        : 'Butler has been upgraded to direct Client-Side ReAct AI! Please enter your Gemini (or OpenRouter) API key in Settings (⚙️) to activate.',
+                        ? 'Vul eenmalig je Gemini (of OpenRouter) API-sleutel in via Instellingen (⚙️) om Butler AI te activeren.'
+                        : 'Please enter your Gemini (or OpenRouter) API key in Settings (⚙️) to activate Butler AI.',
                     actions: [],
                     language: uiState.language || 'nl',
                     confidence: 1.0,
@@ -660,56 +662,30 @@ export function useAIChatLogic() {
                 };
             }
 
-            // Execute actions via WebSocket or Client-side handlers
+            // Execute non-locally-executed client actions (timers, alarms, graphs, etc.)
             let retryTriggered = false;
             let actionGeneratedText: string | undefined = undefined;
-            if (aiData.actions && aiData.actions.length > 0) {
-                logger.info("🎯 Executing actions", { count: aiData.actions.length });
-                const result = await executeActionsClientSide(aiData.actions, text);
+            const clientPendingActions = (aiData.actions || []).filter(a => !a.executedLocally);
+            if (clientPendingActions.length > 0) {
+                const result = await executeActionsClientSide(clientPendingActions, text);
                 retryTriggered = result.retryTriggered;
                 actionGeneratedText = result.generatedText;
             }
 
-            // If a retry was triggered (e.g. GPS fallback), skip UI update for this response
             if (retryTriggered) {
-                logger.info("🔄 Retry triggered - skipping UI update for original response");
-                return; // The retry will handle UI update
+                setMessages(prev => prev.filter(m => m.id !== tempId));
+                return;
             }
 
-            let responseText = aiData.text || actionGeneratedText;
-
-            // Default fallback if still empty
-            if (!responseText) {
-                if (aiData.actions && aiData.actions.length > 0) {
-                    responseText = (uiState.language || 'nl').startsWith('nl') ? 'Actie uitgevoerd.' : 'Action executed.';
-                } else {
-                    responseText = (uiState.language || 'nl').startsWith('nl')
-                        ? 'Ik heb je verzoek ontvangen, maar kon geen specifiek antwoord formuleren. Probeer het op een andere manier te vragen.'
-                        : 'I received your request, but could not determine an answer. Please try rephrasing.';
-                }
-            }
-
-            logger.info("📥 Final Resolved AI Response", { ...aiData, text: responseText });
-
-            // Log explicitly if actions are missing (but only if NO scheduled tasks either)
-            const hasScheduled = (aiData.scheduled_tasks && aiData.scheduled_tasks > 0) || (aiData.scheduled_actions && aiData.scheduled_actions.length > 0);
-
-            if ((!aiData.actions || aiData.actions.length === 0) && !hasScheduled) {
-                logger.warn("AI Response has NO ACTIONS", { text: responseText });
-            } else if (hasScheduled) {
-                logger.info(`⏳ AI Scheduled ${aiData.scheduled_tasks} tasks (No immediate actions).`);
-            }
-
-            // Ingest Backend Logs
-            if (aiData.logs && aiData.logs.length > 0) {
-                aiData.logs.forEach((logLine: string) => {
-                    logger.info(`[SERVER] ${logLine}`);
-                });
-            }
+            const responseText = aiData.text || actionGeneratedText || (
+                (uiState.language || 'nl').startsWith('nl')
+                    ? 'Ik kon geen antwoord genereren. Probeer het nog eens.'
+                    : 'I could not generate an answer. Please try again.'
+            );
 
             const responseLanguage = aiData.language || uiState.language || 'nl-BE';
 
-            // 3. UI Update (Replace Optimistic Message)
+            // 3. UI Update
             const completedMsg: ChatMessage = {
                 ...optimisticMsg,
                 ai_response: responseText,
@@ -721,73 +697,56 @@ export function useAIChatLogic() {
             setMessages(prev => prev.map(m => m.id === tempId ? completedMsg : m));
             addChatMessage(completedMsg);
 
-            // Persist the actual resolved text and actions to Supabase chat_history table
+            // 4. Persist NEW row to Supabase chat_history (strip large base64 camera images before DB insert!)
             try {
-                const { data: latestRows } = await supabase
-                    .from('chat_history')
-                    .select('id')
-                    .eq('connection_id', activeConnection.id)
-                    .order('created_at', { ascending: false })
-                    .limit(1);
+                const sanitizedActions = (aiData.actions || []).map(a => {
+                    if (a.type === 'camera' && a.data?.snapshot_data_url) {
+                        const { snapshot_data_url: _omitted, ...restData } = a.data;
+                        return { ...a, data: restData };
+                    }
+                    return a;
+                });
 
-                if (latestRows && latestRows.length > 0) {
-                    await supabase
-                        .from('chat_history')
-                        .update({
-                            ai_response: { text: responseText, actions: aiData.actions || [] },
-                            actions_taken: aiData.actions || []
-                        })
-                        .eq('id', latestRows[0].id);
-                    logger.info("💾 Updated chat_history in Supabase with resolved text");
-                } else {
-                    await supabase.from('chat_history').insert({
-                        connection_id: activeConnection.id,
-                        user_message: text,
-                        ai_response: { text: responseText, actions: aiData.actions || [] },
-                        actions_taken: aiData.actions || [],
-                        metadata: { language: responseLanguage }
-                    });
-                    logger.info("💾 Inserted new chat_history into Supabase");
+                const { error: insertErr } = await supabase.from('chat_history').insert({
+                    connection_id: activeConnection.id,
+                    user_message: text,
+                    ai_response: { text: responseText, actions: sanitizedActions },
+                    actions_taken: sanitizedActions,
+                    metadata: { language: responseLanguage }
+                });
+                if (insertErr) {
+                    logger.warn('⚠️ chat_history insert error:', insertErr.message);
                 }
             } catch (persistErr) {
-                logger.warn("⚠️ Failed to persist chat history to Supabase:", persistErr);
+                logger.warn('⚠️ Failed to persist chat history to Supabase:', persistErr);
             }
 
-            // Handle Conversation Mode from AI response
             if (aiData.conversation_mode !== undefined) {
                 setConversationMode(aiData.conversation_mode);
-                if (aiData.conversation_mode) {
-                    logger.info('🎙️ Conversation Mode: ACTIVATED (hands-free listening)');
-                } else {
-                    logger.info('🎙️ Conversation Mode: DEACTIVATED');
-                }
             }
 
-            // 4. TTS
+            // 5. TTS Playback
             if (responseText) {
-                // Deepgram Aura is English-optimized. For Dutch/Others, use Native TTS to avoid "Denglish" accent.
-                const useDeepgram = (responseLanguage === 'en');
+                const isEnglish = responseLanguage.toLowerCase().startsWith('en');
+                const shouldAutoListen = conversationMode || !!aiData.conversation_mode;
 
-                if (useDeepgram) {
+                if (isEnglish && SUPABASE_URL) {
                     try {
-                        logger.info('🔊 Requesting Deepgram TTS...');
+                        const { data: sessionData } = await supabase.auth.getSession();
+                        const jwt = sessionData?.session?.access_token;
+                        if (!jwt) throw new Error('No session JWT for TTS');
 
-                        const ttsResponse = await fetch(`${SUPABASE_URL}/functions/v1/deepgram-tts`, {
+                        const ttsResponse = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/deepgram-tts`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+                                'Authorization': `Bearer ${jwt}`
                             },
-                            body: JSON.stringify({
-                                text: responseText,
-                                language: responseLanguage
-                            })
+                            body: JSON.stringify({ text: responseText, language: responseLanguage })
                         });
 
                         if (ttsResponse.ok) {
                             const { audio, contentType } = await ttsResponse.json();
-
-                            // Convert base64 to audio blob
                             const binaryString = atob(audio);
                             const bytes = new Uint8Array(binaryString.length);
                             for (let i = 0; i < binaryString.length; i++) {
@@ -795,72 +754,62 @@ export function useAIChatLogic() {
                             }
                             const audioBlob = new Blob([bytes], { type: contentType || 'audio/mp3' });
                             const audioUrl = URL.createObjectURL(audioBlob);
-
-                            // Play audio
                             const audioPlayer = new Audio(audioUrl);
+                            activeAudioRef.current = audioPlayer;
+                            activeAudioUrlRef.current = audioUrl;
 
-                            // Whisper Mode: Lower volume
-                            if (options?.isWhisper) {
-                                audioPlayer.volume = 0.3;
-                                logger.info('🤫 Whisper Mode: Responding quietly');
-                            }
+                            if (options?.isWhisper) audioPlayer.volume = 0.3;
 
-                            // Conversation Mode: Auto-listen after TTS finishes
-                            audioPlayer.onended = () => {
-                                URL.revokeObjectURL(audioUrl);
-                                if (conversationMode || aiData.conversation_mode) {
-                                    logger.info('🎙️ TTS ended, triggering auto-listen for conversation mode');
-                                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                            const cleanupAudio = () => {
+                                if (activeAudioUrlRef.current === audioUrl) {
+                                    URL.revokeObjectURL(audioUrl);
+                                    activeAudioUrlRef.current = null;
+                                }
+                                if (activeAudioRef.current === audioPlayer) {
+                                    activeAudioRef.current = null;
                                 }
                             };
 
-                            audioPlayer.play().catch(e => {
-                                logger.error('❌ Failed to play audio:', e);
-                                // Fallback to Web Speech API
-                                playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
-                            });
+                            audioPlayer.onended = () => {
+                                cleanupAudio();
+                                if (shouldAutoListen) {
+                                    window.dispatchEvent(new CustomEvent('butler-auto-listen'));
+                                }
+                            };
+                            audioPlayer.onerror = () => {
+                                cleanupAudio();
+                                playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
+                            };
 
-                            logger.info('🔊 Deepgram TTS playing');
+                            audioPlayer.play().catch(() => {
+                                cleanupAudio();
+                                playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
+                            });
                         } else {
-                            logger.warn('⚠️ Deepgram TTS failed, falling back to Web Speech API');
-                            playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
+                            playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
                         }
-                    } catch (ttsError) {
-                        logger.error('❌ TTS error:', ttsError);
-                        playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
+                    } catch {
+                        playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
                     }
                 } else {
-                    // Non-English: Use Native TTS directly
-                    logger.info(`🔊 Using Native TTS for language: ${responseLanguage}`);
-                    playNativeTTS(responseText, responseLanguage, conversationMode || !!aiData.conversation_mode, options?.isWhisper);
+                    playNativeTTS(responseText, responseLanguage, shouldAutoListen, options?.isWhisper);
                 }
             }
-
-            // 5. Execute - DISABLED (Backend executes actions now via MCP)
-            /*
-            if (aiData.actions && aiData.actions.length > 0) {
-                logger.info("Executing client-side actions", { count: aiData.actions.length, actions: aiData.actions });
-                await executeActionsClientSide(aiData.actions);
-            }
-            */
-
         } catch (e: any) {
-            console.error("AI Error", e);
-            logger.error("AI Logic Exception", { message: e.message, stack: e.stack });
-
-            // Show error in chat
+            logger.error('AI Logic Exception', e);
             const errorMsg: ChatMessage = {
-                id: Date.now().toString(),
+                id: tempId,
                 connection_id: activeConnection.id,
-                user_message: '',
-                ai_response: `⚠️ Error: ${e.message || 'Network failure'}`,
-                language: 'en',
+                user_message: text,
+                ai_response: `⚠️ Fout: ${e?.message || 'Netwerkfout'}`,
+                language: uiState.language || 'nl',
                 actions_taken: [],
                 created_at: new Date().toISOString()
             };
             setMessages(prev => prev.map(m => m.id === tempId ? errorMsg : m));
             addChatMessage(errorMsg);
         } finally {
+            isSendingRef.current = false;
             setLoading(false);
         }
     };

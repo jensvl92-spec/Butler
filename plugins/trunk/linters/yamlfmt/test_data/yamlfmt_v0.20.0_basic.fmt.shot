@@ -1,8 +1,0 @@
-// Jest Snapshot v1, https://goo.gl/fbAQLP
-
-exports[`Testing formatter yamlfmt test basic 1`] = `
-"yaml:
-  array:
-    - item
-"
-`;

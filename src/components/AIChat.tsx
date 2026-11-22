@@ -16,142 +16,144 @@ interface FloatingButtonPlugin {
 
 const FloatingButton = registerPlugin<FloatingButtonPlugin>('FloatingButton');
 
-export function AIChat() {
-  const { activeConnection } = useApp()
+interface AIChatProps {
+  disableGlobalVoiceListeners?: boolean;
+}
+
+export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}) {
+  const { activeConnection, uiState, shouldTriggerVoice, setShouldTriggerVoice } = useApp()
   const { messages, setMessages, sendMessage, loading, conversationMode } = useAIChatLogic()
   const [inputText, setInputText] = useState('')
   const [completedTodos, setCompletedTodos] = useState<Record<string, boolean>>({})
   const [activatedAutomations, setActivatedAutomations] = useState<Record<string, boolean>>({})
+  const [activatingAutomations, setActivatingAutomations] = useState<Record<string, boolean>>({})
   const [copiedYaml, setCopiedYaml] = useState<string | null>(null)
   const [expandedYaml, setExpandedYaml] = useState<Record<string, boolean>>({})
   const chatEndRef = useRef<HTMLDivElement>(null)
 
-
-  // --- RESTORED LOGIC ---
-
-
-
-  // Voice Hook - Deepgram Nova-3 for high accuracy STT
-  const { isListening, isStarting, partialTranscript, startListening, stopListening, error: voiceError, isWhisper, audioLevel } = useDeepgramVoice({
+  const { isListening, isStarting, partialTranscript, startListening, stopListening, error: voiceError, isWhisper } = useDeepgramVoice({
+    language: uiState.language,
     onTranscript: (text) => setInputText(text),
     onFinalTranscript: (text) => {
-      // Capture whisper state at time of final transcript
       const wasWhispering = isWhisper;
-      setInputText(text);
+      setInputText('');
       sendMessage(text, { isWhisper: wasWhispering });
-      setInputText(''); // Clear input after AutoSend
     }
   });
 
-  // Global Voice Trigger (Deep Links / Widget)
-  const { shouldTriggerVoice, setShouldTriggerVoice } = useApp();
+  // Global Voice Trigger (Deep Links / Widget) — only active on primary AIChat instance
   useEffect(() => {
+    if (disableGlobalVoiceListeners) return;
     if (shouldTriggerVoice) {
       if (!isListening && !isStarting) {
-        logger.info("🎙️ Global Voice Trigger Activated");
+        logger.info('🎙️ Global Voice Trigger Activated');
         startListening();
       }
       setShouldTriggerVoice(false);
     }
-  }, [shouldTriggerVoice, isListening, isStarting]);
+  }, [disableGlobalVoiceListeners, shouldTriggerVoice, isListening, isStarting, startListening, setShouldTriggerVoice]);
 
   useEffect(() => {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }, 100);
+    return () => clearTimeout(timer);
   }, [messages, partialTranscript, loading])
 
   // Check for pending voice input on mount (from floating button tap)
   useEffect(() => {
+    if (disableGlobalVoiceListeners || !activeConnection) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const checkPendingVoice = async () => {
       try {
         const result = await FloatingButton.checkPendingVoiceInput();
         if (result.pending) {
-          logger.info('🎙️ Pending voice input detected from floating button, auto-starting recording');
-          // Small delay to ensure UI is ready
-          setTimeout(() => startListening(), 500);
+          timer = setTimeout(() => startListening(), 500);
         }
-      } catch (e) {
-        // Plugin not available (web mode) - ignore
-      }
+      } catch { }
     };
-
-    if (activeConnection) {
-      checkPendingVoice();
-    }
-  }, [activeConnection]);
+    checkPendingVoice();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [disableGlobalVoiceListeners, activeConnection?.id]);
 
   // Conversation Mode: Auto-listen after TTS finishes
   useEffect(() => {
+    if (disableGlobalVoiceListeners) return;
     const handleAutoListen = () => {
       if (!isListening && !loading) {
-        logger.info('🎙️ Auto-listen triggered by conversation mode');
         startListening();
       }
     };
-
     window.addEventListener('butler-auto-listen', handleAutoListen);
     return () => window.removeEventListener('butler-auto-listen', handleAutoListen);
-  }, [isListening, loading, startListening]);
+  }, [disableGlobalVoiceListeners, isListening, loading, startListening]);
 
-  // Load History
+  // Load History with cancellation guard
   useEffect(() => {
-    if (!activeConnection) return;
+    if (!activeConnection?.id) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
     const loadHistory = async () => {
-      const { data } = await supabase.from('chat_history').select('*').eq('connection_id', activeConnection.id).order('created_at', { ascending: false }).limit(50);
-      if (data) {
-        // Map DB format (ai_response as JSON) to UI format (ai_response as string)
-        const mapped = data.reverse().map((d: any) => {
-          let aiText = "";
-          if (typeof d.ai_response === 'string') {
-            try {
-              const parsed = JSON.parse(d.ai_response);
-              aiText = parsed.text || (parsed.actions && parsed.actions.length > 0 ? 'Actie uitgevoerd.' : '');
-            } catch {
-              aiText = d.ai_response;
-            }
-          } else if (d.ai_response && typeof d.ai_response === 'object') {
-            aiText = d.ai_response.text || (d.ai_response.actions && d.ai_response.actions.length > 0 ? 'Actie uitgevoerd.' : '');
+      const { data } = await supabase
+        .from('chat_history')
+        .select('*')
+        .eq('connection_id', activeConnection.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (cancelled || !Array.isArray(data)) return;
+
+      const mapped = [...data].reverse().map((d: any) => {
+        let aiText = '';
+        if (typeof d.ai_response === 'string') {
+          try {
+            const parsed = JSON.parse(d.ai_response);
+            aiText = parsed.text || (parsed.actions && parsed.actions.length > 0 ? 'Actie uitgevoerd.' : '');
+          } catch {
+            aiText = d.ai_response;
           }
-          if (!aiText && d.actions_taken && d.actions_taken.length > 0) {
-            aiText = 'Actie uitgevoerd.';
-          }
-          return {
-            id: d.id,
-            connection_id: d.connection_id,
-            user_message: d.user_message,
-            ai_response: aiText,
-            language: d.metadata?.language || 'en',
-            actions_taken: d.actions_taken || [],
-            created_at: d.created_at
-          };
-        });
-        setMessages(mapped as any);
-      }
+        } else if (d.ai_response && typeof d.ai_response === 'object') {
+          aiText = d.ai_response.text || (d.ai_response.actions && d.ai_response.actions.length > 0 ? 'Actie uitgevoerd.' : '');
+        }
+        if (!aiText && d.actions_taken && d.actions_taken.length > 0) {
+          aiText = 'Actie uitgevoerd.';
+        }
+        return {
+          id: d.id,
+          connection_id: d.connection_id,
+          user_message: d.user_message,
+          ai_response: aiText,
+          language: d.language || d.metadata?.language || 'nl',
+          actions_taken: d.actions_taken || [],
+          created_at: d.created_at
+        };
+      });
+      setMessages(mapped as any);
     };
     loadHistory();
-  }, [activeConnection, setMessages]);
+    return () => { cancelled = true; };
+  }, [activeConnection?.id, setMessages]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    import('../utils/logger').then(({ logger }) => logger.info("👉 Manual Submit Clicked", { text: inputText }));
-    sendMessage(inputText);
+    if (!inputText.trim() || loading) return;
+    const toSend = inputText;
     setInputText('');
-  };
-
-  const handleDownloadLogs = () => {
-    import('../utils/logger').then(({ logger }) => {
-      logger.downloadLogs();
-    });
+    sendMessage(toSend);
   };
 
   const handleToggleTodo = async (listEntityId: string, itemSummary: string) => {
     const key = `${listEntityId}_${itemSummary}`;
-    const nextState = !completedTodos[key];
+    const prevState = !!completedTodos[key];
+    const nextState = !prevState;
     setCompletedTodos(prev => ({ ...prev, [key]: nextState }));
 
-    const apiUrl = (activeConnection as any)?.api_url;
-    const apiToken = (activeConnection as any)?.token || (activeConnection as any)?.api_token;
+    const apiUrl = activeConnection?.api_url;
+    const apiToken = activeConnection?.api_token || activeConnection?.token;
     if (apiUrl && apiToken) {
       try {
         await manageHATodoItem(apiUrl, apiToken, 'update', {
@@ -160,40 +162,51 @@ export function AIChat() {
           status: nextState ? 'completed' : 'needs_action'
         });
       } catch (err: any) {
+        // Revert optimistic update on error
+        setCompletedTodos(prev => ({ ...prev, [key]: prevState }));
         logger.error('Failed to update todo item:', err);
       }
     }
   };
 
   const handleActivateAutomation = async (autoData: any) => {
-    const apiUrl = (activeConnection as any)?.api_url;
-    const apiToken = (activeConnection as any)?.token || (activeConnection as any)?.api_token;
-    if (apiUrl && apiToken) {
-      try {
-        await saveHAAutomation(apiUrl, apiToken, autoData);
-        setActivatedAutomations(prev => ({ ...prev, [autoData.id]: true }));
-      } catch (err: any) {
-        alert(`Activeren mislukt: ${err.message}`);
-      }
-    } else {
+    if (!autoData?.id || activatingAutomations[autoData.id] || activatedAutomations[autoData.id]) return;
+    const apiUrl = activeConnection?.api_url;
+    const apiToken = activeConnection?.api_token || activeConnection?.token;
+    if (!apiUrl || !apiToken) {
       alert('Geen actieve Home Assistant verbinding met token.');
+      return;
+    }
+
+    setActivatingAutomations(prev => ({ ...prev, [autoData.id]: true }));
+    try {
+      await saveHAAutomation(apiUrl, apiToken, autoData);
+      setActivatedAutomations(prev => ({ ...prev, [autoData.id]: true }));
+    } catch (err: any) {
+      alert(`Activeren mislukt: ${err?.message || 'Onbekende fout'}`);
+    } finally {
+      setActivatingAutomations(prev => ({ ...prev, [autoData.id]: false }));
     }
   };
 
-  const handleCopyYaml = (autoData: any) => {
-    const yamlString = `alias: "${autoData.alias}"
-description: "${autoData.description || ''}"
-trigger:
-${JSON.stringify(autoData.trigger, null, 2)}
-condition:
-${JSON.stringify(autoData.condition || [], null, 2)}
-action:
-${JSON.stringify(autoData.action, null, 2)}
-mode: ${autoData.mode || 'single'}`;
-
-    navigator.clipboard.writeText(yamlString);
-    setCopiedYaml(autoData.id);
-    setTimeout(() => setCopiedYaml(null), 3000);
+  const handleCopyYaml = async (autoData: any) => {
+    const cleanConfig = {
+      alias: autoData.alias || 'Butler Automatisering',
+      description: autoData.description || '',
+      trigger: autoData.trigger || [],
+      condition: autoData.condition || [],
+      action: autoData.action || [],
+      mode: autoData.mode || 'single'
+    };
+    // Valid JSON is 100% valid YAML 1.2 in Home Assistant
+    const yamlText = JSON.stringify(cleanConfig, null, 2);
+    try {
+      await navigator.clipboard.writeText(yamlText);
+      setCopiedYaml(autoData.id);
+      setTimeout(() => setCopiedYaml(null), 3000);
+    } catch {
+      alert('Kon niet naar klembord kopiëren op dit apparaat.');
+    }
   };
 
   if (!activeConnection) return <div className="chat-empty">Kies een verbinding om te beginnen met chatten</div>
@@ -367,18 +380,19 @@ mode: ${autoData.mode || 'single'}`;
                                   </div>
                                   <div className="energy-bars-container">
                                     {(() => {
-                                      const prices = hourly.map((h: any) => typeof h.price === 'number' ? h.price : parseFloat(h.price)).filter((p: number) => !isNaN(p));
+                                      const prices = hourly.map((h: any) => Number(h?.price)).filter((p: number) => Number.isFinite(p));
                                       const minP = prices.length > 0 ? Math.min(...prices) : 0;
                                       const maxP = prices.length > 0 ? Math.max(...prices) : 0.5;
                                       const range = Math.max(0.01, maxP - minP);
-                                      const currentHour = new Date().getHours();
+                                      const currentHourPrefix = `${new Date().getHours().toString().padStart(2, '0')}:`;
 
                                       return hourly.map((h: any, idx: number) => {
-                                        const hTime = h.hour || h.time || `${idx}:00`;
-                                        const hPrice = typeof h.price === 'number' ? h.price : parseFloat(h.price);
+                                        const hTime = String(h?.hour || h?.time || `${idx.toString().padStart(2, '0')}:00`);
+                                        const hPrice = Number(h?.price);
+                                        if (!Number.isFinite(hPrice)) return null;
                                         const normalized = Math.max(0.15, (hPrice - minP) / range);
                                         const heightPercent = Math.round(normalized * 100);
-                                        const isCurrent = idx === currentHour;
+                                        const isCurrent = hTime.startsWith(currentHourPrefix);
                                         const isCheapest = hTime === cheapestTime;
                                         const isAboveAvg = avgPrice !== undefined && hPrice > avgPrice;
                                         const bg = isCheapest ? '#10b981' : isCurrent ? '#6366f1' : isAboveAvg ? '#ef4444' : '#3b82f6';
@@ -419,19 +433,20 @@ mode: ${autoData.mode || 'single'}`;
                         }
 
                         // D. Todo Checklist Widget
-                        if (a.type === 'todo' && a.data) {
+                        if (a.type === 'todo' && a.data && a.data.action !== 'remove') {
+                          const listId = a.data.list_entity_id || a.entity_id || 'todo.shopping_list';
                           return (
                             <div key={i} className="chat-widget-card todo-widget">
                               <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#a5b4fc', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span>📋</span>
-                                <span>{a.entity_id || 'Boodschappen- & Takenlijst'}</span>
+                                <span>{listId}</span>
                               </div>
                               {Array.isArray(a.data.pending_items) && a.data.pending_items.length > 0 ? (
                                 a.data.pending_items.map((item: any, idx: number) => {
                                   const itemText = typeof item === 'string' ? item : item.summary;
-                                  const isDone = completedTodos[`${a.entity_id}_${itemText}`];
+                                  const isDone = completedTodos[`${listId}_${itemText}`];
                                   return (
-                                    <div key={idx} className="todo-row" onClick={() => handleToggleTodo(a.entity_id, itemText)}>
+                                    <div key={idx} className="todo-row" onClick={() => handleToggleTodo(listId, itemText)}>
                                       <div className={`todo-checkbox-box ${isDone ? 'checked' : ''}`}>
                                         {isDone ? '✓' : ''}
                                       </div>
@@ -440,39 +455,49 @@ mode: ${autoData.mode || 'single'}`;
                                   );
                                 })
                               ) : a.data.item ? (
-                                <div className="todo-row" onClick={() => handleToggleTodo(a.entity_id, a.data.item)}>
-                                  <div className={`todo-checkbox-box ${completedTodos[`${a.entity_id}_${a.data.item}`] ? 'checked' : ''}`}>
-                                    {completedTodos[`${a.entity_id}_${a.data.item}`] ? '✓' : ''}
+                                <div className="todo-row" onClick={() => handleToggleTodo(listId, a.data.item)}>
+                                  <div className={`todo-checkbox-box ${completedTodos[`${listId}_${a.data.item}`] || a.data.action === 'complete' ? 'checked' : ''}`}>
+                                    {completedTodos[`${listId}_${a.data.item}`] || a.data.action === 'complete' ? '✓' : ''}
                                   </div>
-                                  <span className={`todo-text ${completedTodos[`${a.entity_id}_${a.data.item}`] ? 'checked' : ''}`}>{a.data.item}</span>
+                                  <span className={`todo-text ${completedTodos[`${listId}_${a.data.item}`] || a.data.action === 'complete' ? 'checked' : ''}`}>{a.data.item}</span>
                                 </div>
                               ) : null}
                             </div>
                           );
                         }
 
-                        // E. Calendar Widget
+                        // E. Calendar Widget (with date + time & Invalid Date safety)
                         if (a.type === 'calendar' && Array.isArray(a.data?.events) && a.data.events.length > 0) {
                           return (
                             <div key={i} className="chat-widget-card" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span>📅</span>
-                                <span>Afspraken & Kalender ({a.entity_id})</span>
+                                <span>Afspraken & Kalender</span>
                               </div>
-                              {a.data.events.slice(0, 5).map((ev: any, idx: number) => (
-                                <div key={idx} style={{ padding: '6px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ev.summary}</span>
-                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                    {new Date(ev.start).toLocaleDateString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short' })}
-                                  </span>
-                                </div>
-                              ))}
+                              {a.data.events.slice(0, 6).map((ev: any, idx: number) => {
+                                const rawStart = String(ev?.start || '');
+                                const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(rawStart);
+                                const d = rawStart ? new Date(isDateOnly ? `${rawStart}T12:00:00` : rawStart) : null;
+                                const timeLabel = d && !isNaN(d.getTime())
+                                  ? (isDateOnly
+                                    ? d.toLocaleDateString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short' })
+                                    : d.toLocaleString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))
+                                  : rawStart;
+                                return (
+                                  <div key={idx} style={{ padding: '6px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ev.summary}</span>
+                                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{timeLabel}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
                         }
 
                         // F. Automation Preview Card Widget
                         if (a.type === 'automation' && a.data) {
+                          const isActivating = !!activatingAutomations[a.data.id];
+                          const isActivated = !!activatedAutomations[a.data.id];
                           return (
                             <div key={i} className="chat-widget-card automation-widget">
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -487,7 +512,7 @@ mode: ${autoData.mode || 'single'}`;
                                 </div>
                                 <button onClick={() => setExpandedYaml(prev => ({ ...prev, [a.data.id]: !prev[a.data.id] }))}
                                   style={{ background: 'none', border: 'none', color: '#a5b4fc', fontSize: '0.75rem', cursor: 'pointer' }}>
-                                  {expandedYaml[a.data.id] ? 'Verberg YAML' : 'Bekijk YAML'}
+                                  {expandedYaml[a.data.id] ? 'Verberg JSON/YAML' : 'Bekijk config'}
                                 </button>
                               </div>
 
@@ -505,21 +530,29 @@ mode: ${autoData.mode || 'single'}`;
                               <div className="automation-buttons-row">
                                 <button className="btn-activate-ha"
                                   onClick={() => handleActivateAutomation(a.data)}
-                                  disabled={activatedAutomations[a.data.id]}>
-                                  {activatedAutomations[a.data.id] ? '✅ Geactiveerd in HA!' : '⚡ Activeer in Home Assistant'}
+                                  disabled={isActivated || isActivating}>
+                                  {isActivated ? '✅ Geactiveerd in HA!' : isActivating ? '⏳ Activeren...' : '⚡ Activeer in Home Assistant'}
                                 </button>
                                 <button className="btn-copy-yaml" onClick={() => handleCopyYaml(a.data)}>
-                                  {copiedYaml === a.data.id ? '✓ Gekopieerd' : '📋 YAML'}
+                                  {copiedYaml === a.data.id ? '✓ Gekopieerd' : '📋 Kopieer'}
                                 </button>
                               </div>
                             </div>
                           );
                         }
 
-                        // G. Fallback for device actions / generic actions
+                        // G. Fallback for device actions / proactive workers / generic actions
+                        const isError = a.result === 'error';
                         return (
-                          <div key={i} className="action-badge" style={{ alignSelf: 'flex-start' }}>
-                            ✅ {a.service} {a.entity_id}
+                          <div
+                            key={i}
+                            className="action-badge"
+                            style={{
+                              alignSelf: 'flex-start',
+                              ...(isError ? { background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.35)' } : {})
+                            }}
+                          >
+                            {isError ? '❌' : '✅'} {a.service || a.type} {a.entity_id || ''}
                           </div>
                         );
                       })}
@@ -538,6 +571,13 @@ mode: ${autoData.mode || 'single'}`;
         ))}
         <div ref={chatEndRef} />
       </div>
+
+      {/* Voice Error Banner */}
+      {voiceError && (
+        <div style={{ padding: '6px 12px', margin: '4px 12px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', fontSize: '0.78rem' }}>
+          🎤 {voiceError}
+        </div>
+      )}
 
       {/* Voice Transcript & Listening Waveform Indicator */}
       {isListening && (

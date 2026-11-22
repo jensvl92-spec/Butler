@@ -45,5 +45,5 @@ entrypoint = "./functions/auth-google-callback/index.ts"
 
 [functions.mcp-proxy]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 entrypoint = "./functions/mcp-proxy/index.ts"

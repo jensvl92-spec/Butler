@@ -1,8 +1,6 @@
 /**
  * Automation Engineer Agent
- * 
- * Takes analysis of user behavior (patterns) and proposes concrete automations.
- * Checks against denied proposals to avoid annoying the user.
+ * Takes behavior patterns and proposes concrete, executable Home Assistant automations.
  */
 
 import { chatCompletion, parseJSONResponse } from '../llm-service.ts';
@@ -12,28 +10,32 @@ IDENTITY:
 You are an expert Home Assistant Automation Engineer.
 
 TASK:
-Propose useful automations based on the provided user behavior analysis.
-
-INPUT:
-- Analysis Patterns (routines, correlations)
-- List of already denied proposals to AVOID
+Propose useful, executable Home Assistant automations based on the provided behavior patterns.
 
 RULES:
-1. **High Value Only**: Only propose if the data strongly supports it (high confidence).
-2. **Avoid Nagging**: Do NOT propose anything similar to the "Denied Proposals".
-3. **Quantity**: Provide as many proposals as you are confident about (up to 5). Do not artificially limit to 1 or 2.
-4. **Concrete**: Proposals must be actionable.
+1. High Value Only: Only propose if the data strongly supports it (confidence >= 0.7).
+2. Avoid Nagging: Do NOT propose anything similar to the "Denied Proposals".
+3. Quantity: Up to 5 high-value proposals.
+4. Executable HA YAML/JSON: Every proposal MUST include a valid \`ha_automation\` object with real \`entity_id\`s from the analysis patterns.
 
-OUTPUT FORMAT:
+OUTPUT FORMAT (valid JSON ONLY):
 {
-  "text": "Polite message to user explaining the insight and potential automation.",
+  "text": "Polite summary explaining the proposed automations.",
   "proposals": [
     {
-      "title": "Turn on office lights",
-      "trigger": "Motion detected in office",
-      "condition": "After sunset",
-      "action": "Turn on scenes.office_focus",
-      "reasoning": "You always turn this on manually at 7pm."
+      "title": "Short descriptive title",
+      "trigger": "Human readable trigger description",
+      "condition": "Human readable condition (or 'Geen')",
+      "action": "Human readable action description",
+      "reasoning": "Why this automation helps based on observed behavior",
+      "ha_automation": {
+        "alias": "Short descriptive title",
+        "description": "Why this automation helps",
+        "trigger": [{ "platform": "state", "entity_id": "binary_sensor.example", "to": "on" }],
+        "condition": [],
+        "action": [{ "service": "light.turn_on", "target": { "entity_id": "light.example" } }],
+        "mode": "single"
+      }
     }
   ]
 }
@@ -45,6 +47,7 @@ export interface Proposal {
   condition: string;
   action: string;
   reasoning: string;
+  ha_automation?: Record<string, any>;
 }
 
 export interface EngineerResult {
@@ -55,11 +58,11 @@ export interface EngineerResult {
 export async function runAutomationEngineer(
   analysis: any,
   deniedProposals: string[] = [],
-  language: string = 'en'
+  language: string = 'nl'
 ): Promise<EngineerResult> {
   console.log(`[Engineer] Generating proposals based on analysis...`);
 
-  const langInstruction = language !== 'en' ? `\nRespond in ${language}.` : '';
+  const langInstruction = `\nWrite title, trigger, condition, action, reasoning, and text in ${language.startsWith('nl') ? 'Dutch' : language}, but keep ha_automation keys and entity_ids in standard English Home Assistant format.`;
 
   const userInput = `
 ANALYSIS PATTERNS:
@@ -69,11 +72,20 @@ DENIED PROPOSALS (DO NOT REPEAT):
 ${deniedProposals.join('\n') || 'None'}
 `;
 
-  const response = await chatCompletion([
-    { role: 'system', content: ENGINEER_SYSTEM_PROMPT + langInstruction },
-    { role: 'user', content: userInput }
-  ], 10000, 0.5, undefined, undefined, 'google/gemini-3-pro-preview');
+  const response = await chatCompletion(
+    [
+      { role: 'system', content: ENGINEER_SYSTEM_PROMPT + langInstruction },
+      { role: 'user', content: userInput }
+    ],
+    6000,
+    0.4,
+    undefined,
+    undefined,
+    undefined,
+    { effort: 'medium' },
+    'high_accuracy'
+  );
 
-  const result = parseJSONResponse(response);
-  return result || { text: "I couldn't find any good automations right now.", proposals: [] };
+  const result = parseJSONResponse(typeof response === 'string' ? response : JSON.stringify(response));
+  return result || { text: "Geen geschikte automatiseringen gevonden op dit moment.", proposals: [] };
 }

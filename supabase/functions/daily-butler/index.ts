@@ -1,186 +1,135 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from "npm:@supabase/supabase-js@2.38.4"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyRequestAuth, verifyConnectionOwnership, CORS_HEADERS } from '../_shared/auth.ts';
+import { fetchHAStates, syncScriptsToDB } from '../_shared/ha-api.ts';
+import { chatCompletion } from '../_shared/llm-service.ts';
 
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-}
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-const LLM_API_KEY = Deno.env.get("LLM_API_KEY")!
-const LLM_MODEL = Deno.env.get("LLM_MODEL") || "openai/gpt-4o-mini"
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 Deno.serve(async (req: Request) => {
     if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders })
+        return new Response(null, { headers: CORS_HEADERS });
     }
 
     try {
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-        // 1. Determine Mode based on Time (or override via param)
-        // Default to checking current hour
-        const now = new Date();
-        const currentHour = now.getHours();
-
-        let mode = "morning_briefing";
-        if (currentHour >= 20 || currentHour < 5) {
-            mode = "night_watch";
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) {
+            return new Response(JSON.stringify({ error: auth.error }), {
+                status: auth.status || 401,
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+            });
         }
 
-        // Allow manual override
-        const payload = await req.json().catch(() => ({}));
+        const now = new Date();
+        const currentHour = now.getHours();
+        let mode = (currentHour >= 20 || currentHour < 5) ? "night_watch" : "morning_briefing";
+
+        const rawBody = await req.text().catch(() => '');
+        const payload = rawBody ? JSON.parse(rawBody) : {};
         if (payload.mode) mode = payload.mode;
+        const requestedConnectionId: string | undefined = payload.connection_id;
 
         console.log(`🕒 Daily Butler running in mode: ${mode}`);
 
-        // 2. Iterate over all connections
-        const { data: connections, error: connError } = await supabase
-            .from('ha_connections')
-            .select('*'); // need api_url, api_token, fcm_token
-
-        if (connError || !connections || connections.length === 0) {
-            return new Response(JSON.stringify({ message: "No connections found" }), { headers: corsHeaders })
+        // Resolve target connections with strict tenant scoping
+        let connections: any[] = [];
+        if (requestedConnectionId) {
+            const ownership = await verifyConnectionOwnership(supabase, auth, requestedConnectionId);
+            if (!ownership.valid) {
+                return new Response(JSON.stringify({ error: ownership.error }), {
+                    status: ownership.status || 403,
+                    headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+                });
+            }
+            connections = [ownership.connection];
+        } else if (auth.isServiceOrCron) {
+            const { data } = await supabase.from('ha_connections').select('*');
+            connections = data || [];
+        } else if (auth.userId) {
+            const { data } = await supabase.from('ha_connections').select('*').eq('user_id', auth.userId);
+            connections = data || [];
         }
 
-        const results = [];
+        if (connections.length === 0) {
+            return new Response(JSON.stringify({ message: "Geen actieve koppelingen gevonden", results: [] }), {
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+            });
+        }
 
-        // Import Sync Logic
-        const { syncScriptsToDB } = await import("../_shared/ha-api.ts");
+        const results: any[] = [];
 
         for (const conn of connections) {
-            if (!conn.api_url || !conn.api_token || !conn.fcm_token) {
-                console.log(`Skipping connection ${conn.id}: Missing credentials`);
+            if (!conn.api_url || !conn.api_token) {
+                results.push({ id: conn.id, status: "skipped", reason: "Missing HA credentials" });
                 continue;
             }
 
             try {
-                // 2.5 Sync Scripts (Daily)
                 await syncScriptsToDB(conn, supabase);
+                const allStates = await fetchHAStates(conn);
 
-                // 3. Fetch Home State
-                // We need a broad view: Weather, Person, Lights, Locks, Covers, Sensors
-                const haRes = await fetch(`${conn.api_url}/api/states`, {
-                    headers: {
-                        "Authorization": `Bearer ${conn.api_token}`,
-                        "Content-Type": "application/json"
-                    }
-                });
+                const relevantDomains = ["weather", "person", "climate", "lock", "cover", "binary_sensor"];
+                const relevantStates = allStates
+                    .filter((e: any) => relevantDomains.includes((e.entity_id || '').split('.')[0]))
+                    .slice(0, 120);
 
-                if (!haRes.ok) {
-                    console.error(`Failed to fetch HA state for ${conn.id}`);
-                    continue;
-                }
+                const stateSummary = relevantStates
+                    .map((e: any) => `${e.entity_id}: ${e.state}${e.attributes?.friendly_name ? ` (${e.attributes.friendly_name})` : ''}`)
+                    .join('\n');
 
-                const allStates = await haRes.json();
+                const systemPrompt = mode === "morning_briefing"
+                    ? `Je bent Butler, een attente persoonlijke smart-home assistent. Het is ochtend.
+Geef een korte, heldere ochtendbriefing in het Nederlands (max 45 woorden):
+1. Begroet vriendelijk.
+2. Vat weer, aanwezigheid en eventuele opvallende zaken samen.
+3. Sluit af met een korte vraag naar de plannen voor vandaag.`
+                    : `Je bent Butler, een waakzame nachtwacht voor een smart home. Het is avond/nacht.
+Geef een korte veiligheidscheck in het Nederlands (max 45 woorden):
+1. Meld de status van sloten, deuren, ramen en zonwering/rolluiken.
+2. Geef aan of iedereen thuis is.
+3. Wijs op openstaande deuren/ramen of ontgrendelde sloten en wens een goede nacht.`;
 
-                // Filter relevant entities to reduce context size
-                const relevantDomains = ["weather", "person", "climate", "lock", "cover", "binary_sensor", "sensor"];
-                const relevantStates = allStates.filter((e: any) => {
-                    const domain = e.entity_id.split('.')[0];
-                    if (!relevantDomains.includes(domain)) return false;
-                    // Filter out boring sensors if needed, or keep all for "Context"
-                    return true;
-                });
-
-                // Compress state for LLM
-                const stateSummary = relevantStates.map((e: any) => `${e.entity_id}: ${e.state} ${e.attributes.friendly_name ? `(${e.attributes.friendly_name})` : ''}`).join('\n');
-
-                // 4. Generate Briefing via LLM
-                let systemPrompt = "";
-
-                if (mode === "morning_briefing") {
-                    systemPrompt = `
-                    You are a classic, helpful British Butler.
-                    It is Morning.
-                    Your goal is to provide a concise Morning Briefing to the Master/Mistress of the house.
-                    
-                    Data provided:
-                    - Weather
-                    - Who is home
-                    - House state (temperature, etc)
-
-                    Instructions:
-                    1. Greet the user politely (Good Morning).
-                    2. Summarize the weather and give a practical tip.
-                    3. Mention any anomalies.
-                    4. IMPORTANT: Briefly ask "What are your plans for today?" so we can prepare the home.
-                    5. Keep it under 40 words.
-                    `;
-                } else {
-                    // Night Watch
-                    systemPrompt = `
-                    You are a vigilant Night Watchman.
-                    It is Night.
-                    Your goal is to provide a Night Security Check and Briefing.
-
-                    Data provided:
-                    - Weather
-                    - Who is home
-                    - House state (locks, covers, sensors)
-
-                    Instructions:
-                    1. Report on the security status of the house (locks, doors, windows).
-                    2. Mention if anyone is still away or if everyone is home.
-                    3. Suggest checking any unlocked doors or open windows.
-                    4. Wish the user a safe night.
-                    5. Keep it under 40 words.
-                    `;
-                }
-
-                const completionPayload = {
-                    model: LLM_MODEL,
-                    messages: [
-                        { role: "system", content: systemPrompt },
-                        { role: "user", content: `Current State:\n${stateSummary}` }
-                    ],
-                    max_tokens: 150
-                };
-
-                const llmRes = await fetch(OPENROUTER_API_URL, {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${LLM_API_KEY}`,
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://dailybutler.app",
-                    },
-                    body: JSON.stringify(completionPayload)
-                });
-
-                if (!llmRes.ok) {
-                    throw new Error(`LLM API Failed: ${llmRes.status} ${await llmRes.text()}`);
-                }
-
-                const llmData = await llmRes.json();
-                const content = llmData.choices?.[0]?.message?.content;
+                const content = await chatCompletion([
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `Actuele woningstatus:\n${stateSummary || 'Geen sensordata beschikbaar.'}` }
+                ], 250, 0.4, undefined, undefined, undefined, { effort: 'low' }, 'high_accuracy');
 
                 if (content) {
-                    // 5. Send Notification with ACTION BUTTONS
-                    const { sendFCM } = await import("../_shared/firebase.ts");
-                    await sendFCM(conn.fcm_token, mode === "morning_briefing" ? "🌅 Morning Briefing" : "🛡️ Night Watch", content, "PLAN_REQUEST");
-                    results.push({ id: conn.id, status: "sent", content });
+                    let pushSent = false;
+                    if (conn.fcm_token) {
+                        const { sendFCM } = await import("../_shared/firebase.ts");
+                        await sendFCM(
+                            conn.fcm_token,
+                            mode === "morning_briefing" ? "🌅 Ochtendbriefing" : "🛡️ Nachtronde",
+                            content,
+                            mode === "morning_briefing" ? "PLAN_REQUEST" : "NIGHT_WATCH"
+                        );
+                        pushSent = true;
+                    }
+                    results.push({ id: conn.id, status: "ok", pushSent, content });
                 }
-
-            } catch (err) {
-                console.error(`Error processing connection ${conn.id}`, err);
-                results.push({ id: conn.id, status: "error", error: err });
+            } catch (err: any) {
+                console.error(`Error processing connection ${conn.id}:`, err);
+                results.push({ id: conn.id, status: "error", error: err?.message || String(err) });
             }
         }
 
-        return new Response(JSON.stringify({ results }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        })
+        const firstContent = results.find(r => r.content)?.content;
+        return new Response(JSON.stringify({
+            success: true,
+            mode,
+            message: firstContent || `Daily Butler (${mode}) voltooid voor ${results.length} koppeling(en).`,
+            results
+        }), {
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
 
     } catch (err: any) {
         return new Response(JSON.stringify({ error: err.message }), {
             status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        })
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
     }
-})
-
-// Helper to send FCM
-
+});

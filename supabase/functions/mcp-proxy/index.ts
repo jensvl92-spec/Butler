@@ -1,31 +1,21 @@
 /**
  * MCP Proxy - Supabase Edge Function
- * 
- * Exposes MCP tools and agents for the Butler AI system.
- * 
- * IMPORTANT: Devices come FROM THE APP in each request.
- * The app has WebSocket connection to HA and fetches device states.
- * NO ADD-ON SYNC NEEDED.
+ * Authenticated & tenant-scoped proxy for MCP catalog, tools, memory, and HA history (SSRF-safe).
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { verifyRequestAuth, verifyConnectionOwnership, isSafeExternalUrl, CORS_HEADERS } from "../_shared/auth.ts";
+import { fetchWithTimeout } from "../_shared/model-registry.ts";
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// In-memory device cache (per request)
-// This stores devices for the current request context
-let REQUEST_DEVICES: Map<string, any[]> = new Map();
+const REQUEST_DEVICES: Map<string, any[]> = new Map();
 
 serve(async (req: Request) => {
     if (req.method === 'OPTIONS') {
-        return new Response('ok', { headers: corsHeaders });
+        return new Response('ok', { headers: CORS_HEADERS });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -33,26 +23,28 @@ serve(async (req: Request) => {
     const path = url.pathname.replace(/^.*\/mcp-proxy/, '') || '/';
 
     try {
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) {
+            return jsonResponse({ error: auth.error }, auth.status || 401);
+        }
+
         // ============================================
         // GET /mcp/catalog - Full catalog in TOON format
         // ============================================
         if (path === '/mcp/catalog' && req.method === 'GET') {
             const connectionId = url.searchParams.get('connection_id');
-            console.log(`[Catalog] TOON request for connection_id: ${connectionId}`);
+            if (!connectionId) return jsonResponse({ error: 'connection_id required' }, 400);
 
-            if (!connectionId) {
-                return jsonResponse({ error: 'connection_id required' }, 400);
-            }
+            const ownership = await verifyConnectionOwnership(supabase, auth, connectionId);
+            if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
 
-            // Fetch pre-computed TOON catalogs from mcp_raw_sync
             const { data: syncData, error: syncError } = await supabase
                 .from('mcp_raw_sync')
                 .select('toon_devices, toon_tools, toon_agents, entity_count, synced_at')
                 .eq('connection_id', connectionId)
-                .single();
+                .maybeSingle();
 
             if (syncError || !syncData) {
-                console.warn(`[Catalog] No TOON data for ${connectionId}: ${syncError?.message || 'not found'}`);
                 return jsonResponse({
                     toon_devices: 'devices[0]{entity_id,name,domain,room,state}',
                     toon_tools: 'tools[0]{name,domain,description,when_to_use}',
@@ -63,8 +55,6 @@ serve(async (req: Request) => {
                 });
             }
 
-            console.log(`[Catalog] Serving TOON catalog (synced: ${syncData.synced_at})`);
-
             return jsonResponse({
                 toon_devices: syncData.toon_devices || 'devices[0]{entity_id,name,domain,room,state}',
                 toon_tools: syncData.toon_tools || 'tools[0]{name,domain,description,when_to_use}',
@@ -73,7 +63,6 @@ serve(async (req: Request) => {
                 synced_at: syncData.synced_at,
                 entity_count: syncData.entity_count || 0
             });
-
         }
 
         // ============================================
@@ -83,17 +72,23 @@ serve(async (req: Request) => {
             const connectionId = url.searchParams.get('connection_id');
             const names = url.searchParams.get('names');
 
+            if (connectionId) {
+                const ownership = await verifyConnectionOwnership(supabase, auth, connectionId);
+                if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
+            }
+
             let query = supabase
                 .from('mcp_tools')
                 .select('name, type, category, description, when_to_use, parameters, returns, examples');
 
             if (connectionId) {
                 query = query.or(`connection_id.is.null,connection_id.eq.${connectionId}`);
+            } else {
+                query = query.is('connection_id', null);
             }
 
             if (names) {
-                const nameList = names.split(',');
-                query = query.in('name', nameList);
+                query = query.in('name', names.split(','));
             }
 
             const { data: tools } = await query;
@@ -101,19 +96,20 @@ serve(async (req: Request) => {
         }
 
         // ============================================
-        // POST /tools/search - Unified semantic search (tools + devices + rooms)
+        // POST /tools/search - Unified semantic search
         // ============================================
         if (path === '/tools/search' && req.method === 'POST') {
             const { query_embedding, limit = 30, connection_id, match_threshold = 0.25, device_states = {} } = await req.json();
 
-            if (!query_embedding) {
-                return jsonResponse({ error: 'query_embedding required' }, 400);
+            if (!query_embedding) return jsonResponse({ error: 'query_embedding required' }, 400);
+            if (connection_id) {
+                const ownership = await verifyConnectionOwnership(supabase, auth, connection_id);
+                if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
             }
 
-            // Using unified mcp_resources search
             const { data: resources, error } = await supabase.rpc('match_mcp_resources', {
-                query_embedding: query_embedding,
-                match_threshold: match_threshold,
+                query_embedding,
+                match_threshold,
                 match_count: limit,
                 filter_connection_id: connection_id,
                 filter_types: ['tool', 'device', 'room', 'agent']
@@ -121,28 +117,15 @@ serve(async (req: Request) => {
 
             if (error) throw error;
 
-            // Group results by type for easy consumption
             const tools = (resources || []).filter((r: any) => r.resource_type === 'tool');
-
-            // Devices: Inject fresh state if available from client
             const devices = (resources || []).filter((r: any) => r.resource_type === 'device').map((d: any) => {
-                if (device_states && device_states[d.name]) {
-                    // console.log(`[Proxy] Updating state for ${d.name}: ${d.state} -> ${device_states[d.name]}`);
-                    d.state = device_states[d.name];
-                }
+                if (device_states && device_states[d.name]) d.state = device_states[d.name];
                 return d;
             });
-
             const rooms = (resources || []).filter((r: any) => r.resource_type === 'room');
             const agents = (resources || []).filter((r: any) => r.resource_type === 'agent');
 
-            return jsonResponse({
-                tools: tools,
-                devices: devices,
-                rooms: rooms,
-                agents: agents,
-                total: resources?.length || 0
-            });
+            return jsonResponse({ tools, devices, rooms, agents, total: resources?.length || 0 });
         }
 
         // ============================================
@@ -150,7 +133,6 @@ serve(async (req: Request) => {
         // ============================================
         if (path === '/agents' && req.method === 'GET') {
             const capability = url.searchParams.get('capability');
-
             let query = supabase
                 .from('agents')
                 .select('name, type, description, when_to_use, input, output, examples, tags');
@@ -158,14 +140,12 @@ serve(async (req: Request) => {
             if (capability) {
                 query = query.contains('tags', [capability.toLowerCase()]);
             }
-
             const { data: agents } = await query;
             return jsonResponse({ agents: agents || [] });
         }
 
         // ============================================
-        // GET /climate/heating-rate - Get heating rate for conditions
-        // Used by Butler to predict heating time
+        // GET /climate/heating-rate
         // ============================================
         if (path === '/climate/heating-rate' && req.method === 'GET') {
             const connectionId = url.searchParams.get('connection_id');
@@ -175,18 +155,17 @@ serve(async (req: Request) => {
             const outsideTemp = parseFloat(url.searchParams.get('outside_temp') || '10');
             const outsideHumidity = parseFloat(url.searchParams.get('outside_humidity') || '50');
 
-            if (!connectionId || !room) {
-                return jsonResponse({ error: 'connection_id and room required' }, 400);
-            }
+            if (!connectionId || !room) return jsonResponse({ error: 'connection_id and room required' }, 400);
 
-            // Convert to buckets
+            const ownership = await verifyConnectionOwnership(supabase, auth, connectionId);
+            if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
+
             const roomTempBucket = Math.max(10, Math.min(25, Math.round(roomTemp)));
             const roomHumidityBucket = roomHumidity < 40 ? 'low' : roomHumidity < 70 ? 'med' : 'high';
             const outsideTempBucket = Math.floor(Math.max(-20, Math.min(24, outsideTemp)) / 2) * 2;
             const outsideHumidityBucket = outsideHumidity < 40 ? 'low' : outsideHumidity < 70 ? 'med' : 'high';
 
-            // Try exact match first
-            let { data: rate } = await supabase
+            const { data: rate } = await supabase
                 .from('climate_heating_rates')
                 .select('avg_heating_rate, sample_count, last_updated')
                 .eq('connection_id', connectionId)
@@ -195,10 +174,9 @@ serve(async (req: Request) => {
                 .eq('room_humidity_bucket', roomHumidityBucket)
                 .eq('outside_temp_bucket', outsideTempBucket)
                 .eq('outside_humidity_bucket', outsideHumidityBucket)
-                .single();
+                .maybeSingle();
 
             if (!rate) {
-                // Fallback: find closest match (same room, similar conditions)
                 const { data: fallback } = await supabase
                     .from('climate_heating_rates')
                     .select('avg_heating_rate, sample_count, room_temp_bucket, outside_temp_bucket')
@@ -208,8 +186,7 @@ serve(async (req: Request) => {
                     .limit(5);
 
                 if (fallback && fallback.length > 0) {
-                    // Return average of available rates with a note
-                    const avgRate = fallback.reduce((sum, r) => sum + r.avg_heating_rate, 0) / fallback.length;
+                    const avgRate = fallback.reduce((sum: number, r: any) => sum + r.avg_heating_rate, 0) / fallback.length;
                     return jsonResponse({
                         heating_rate: avgRate,
                         confidence: 'estimated',
@@ -221,7 +198,7 @@ serve(async (req: Request) => {
                 return jsonResponse({
                     heating_rate: null,
                     confidence: 'none',
-                    message: `No heating data for ${room}. Trigger learn-climate or wait for more heating cycles.`
+                    message: `No heating data for ${room}.`
                 });
             }
 
@@ -240,58 +217,45 @@ serve(async (req: Request) => {
         }
 
         // ============================================
-        // POST /context - Set device context for this request
-        // Called by process-ai-command before Butler runs
+        // POST /context - Set device context for request
         // ============================================
         if (path === '/context' && req.method === 'POST') {
             const { request_id, devices } = await req.json();
+            if (!request_id || !devices) return jsonResponse({ error: 'request_id and devices required' }, 400);
 
-            if (!request_id || !devices) {
-                return jsonResponse({ error: 'request_id and devices required' }, 400);
-            }
-
-            // Store devices in memory for this request
             REQUEST_DEVICES.set(request_id, devices);
-
-            // Clean up old requests (keep last 100)
             if (REQUEST_DEVICES.size > 100) {
                 const keys = Array.from(REQUEST_DEVICES.keys());
-                for (let i = 0; i < keys.length - 100; i++) {
-                    REQUEST_DEVICES.delete(keys[i]);
-                }
+                for (let i = 0; i < keys.length - 100; i++) REQUEST_DEVICES.delete(keys[i]);
             }
-
             return jsonResponse({ success: true, device_count: devices.length });
         }
 
         // ============================================
         // POST /tools/{name} - Execute a tool
-        // Uses devices from context (set via /context)
         // ============================================
         if (path.startsWith('/tools/') && req.method === 'POST') {
             const toolName = path.split('/')[2];
             const body = await req.json();
             const { request_id, connection_id, args = {}, devices: inlineDevices } = body;
 
-            // Get devices:
-            // 1. Inline (legacy/current app)
-            // 2. Context cache (legacy)
-            // 3. Database (TARGET ARCHITECTURE)
-            let devices = inlineDevices || REQUEST_DEVICES.get(request_id) || [];
+            let verifiedConn: any = null;
+            if (connection_id) {
+                const ownership = await verifyConnectionOwnership(supabase, auth, connection_id);
+                if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
+                verifiedConn = ownership.connection;
+            }
 
+            let devices = inlineDevices || REQUEST_DEVICES.get(request_id) || [];
             if (devices.length === 0 && connection_id) {
-                // Fetch from device_inventory for lean prompts
                 const { data: dbDevices } = await supabase
                     .from('device_inventory')
                     .select('entity_id, state, attributes, friendly_name, room')
                     .eq('connection_id', connection_id);
-
-                if (dbDevices) {
-                    devices = dbDevices;
-                }
+                if (dbDevices) devices = dbDevices;
             }
 
-            const result = await executeTool(supabase, toolName, args, connection_id, devices);
+            const result = await executeTool(supabase, toolName, args, connection_id, devices, verifiedConn);
             return jsonResponse({ result });
         }
 
@@ -300,16 +264,13 @@ serve(async (req: Request) => {
         // ============================================
         if (path === '/memory' && req.method === 'POST') {
             const { connection_id, action, text, query } = await req.json();
+            if (!connection_id) return jsonResponse({ error: 'connection_id required' }, 400);
 
-            if (!connection_id) {
-                return jsonResponse({ error: 'connection_id required' }, 400);
-            }
+            const ownership = await verifyConnectionOwnership(supabase, auth, connection_id);
+            if (!ownership.valid) return jsonResponse({ error: ownership.error }, ownership.status || 403);
 
             if (action === 'save') {
-                const { error } = await supabase
-                    .from('user_memories')
-                    .insert({ connection_id, text });
-
+                const { error } = await supabase.from('user_memories').insert({ connection_id, text });
                 if (error) throw error;
                 return jsonResponse({ success: true, message: `Memory saved: "${text}"` });
             }
@@ -319,9 +280,8 @@ serve(async (req: Request) => {
                     .from('user_memories')
                     .select('text, metadata, created_at')
                     .eq('connection_id', connection_id)
-                    .ilike('text', `%${query}%`)
+                    .ilike('text', `%${query || ''}%`)
                     .limit(10);
-
                 return jsonResponse({ memories: data || [] });
             }
 
@@ -336,74 +296,50 @@ serve(async (req: Request) => {
     }
 });
 
-// ============================================
-// Tool Execution - Works with in-memory devices
-// ============================================
 async function executeTool(
     supabase: any,
     toolName: string,
     args: Record<string, any>,
     connectionId: string,
-    devices: any[]
+    devices: any[],
+    verifiedConn?: any
 ): Promise<any> {
-
     switch (toolName) {
-        case 'get_lights':
-            return filterDevices(devices, 'light', args.room);
-
-        case 'get_switches':
-            return filterDevices(devices, 'switch', args.room);
-
-        case 'get_climate':
-            return filterDevices(devices, 'climate', args.room);
-
-        case 'get_covers':
-            return filterDevices(devices, 'cover', args.room);
-
-        case 'get_automations':
-            return filterDevices(devices, 'automation', args.filter);
+        case 'get_lights': return filterDevices(devices, 'light', args.room);
+        case 'get_switches': return filterDevices(devices, 'switch', args.room);
+        case 'get_climate': return filterDevices(devices, 'climate', args.room);
+        case 'get_covers': return filterDevices(devices, 'cover', args.room);
+        case 'get_automations': return filterDevices(devices, 'automation', args.filter);
 
         case 'search_devices': {
             const query = (args.query || '').toLowerCase();
-            // Tokenize query: remove common verbs/stopwords if needed, or just split
             const tokens = query.split(/[\s,]+/).filter((t: string) => t.length > 2 && !['turn', 'check', 'set', 'get', 'what', 'show'].includes(t));
-
-            if (tokens.length === 0) {
-                // Fallback: if no significant tokens, try looser match or return empty
-                if (query.length > 0) tokens.push(query);
-            }
+            if (tokens.length === 0 && query.length > 0) tokens.push(query);
 
             return devices.filter(d => {
                 const name = (d.attributes?.friendly_name || d.entity_id || '').toLowerCase();
-                const entityId = d.entity_id.toLowerCase();
-
-                // 1. Direct substring match (if query is e.g. "kitchen")
+                const entityId = (d.entity_id || '').toLowerCase();
                 if (name.includes(query) || entityId.includes(query)) return true;
-
-                // 2. Token match: If ANY significant token is found (OR logic) - good for broad recall
-                // Better: If ALL tokens match? No, "turn on kitchen" -> "kitchen" matches. "turn" skipped.
                 return tokens.some((token: string) => name.includes(token) || entityId.includes(token));
             }).slice(0, 20);
         }
 
         case 'save_memory':
-            await supabase.from('user_memories').insert({
-                connection_id: connectionId,
-                text: args.text
-            });
+            if (!connectionId) return { error: 'connection_id required' };
+            await supabase.from('user_memories').insert({ connection_id: connectionId, text: args.text });
             return `Memory saved: "${args.text}"`;
 
         case 'search_memory': {
+            if (!connectionId) return [];
             const { data } = await supabase
                 .from('user_memories')
                 .select('text')
                 .eq('connection_id', connectionId)
-                .ilike('text', `%${args.query}%`);
+                .ilike('text', `%${args.query || ''}%`);
             return data?.map((m: any) => m.text) || [];
         }
 
         case 'execute_ha_service':
-            // Returns action for app to execute via WebSocket
             return {
                 action_type: 'ha_service_call',
                 entity_id: args.entity_id,
@@ -412,51 +348,45 @@ async function executeTool(
             };
 
         case 'get_history': {
-            // Fetch history from HA REST API
-            // Requires ha_url and ha_token to be passed in args
-            const { ha_url, ha_token, start_time, end_time, entity_ids, significant_changes_only } = args;
-
-            if (!ha_url || !ha_token) {
-                return { error: 'get_history requires ha_url and ha_token in args' };
+            // SSRF-SAFE: Always load HA URL & token from verified DB connection, NEVER trust caller-supplied URL!
+            if (!verifiedConn?.api_url || !verifiedConn?.api_token) {
+                return { error: 'get_history requires a valid connection_id with stored Home Assistant credentials' };
+            }
+            const baseUrl = String(verifiedConn.api_url).replace(/\/+$/, '');
+            if (!isSafeExternalUrl(baseUrl)) {
+                return { error: 'Stored Home Assistant URL is not permitted' };
             }
 
+            const { start_time, end_time, entity_ids, significant_changes_only } = args;
             const startDate = start_time || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
             const endDate = end_time || new Date().toISOString();
 
-            let historyUrl = `${ha_url}/api/history/period/${encodeURIComponent(startDate)}?end_time=${encodeURIComponent(endDate)}`;
-            if (significant_changes_only) {
-                historyUrl += '&significant_changes_only=1';
-            }
+            let historyUrl = `${baseUrl}/api/history/period/${encodeURIComponent(startDate)}?end_time=${encodeURIComponent(endDate)}`;
+            if (significant_changes_only) historyUrl += '&significant_changes_only=1';
             if (entity_ids && Array.isArray(entity_ids) && entity_ids.length > 0) {
-                historyUrl += `&filter_entity_id=${entity_ids.join(',')}`;
+                historyUrl += `&filter_entity_id=${encodeURIComponent(entity_ids.slice(0, 40).join(','))}`;
             }
 
             try {
-                const historyResp = await fetch(historyUrl, {
+                const historyResp = await fetchWithTimeout(historyUrl, {
                     headers: {
-                        'Authorization': `Bearer ${ha_token}`,
+                        'Authorization': `Bearer ${verifiedConn.api_token}`,
                         'Content-Type': 'application/json'
                     }
-                });
+                }, 15000);
 
                 if (!historyResp.ok) {
                     const errorBody = await historyResp.text();
-                    console.error(`[get_history] HA API error ${historyResp.status}: ${errorBody}`);
-                    console.error(`[get_history] URL was: ${historyUrl}`);
                     return { error: `HA API error: ${historyResp.status} - ${errorBody.substring(0, 200)}` };
                 }
 
                 const historyData = await historyResp.json();
-                // Return summarized history to avoid huge payloads
-                // Each entity returns an array of state changes
-                const summary = historyData.map((entityHistory: any[]) => {
+                return (historyData || []).map((entityHistory: any[]) => {
                     if (!entityHistory || entityHistory.length === 0) return null;
                     const entityId = entityHistory[0]?.entity_id;
                     const states = entityHistory.map((s: any) => ({ state: s.state, last_changed: s.last_changed }));
-                    return { entity_id: entityId, changes: states.length, states: states.slice(0, 50) }; // Limit to 50 changes per entity
+                    return { entity_id: entityId, changes: states.length, states: states.slice(0, 50) };
                 }).filter(Boolean);
-
-                return summary;
             } catch (e: any) {
                 return { error: `History fetch failed: ${e.message}` };
             }
@@ -467,22 +397,15 @@ async function executeTool(
     }
 }
 
-/**
- * Filter devices by domain and optional room
- */
 function filterDevices(devices: any[], domain: string, room?: string): any[] {
     return devices.filter(d => {
         const entityDomain = d.entity_id?.split('.')[0];
         if (entityDomain !== domain) return false;
-
         if (room) {
             const name = (d.attributes?.friendly_name || d.entity_id || '').toLowerCase();
             const entityRoom = extractRoom(d);
-            if (!name.includes(room.toLowerCase()) && entityRoom !== room.toLowerCase()) {
-                return false;
-            }
+            if (!name.includes(room.toLowerCase()) && entityRoom !== room.toLowerCase()) return false;
         }
-
         return true;
     }).map(d => ({
         entity_id: d.entity_id,
@@ -494,23 +417,19 @@ function filterDevices(devices: any[], domain: string, room?: string): any[] {
 }
 
 function extractRoom(entity: any): string | null {
-    const friendlyName = entity.attributes?.friendly_name || '';
-    const entityId = entity.entity_id || '';
-
-    const rooms = ['living', 'bedroom', 'kitchen', 'bathroom', 'office', 'garage', 'basement', 'attic', 'dining', 'hallway'];
-
+    const friendlyName = (entity.attributes?.friendly_name || '').toLowerCase();
+    const entityId = (entity.entity_id || '').toLowerCase();
+    const rooms = ['living', 'bedroom', 'kitchen', 'bathroom', 'office', 'garage', 'basement', 'attic', 'dining', 'hallway',
+        'woonkamer', 'slaapkamer', 'keuken', 'badkamer', 'kantoor', 'kelder', 'zolder', 'eetkamer', 'gang', 'tuin'];
     for (const room of rooms) {
-        if (friendlyName.toLowerCase().includes(room) || entityId.includes(room)) {
-            return room;
-        }
+        if (friendlyName.includes(room) || entityId.includes(room)) return room;
     }
-
     return null;
 }
 
 function jsonResponse(data: any, status = 200): Response {
     return new Response(JSON.stringify(data), {
         status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
     });
 }

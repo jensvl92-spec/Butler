@@ -1,27 +1,16 @@
 /**
  * Analyzer Agent
- * 
- * Analyzes device history and usage patterns to extract meaningful insights.
- * Uses TOON (Token-Oriented Object Notation) for 50-60% token reduction.
+ * Analyzes device history and usage patterns using TOON format for 50-60% token reduction.
  */
 
 import { chatCompletion, parseJSONResponse } from '../llm-service.ts';
+import { fetchWithTimeout } from '../model-registry.ts';
 
-// ============================================
-// TOON (Token-Oriented Object Notation) Helper
-// Converts HA history JSON to compact tabular format
-// ============================================
-
-// Domains to exclude (config/update entities, not behavioral patterns)
-const EXCLUDED_DOMAINS = ['update', 'number', 'input_number', 'select', 'input_select'];
-
-// Max state changes per entity before it's considered noise
+const EXCLUDED_DOMAINS = ['update', 'number', 'input_number', 'select', 'input_select', 'button', 'tts', 'stt'];
 const MAX_CHANGES_PER_ENTITY = 50;
 
 function haHistoryToTOON(historyJson: any, log?: (msg: string) => void): string {
   try {
-    // HA history is array of arrays: [[entity1_states], [entity2_states], ...]
-    // Each state has: entity_id, state, last_changed, attributes
     const allStates: any[] = [];
     let excludedDomainCount = 0;
     let highFrequencyCount = 0;
@@ -33,15 +22,14 @@ function haHistoryToTOON(historyJson: any, log?: (msg: string) => void): string 
 
         const firstState = entityHistory[0];
         const entityId = firstState?.entity_id || '';
+        if (!entityId) continue;
         const domain = entityId.split('.')[0];
 
-        // Filter 1: Exclude noisy domains
         if (EXCLUDED_DOMAINS.includes(domain)) {
           excludedDomainCount++;
           continue;
         }
 
-        // Filter 2: Skip high-frequency entities (likely noisy sensors)
         if (entityHistory.length > MAX_CHANGES_PER_ENTITY) {
           highFrequencyCount++;
           continue;
@@ -49,10 +37,12 @@ function haHistoryToTOON(historyJson: any, log?: (msg: string) => void): string 
 
         includedEntityCount++;
         for (const state of entityHistory) {
+          // NOTE: HA minimal_response=1 omits entity_id on index > 0 — carry entityId forward!
+          const ts = state.last_changed || state.last_updated || '';
           allStates.push({
-            entity_id: state.entity_id || '',
+            entity_id: state.entity_id || entityId,
             state: state.state || '',
-            last_changed: state.last_changed ? state.last_changed.substring(0, 19) : '', // Trim to second
+            last_changed: typeof ts === 'string' ? ts.substring(0, 19) : '',
             attrs: formatAttributes(state.attributes)
           });
         }
@@ -67,12 +57,9 @@ function haHistoryToTOON(historyJson: any, log?: (msg: string) => void): string 
       return 'history[0]{entity_id,state,last_changed,attrs}';
     }
 
-    // Build TOON output
-    const header = `history[${allStates.length}]{entity_id,state,last_changed,attrs}`;
-    const rows = allStates.map(s =>
-      `${s.entity_id}\t${s.state}\t${s.last_changed}\t${s.attrs}`
-    );
-
+    const capped = allStates.slice(0, 2500);
+    const header = `history[${capped.length}]{entity_id,state,last_changed,attrs}`;
+    const rows = capped.map(s => `${s.entity_id}\t${s.state}\t${s.last_changed}\t${s.attrs}`);
     return [header, ...rows].join('\n');
   } catch (e) {
     console.error('[TOON] Conversion error:', e);
@@ -80,97 +67,35 @@ function haHistoryToTOON(historyJson: any, log?: (msg: string) => void): string 
   }
 }
 
-// Compact attribute formatting: {brightness: 255, color: "red"} → "brightness:255,color:red"
 function formatAttributes(attrs: any): string {
   if (!attrs || typeof attrs !== 'object') return '';
-
-  // Skip verbose attributes to save tokens
   const skipKeys = ['friendly_name', 'icon', 'supported_features', 'device_class', 'entity_picture'];
-
   const parts: string[] = [];
   for (const [key, value] of Object.entries(attrs)) {
-    if (skipKeys.includes(key)) continue;
-    if (value === null || value === undefined) continue;
-    if (typeof value === 'object') continue; // Skip nested objects
-
+    if (skipKeys.includes(key) || value === null || value === undefined || typeof value === 'object') continue;
     const strVal = String(value).replace(/\t/g, ' ').replace(/\n/g, ' ').substring(0, 50);
     parts.push(`${key}:${strVal}`);
   }
-
-  return parts.slice(0, 5).join(','); // Max 5 attributes per state
+  return parts.slice(0, 5).join(',');
 }
 
 const ANALYZER_PROMPT = `
 IDENTITY:
-You are an expert smart home analyst with deep understanding of user behavior patterns.
-Your goal is to discover automation opportunities that will genuinely improve the user's life.
-
-TASK:
-Analyze device history to find meaningful patterns that could be automated.
-Think like a thoughtful butler who notices habits and anticipates needs.
+You are an expert smart home analyst who discovers real automation opportunities from Home Assistant history.
 
 INPUT FORMAT: TOON (Token-Oriented Object Notation)
-The history data is in TOON format for efficiency:
-- Header: history[count]{field1,field2,...}
+- Header: history[count]{entity_id,state,last_changed,attrs}
 - Rows: TAB-separated values, one per line
-- Attributes: key:value pairs, comma-separated
 
-AVAILABLE CONTEXT (may be provided):
-- GPS location of user's smartphone (arrivals/departures)
-- Time of day, day of week
-- Sun position (sunrise/sunset times)
-- Weather conditions
+CATEGORIES:
+1. ARRIVAL/DEPARTURE PATTERNS (person/device_tracker + lights/climate/locks)
+2. TIME-BASED ROUTINES (repeated manual actions at consistent times)
+3. ENVIRONMENTAL TRIGGERS (sun/weather/temp correlated with blinds/lights/climate)
+4. DEVICE CORRELATIONS (devices controlled together within minutes)
+5. SECURITY & ANOMALIES (doors/garages left open at night)
+6. ENERGY OPTIMIZATION (lights/HVAC left on when away or unused)
 
-=== PATTERN CATEGORIES ===
-
-**1. ARRIVAL/DEPARTURE PATTERNS**
-Look for actions that consistently happen when user arrives or leaves.
-Examples:
-- "Front door light turns on every evening when user arrives home after sunset"
-  → Suggest: Automate porch light on when phone GPS enters home zone after sunset
-- "Thermostat set to 'away' manually each morning around 8 AM on weekdays"
-  → Suggest: Auto-set 'away' mode when phone GPS leaves home zone on weekdays
-
-**2. TIME-BASED ROUTINES**
-Repeated actions at similar times on specific days.
-Examples:
-- "Coffee machine on at 6:45 AM Mon-Fri, 8:30 AM Sat-Sun"
-  → Suggest: Schedule coffee based on day of week
-- "Bedroom lights dim to 20% around 10 PM nightly"
-  → Suggest: Automate bedtime lighting scene
-
-**3. ENVIRONMENTAL TRIGGERS**
-Actions correlated with environmental conditions.
-Examples:
-- "Blinds close when outdoor temperature exceeds 28°C"
-  → Suggest: Auto-close blinds when temp > 28°C
-- "Lights turn on in living room around sunset"
-  → Suggest: Trigger lights at sunset instead of fixed time
-
-**4. DEVICE CORRELATIONS**
-Multiple devices that are often controlled together.
-Examples:
-- "TV on" is always followed by "Living room lights dim" within 2 minutes
-  → Suggest: Create "Movie Mode" scene
-- "Washing machine finishes" → "Notification sent" (if not automated, suggest it)
-
-**5. ANOMALIES & SECURITY CONCERNS**
-Unusual patterns that might indicate problems or forgot actions.
-Examples:
-- "Garage door left open after 11 PM (3 times this month)"
-  → Suggest: Auto-close garage door at 11 PM if open
-- "Smoke detector triggered during cooking hours"
-  → Note: May need better ventilation, not an automation
-
-**6. ENERGY OPTIMIZATION**
-Wasteful patterns that could be improved.
-Examples:
-- "Lights left on in empty rooms for hours"
-  → Suggest: Motion-based auto-off after 15 minutes
-- "AC running while windows are open"
-  → Suggest: Pause HVAC when window sensors detect open
-
-=== OUTPUT FORMAT ===
+OUTPUT FORMAT (valid JSON ONLY):
 {
   "text": "Friendly summary of findings for the user",
   "patterns": [
@@ -179,21 +104,18 @@ Examples:
       "description": "Clear description of what you observed",
       "confidence": 0.0-1.0,
       "entities_involved": ["entity.id1", "entity.id2"],
-      "trigger": "What triggers this pattern (time/location/event)",
+      "trigger": "What triggers this pattern",
       "suggestion": "Specific, actionable automation recommendation"
     }
   ]
 }
 
-=== GUIDELINES ===
-- Only report patterns you can actually observe in the data
-- Prioritize high-confidence patterns (≥0.7) with clear automation potential
-- Be specific about triggers: "weekdays at 7 AM" not "in the morning"
-- Suggestions should be actionable: "Turn on porch light when phone arrives after sunset"
-- Include entity IDs exactly as they appear in the data
-
-CRITICAL: The user may speak another language. You MUST respond to them in that language, BUT your \`patterns\` data (especially \`entities_involved\`) must use the original ENGLISH entity IDs from the history data.
+GUIDELINES:
+- Report ONLY patterns directly observed in the data.
+- Prioritize high-confidence patterns (>= 0.7) with clear automation potential.
+- Keep original entity_ids verbatim in entities_involved.
 `;
+
 export interface Pattern {
   type: 'routine' | 'correlation' | 'anomaly' | 'arrival' | 'energy';
   description: string;
@@ -209,80 +131,80 @@ export interface AnalyzerResult {
 }
 
 export async function runAnalyzer(
-  connectionId: string,
-  mcpProxyUrl: string,
+  _connectionId: string,
+  _mcpProxyUrl: string,
   haUrl: string,
   haToken: string,
   entityIds: string[],
   focusArea: string = 'general',
-  language: string = 'en',
+  language: string = 'nl',
   log: (msg: string) => void = console.log
 ): Promise<AnalyzerResult> {
   log(`[Analyzer] Analyzing history data, focus: ${focusArea}`);
 
-  // Fetch History directly from HA REST API
-  let historyData = '';
-  let jsonSize = 0;
-  let toonSize = 0;
+  const baseUrl = haUrl.replace(/\/+$/, '');
+  const startTime = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const endTime = new Date().toISOString();
+
+  // Filter out noisy domains and cap total entities; chunk by 40 to prevent HTTP 414 URI Too Long
+  const filteredIds = entityIds
+    .filter(id => !EXCLUDED_DOMAINS.includes(id.split('.')[0]))
+    .slice(0, 160);
+
+  const combinedHistory: any[] = [];
+  const CHUNK_SIZE = 40;
 
   try {
-    // HA History API: /api/history/period/<start_time>?end_time=<end>&filter_entity_id=<entities>
-    const startTime = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(); // 3 days
-    const endTime = new Date().toISOString();
-
-    // Build URL - fetch ALL entities (TOON compression will make it fit)
-    const filterParam = entityIds.length > 0 ? `&filter_entity_id=${entityIds.join(',')}` : '';
-    const historyUrl = `${haUrl}/api/history/period/${startTime}?end_time=${endTime}${filterParam}&significant_changes_only=1&minimal_response=1`;
-
-    log(`[Analyzer] Fetching HA history: ${entityIds.length} entities, 3 days`);
-
-    const historyResp = await fetch(historyUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${haToken}`,
-        'Content-Type': 'application/json'
+    if (filteredIds.length === 0) {
+      const url = `${baseUrl}/api/history/period/${encodeURIComponent(startTime)}?end_time=${encodeURIComponent(endTime)}&significant_changes_only=1&minimal_response=1`;
+      const resp = await fetchWithTimeout(url, {
+        headers: { 'Authorization': `Bearer ${haToken}`, 'Content-Type': 'application/json' }
+      }, 20000);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data)) combinedHistory.push(...data);
       }
-    });
-
-    if (historyResp.ok) {
-      const jsonData = await historyResp.json();
-      jsonSize = JSON.stringify(jsonData).length;
-
-      log(`[Analyzer] HA returned ${jsonSize} chars of history`);
-
-      // Convert to TOON with smart filtering
-      historyData = haHistoryToTOON(jsonData, log);
-      toonSize = historyData.length;
-
-      const reduction = jsonSize > 0 ? Math.round((1 - toonSize / jsonSize) * 100) : 0;
-      log(`[Analyzer] TOON conversion: ${jsonSize} → ${toonSize} chars (${reduction}% reduction)`);
     } else {
-      const errorText = await historyResp.text();
-      log(`[Analyzer] Failed to fetch history: ${historyResp.status} - ${errorText.substring(0, 100)}`);
+      for (let i = 0; i < filteredIds.length; i += CHUNK_SIZE) {
+        const chunk = filteredIds.slice(i, i + CHUNK_SIZE);
+        const url = `${baseUrl}/api/history/period/${encodeURIComponent(startTime)}?end_time=${encodeURIComponent(endTime)}&filter_entity_id=${encodeURIComponent(chunk.join(','))}&significant_changes_only=1&minimal_response=1`;
+        const resp = await fetchWithTimeout(url, {
+          headers: { 'Authorization': `Bearer ${haToken}`, 'Content-Type': 'application/json' }
+        }, 20000);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data)) combinedHistory.push(...data);
+        } else {
+          log(`[Analyzer] History chunk ${i / CHUNK_SIZE + 1} failed: ${resp.status}`);
+        }
+      }
     }
   } catch (e) {
-    log(`[Analyzer] History fetch error: ${e} `);
+    log(`[Analyzer] History fetch error: ${e}`);
   }
 
-  const languageNote = language !== 'en' ? `\nRespond in ${language}.` : '';
-
-  log(`[Analyzer] Sending ${historyData.length} chars to Gemini 3.1 Pro (Deep Reasoning Tier 1)...`);
-
-  const response = await chatCompletion([
-    { role: 'system', content: ANALYZER_PROMPT + languageNote },
-    { role: 'user', content: `FOCUS AREA: ${focusArea}\n\nHISTORY DATA (TOON format):\n${historyData}` }
-  ], 25000, 0.2, undefined, undefined, 'google/gemini-3.1-pro-preview', { effort: 'high' });
-
-  log(`[Analyzer] LLM response length: ${response?.length || 0} chars`);
-  log(`[Analyzer] Response preview: ${(response || '').substring(0, 200)}`);
-
-  const result = parseJSONResponse(response);
-
-  if (!result) {
-    log(`[Analyzer] JSON parsing failed, returning raw text response`);
-  } else {
-    log(`[Analyzer] Parsed ${result.patterns?.length || 0} patterns`);
+  const historyData = haHistoryToTOON(combinedHistory, log);
+  if (historyData.startsWith('history[0]')) {
+    return { text: 'Niet genoeg bruikbare historiek gevonden voor patroonanalyse.', patterns: [] };
   }
 
-  return result || { text: response || 'No analysis available', patterns: [] };
+  const languageNote = `\nRespond to the user in ${language.startsWith('nl') ? 'Dutch' : language}.`;
+  log(`[Analyzer] Sending ${historyData.length} chars to deep_reasoning tier...`);
+
+  const response = await chatCompletion(
+    [
+      { role: 'system', content: ANALYZER_PROMPT + languageNote },
+      { role: 'user', content: `FOCUS AREA: ${focusArea}\n\nHISTORY DATA (TOON format):\n${historyData}` }
+    ],
+    8000,
+    0.2,
+    undefined,
+    undefined,
+    undefined,
+    { effort: 'high' },
+    'deep_reasoning'
+  );
+
+  const result = parseJSONResponse(typeof response === 'string' ? response : JSON.stringify(response));
+  return result || { text: typeof response === 'string' ? response : 'Geen analyse beschikbaar', patterns: [] };
 }

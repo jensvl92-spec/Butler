@@ -1,115 +1,96 @@
 /**
  * analyze-patterns/index.ts
- * 
- * Async Pattern Analysis Job
- * Runs Analyzer + AutomationEngineer in background, saves proposals to suggestions table.
- * Sends FCM notification when complete.
+ * Async Pattern Analysis Job (Analyzer -> AutomationEngineer -> ProposalValidator)
  */
 
-// @ts-ignore
-import { createClient } from "npm:@supabase/supabase-js@2.38.4"
-import { runAnalyzer } from '../_shared/agents/analyzer.ts'
-import { runAutomationEngineer } from '../_shared/agents/automation-engineer.ts'
-import { runProposalValidator } from '../_shared/agents/proposal-validator.ts'
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { runAnalyzer } from '../_shared/agents/analyzer.ts';
+import { runAutomationEngineer } from '../_shared/agents/automation-engineer.ts';
+import { runProposalValidator } from '../_shared/agents/proposal-validator.ts';
+import { verifyRequestAuth, verifyConnectionOwnership, CORS_HEADERS } from '../_shared/auth.ts';
+import { fetchHAStates } from '../_shared/ha-api.ts';
 
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-}
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const MCP_PROXY_URL = `${SUPABASE_URL}/functions/v1/mcp-proxy`;
 
-// @ts-ignore
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
-// @ts-ignore
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-// MCP Proxy URL for analyzer
-const MCP_PROXY_URL = `${SUPABASE_URL}/functions/v1/mcp-proxy`
-
-// @ts-ignore
 Deno.serve(async (req: Request) => {
-    console.log('[AnalyzePatterns] ======= FUNCTION INVOKED =======');
-    if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders })
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
 
     const startTime = Date.now();
     const log = (msg: string) => console.log(msg);
 
     try {
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) {
+            return new Response(JSON.stringify({ error: auth.error }), {
+                status: auth.status || 401,
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+            });
+        }
 
-        // Parse request body
-        const body = await req.json().catch(() => ({}));
+        const raw = await req.text().catch(() => '');
+        const body = raw.trim() ? JSON.parse(raw) : {};
         const connectionId = body.connection_id;
-        const language = body.language || 'en';
+        const language = body.language || 'nl';
 
         if (!connectionId) {
             return new Response(JSON.stringify({ error: "connection_id required" }), {
-                status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
+                status: 400, headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
             });
         }
 
-        log(`[AnalyzePatterns] Starting async analysis for ${connectionId}`);
-
-        // Get connection details (HA URL, token, FCM token)
-        const { data: conn } = await supabase
-            .from('ha_connections')
-            .select('api_url, api_token, fcm_token')
-            .eq('id', connectionId)
-            .single();
-
-        if (!conn) {
-            return new Response(JSON.stringify({ error: "Connection not found" }), {
-                status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        const ownership = await verifyConnectionOwnership(supabase, auth, connectionId);
+        if (!ownership.valid) {
+            return new Response(JSON.stringify({ error: ownership.error }), {
+                status: ownership.status || 403,
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
             });
         }
+        const conn = ownership.connection;
 
-        // Get device list for history fetching (from mcp_raw_sync, not ha_connections)
+        // Get entity IDs from mcp_raw_sync, with fallback to live HA states
         const { data: syncData } = await supabase
             .from('mcp_raw_sync')
             .select('toon_devices')
             .eq('connection_id', connectionId)
-            .single();
+            .maybeSingle();
 
-        // Parse entity IDs from TOON devices
         let entityIds: string[] = [];
         if (syncData?.toon_devices) {
-            const lines = syncData.toon_devices.split('\n').slice(1); // Skip header
+            const lines = syncData.toon_devices.split('\n').slice(1);
             entityIds = lines.map((line: string) => line.split('\t')[0]).filter(Boolean);
         }
+        if (entityIds.length === 0) {
+            const states = await fetchHAStates(conn);
+            entityIds = states.map((s: any) => s.entity_id).filter(Boolean);
+        }
 
-        log(`[AnalyzePatterns] Found ${entityIds.length} entities`);
+        log(`[AnalyzePatterns] Starting analysis for ${connectionId} (${entityIds.length} entities)`);
 
         // === STEP 1: Run Analyzer ===
-        log('[AnalyzePatterns] Running Analyzer...');
-        const analyzerStart = Date.now();
-
         const analysis = await runAnalyzer(
             connectionId,
             MCP_PROXY_URL,
             conn.api_url,
             conn.api_token,
             entityIds,
-            'general',
+            body.focus_area || 'general',
             language,
             log
         );
 
-        log(`[AnalyzePatterns] Analyzer done in ${Date.now() - analyzerStart}ms. Found ${analysis.patterns?.length || 0} patterns`);
-
         if (!analysis.patterns || analysis.patterns.length === 0) {
-            log('[AnalyzePatterns] No patterns found, skipping AutomationEngineer');
             return new Response(JSON.stringify({
                 success: true,
                 patterns: 0,
                 proposals: 0,
-                message: "No patterns found"
-            }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+                message: "Geen nieuwe patronen ontdekt in de afgelopen 3 dagen."
+            }), { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
         }
 
         // === STEP 2: Run AutomationEngineer ===
-        log('[AnalyzePatterns] Running AutomationEngineer...');
-        const engineerStart = Date.now();
-
-        // Get rejected proposals from suggestions table
         const { data: rejectedSuggestions } = await supabase
             .from('suggestions')
             .select('title, description, reasoning')
@@ -117,34 +98,37 @@ Deno.serve(async (req: Request) => {
             .eq('status', 'rejected');
 
         const deniedProposals = (rejectedSuggestions || []).map((s: any) => ({
-            text: `${s.title}: ${s.description || s.reasoning}`,
-            count: 1, // Simple count for now
+            text: `${s.title}: ${s.description || s.reasoning || ''}`,
+            count: 1,
             reason: 'User rejected'
         }));
 
         const engineerResult = await runAutomationEngineer(
             analysis.patterns,
-            [], // Engineer handles patterns, we validate after
+            deniedProposals.map(d => d.text),
             language
         );
-
-        log(`[AnalyzePatterns] AutomationEngineer done in ${Date.now() - engineerStart}ms. Generated ${engineerResult.proposals?.length || 0} proposals`);
 
         // === STEP 3: Validate and Save Proposals ===
         const rawProposals = engineerResult.proposals || [];
         let savedCount = 0;
 
         for (const proposal of rawProposals) {
-            // Validate against denied history
             const validation = await runProposalValidator(
                 `${proposal.title}: ${proposal.reasoning}`,
                 deniedProposals
             );
 
             if (validation.decision === 'REJECT') {
-                log(`[AnalyzePatterns] Skipping rejected proposal: ${proposal.title} (Reason: ${validation.reason})`);
+                log(`[AnalyzePatterns] Skipping rejected proposal: ${proposal.title}`);
                 continue;
             }
+
+            const haAuto = proposal.ha_automation || {
+                alias: proposal.title,
+                description: proposal.reasoning || '',
+                mode: 'single'
+            };
 
             const { error } = await supabase.from('suggestions').insert({
                 connection_id: connectionId,
@@ -152,7 +136,12 @@ Deno.serve(async (req: Request) => {
                 description: proposal.reasoning || '',
                 trigger: proposal.trigger,
                 condition: proposal.condition,
-                actions: [{ type: 'create_automation', action: proposal.action }],
+                actions: [{
+                    type: 'create_automation',
+                    ha_automation: haAuto,
+                    data: haAuto,
+                    action: proposal.action
+                }],
                 reasoning: proposal.reasoning,
                 status: 'pending',
                 type: 'automation_proposal'
@@ -165,40 +154,36 @@ Deno.serve(async (req: Request) => {
             }
         }
 
-        log(`[AnalyzePatterns] Saved ${savedCount}/${rawProposals.length} proposals to suggestions table`);
-
         // === STEP 4: Send FCM Notification ===
         if (conn.fcm_token && savedCount > 0) {
             try {
                 const { sendFCM } = await import("../_shared/firebase.ts");
                 const title = language.startsWith('nl')
-                    ? `Ik vond ${savedCount} automatisering ideeën!`
+                    ? `Ik vond ${savedCount} automatiseringsideeën!`
                     : `I found ${savedCount} automation ideas!`;
-                const body = language.startsWith('nl')
-                    ? `Zeg "Toon mijn suggesties" om ze te bekijken.`
-                    : `Say "Show my suggestions" to view them.`;
+                const msgBody = language.startsWith('nl')
+                    ? `Open Butler om je suggesties te bekijken.`
+                    : `Open Butler to review your suggestions.`;
 
-                await sendFCM(conn.fcm_token, title, body, 'SUGGESTIONS', { type: 'suggestions', count: String(savedCount) });
-                log('[AnalyzePatterns] FCM notification sent');
+                await sendFCM(conn.fcm_token, title, msgBody, 'SUGGESTIONS', { type: 'suggestions', count: String(savedCount) });
             } catch (fcmError) {
                 log(`[AnalyzePatterns] FCM error: ${fcmError}`);
             }
         }
 
         const totalTime = Date.now() - startTime;
-        log(`[AnalyzePatterns] Complete in ${totalTime}ms`);
-
         return new Response(JSON.stringify({
             success: true,
             patterns: analysis.patterns.length,
             proposals: savedCount,
-            time_ms: totalTime
-        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+            time_ms: totalTime,
+            message: `${analysis.patterns.length} patronen gevonden, ${savedCount} automatiseringsvoorstel(len) klaargezet.`
+        }), { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
 
     } catch (err: any) {
         console.error('[AnalyzePatterns] Error:', err);
         return new Response(JSON.stringify({ error: err.message }), {
-            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" }
+            status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
         });
     }
-})
+});

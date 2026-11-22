@@ -90,7 +90,7 @@ export async function listDocuments(userId: string, limit: number = 10) {
     try {
         const token = await getAccessToken(userId);
 
-        const url = `https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.document'&pageSize=${limit}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,webViewLink)`;
+        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent("mimeType='application/vnd.google-apps.document' and trashed = false")}&pageSize=${limit}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,webViewLink)`;
 
         const response = await fetch(url, {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -127,7 +127,6 @@ export async function getDocument(userId: string, documentId: string) {
         const data = await response.json();
         if (data.error) throw new Error(data.error.message);
 
-        // Extract plain text from document content
         const content = extractDocumentText(data.body?.content || []);
 
         return {
@@ -142,9 +141,6 @@ export async function getDocument(userId: string, documentId: string) {
     }
 }
 
-/**
- * Extract plain text from Google Docs content structure.
- */
 function extractDocumentText(content: any[]): string {
     let text = '';
 
@@ -156,7 +152,6 @@ function extractDocumentText(content: any[]): string {
                 }
             }
         } else if (element.table) {
-            // Handle tables
             for (const row of element.table.tableRows || []) {
                 for (const cell of row.tableCells || []) {
                     text += extractDocumentText(cell.content || []);
@@ -182,9 +177,7 @@ export async function createDocument(userId: string, title: string, initialConte
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            title
-        })
+        body: JSON.stringify({ title })
     });
 
     const data = await response.json();
@@ -192,7 +185,6 @@ export async function createDocument(userId: string, title: string, initialConte
 
     const documentId = data.documentId;
 
-    // If initial content is provided, insert it immediately
     if (initialContent && initialContent.trim().length > 0) {
         try {
             const insertResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
@@ -205,9 +197,7 @@ export async function createDocument(userId: string, title: string, initialConte
                     requests: [
                         {
                             insertText: {
-                                location: {
-                                    index: 1
-                                },
+                                location: { index: 1 },
                                 text: initialContent
                             }
                         }
@@ -216,14 +206,9 @@ export async function createDocument(userId: string, title: string, initialConte
             });
             const insertData = await insertResponse.json();
             if (insertData.error) {
-                console.error('[DocsService] BatchUpdate Error:', JSON.stringify(insertData.error));
                 throw new Error(insertData.error.message);
             }
-            console.log(`[DocsService] Inserted ${initialContent.length} chars into new doc: ${documentId}`);
-
         } catch (e: any) {
-            console.error('[DocsService] Failed to insert initial content:', e);
-            // Throw so the user knows it failed
             throw new Error(`Document created but content failed: ${e.message}`);
         }
     }
@@ -241,7 +226,6 @@ export async function createDocument(userId: string, title: string, initialConte
 export async function appendToDocument(userId: string, documentId: string, text: string) {
     const token = await getAccessToken(userId);
 
-    // First get the document to find the end index
     const docResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
     });
@@ -249,18 +233,13 @@ export async function appendToDocument(userId: string, documentId: string, text:
     const doc = await docResponse.json();
     if (doc.error) throw new Error(doc.error.message);
 
-    // Find the end of the document
-    // Empty doc has body.content containing 1 element (SectionBreak) with endIndex=2.
-    // We want to insert at endIndex - 1.
     const lastElement = doc.body?.content?.[doc.body.content.length - 1];
-    const endIndex = lastElement?.endIndex || 1;
+    const endIndex = lastElement?.endIndex || 2;
+    const insertIndex = Math.max(1, endIndex - 1);
 
-    // Check if doc is basically empty (endIndex <= 2)
-    // If so, we don't need leading newline
     const isNewDoc = endIndex <= 2;
     const textToInsert = isNewDoc ? text : '\n' + text;
 
-    // Append text
     const response = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
         method: 'POST',
         headers: {
@@ -271,9 +250,7 @@ export async function appendToDocument(userId: string, documentId: string, text:
             requests: [
                 {
                     insertText: {
-                        location: {
-                            index: endIndex - 1
-                        },
+                        location: { index: insertIndex },
                         text: textToInsert
                     }
                 }

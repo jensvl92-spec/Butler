@@ -53,11 +53,14 @@ async function getAccessToken(userId: string): Promise<string> {
         })
     });
     const newData = await refreshResponse.json();
-    const newExpiresAt = new Date(Date.now() + newData.expires_in * 1000).toISOString();
+    if (!refreshResponse.ok || newData.error || !newData.access_token) {
+        throw new Error(`Failed to refresh Google token: ${newData.error_description || newData.error || refreshResponse.status}`);
+    }
+    const newExpiresAt = new Date(Date.now() + (Number(newData.expires_in) || 3600) * 1000).toISOString();
 
     await supabaseAdmin
         .from('user_tokens')
-        .update({ access_token: newData.access_token, expires_at: newExpiresAt })
+        .update({ access_token: newData.access_token, expires_at: newExpiresAt, updated_at: new Date().toISOString() })
         .eq('user_id', userId).eq('provider', 'google');
 
     return newData.access_token;

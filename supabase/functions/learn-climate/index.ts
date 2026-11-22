@@ -1,30 +1,17 @@
 /**
  * Learn Climate - Thermal Learning System
- * 
- * Analyzes heating cycles from Home Assistant history and stores
- * contextual heating rates for AI-powered heating time predictions.
- * 
- * Run weekly via scheduled job or manual trigger.
- * 
- * Update Strategy:
- * - INSERT: New bucket combinations (fill gaps)
- * - SKIP: Existing data updated < 365 days ago (stable)
- * - UPDATE: Existing data ≥ 365 days old (capture renovations)
+ * Analyzes heating cycles from Home Assistant history and stores contextual heating rates.
  */
 
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from "npm:@supabase/supabase-js@2.38.4"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyRequestAuth, verifyConnectionOwnership, CORS_HEADERS } from '../_shared/auth.ts';
+import { fetchHAStates } from '../_shared/ha-api.ts';
+import { fetchWithTimeout } from '../_shared/model-registry.ts';
 
-const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-}
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-
-// Bucket helper functions
 function getHumidityBucket(humidity: number): string {
     if (humidity < 40) return 'low';
     if (humidity < 70) return 'med';
@@ -32,58 +19,83 @@ function getHumidityBucket(humidity: number): string {
 }
 
 function getOutsideTempBucket(temp: number): number {
-    // Bucket per 2°C, even numbers from -20 to 24
     const clamped = Math.max(-20, Math.min(24, temp));
     return Math.floor(clamped / 2) * 2;
 }
 
 function getRoomTempBucket(temp: number): number {
-    // Bucket per 1°C, clamped to 10-25
     return Math.max(10, Math.min(25, Math.round(temp)));
 }
 
-// Check if data is older than 365 days
 function isOlderThanYear(lastUpdated: string): boolean {
     const yearMs = 365 * 24 * 60 * 60 * 1000;
     return Date.now() - new Date(lastUpdated).getTime() >= yearMs;
 }
 
+function parseFinite(val: any): number | null {
+    const n = typeof val === 'number' ? val : parseFloat(String(val));
+    return Number.isFinite(n) ? n : null;
+}
+
 Deno.serve(async (req: Request) => {
     if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders })
+        return new Response(null, { headers: CORS_HEADERS });
     }
 
     try {
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const auth = await verifyRequestAuth(req, supabase);
+        if (!auth.authorized) {
+            return new Response(JSON.stringify({ error: auth.error }), {
+                status: auth.status || 401,
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+            });
+        }
 
-        // Get connections
-        const { data: connections } = await supabase.from('ha_connections').select('*');
-        if (!connections || connections.length === 0) {
-            return new Response(JSON.stringify({ message: "No connections" }), { headers: corsHeaders });
+        const raw = await req.text().catch(() => '');
+        const body = raw.trim() ? JSON.parse(raw) : {};
+        const requestedConnectionId: string | undefined = body.connection_id;
+
+        let connections: any[] = [];
+        if (requestedConnectionId) {
+            const ownership = await verifyConnectionOwnership(supabase, auth, requestedConnectionId);
+            if (!ownership.valid) {
+                return new Response(JSON.stringify({ error: ownership.error }), {
+                    status: ownership.status || 403,
+                    headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+                });
+            }
+            connections = [ownership.connection];
+        } else if (auth.isServiceOrCron) {
+            const { data } = await supabase.from('ha_connections').select('*');
+            connections = data || [];
+        } else if (auth.userId) {
+            const { data } = await supabase.from('ha_connections').select('*').eq('user_id', auth.userId);
+            connections = data || [];
+        }
+
+        if (connections.length === 0) {
+            return new Response(JSON.stringify({ success: true, message: "Geen koppelingen gevonden.", stats: [] }), {
+                headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+            });
         }
 
         const stats: any[] = [];
+        let totalCycles = 0;
 
         for (const conn of connections) {
             try {
                 if (!conn.api_url || !conn.api_token) continue;
+                const baseUrl = conn.api_url.replace(/\/+$/, '');
 
-                // 1. Fetch current states to identify entities
-                const statesRes = await fetch(`${conn.api_url}/api/states`, {
-                    headers: { "Authorization": `Bearer ${conn.api_token}` }
-                });
-                const allStates = await statesRes.json();
+                const allStates = await fetchHAStates(conn);
+                const climateEntities = allStates.filter((e: any) => e.entity_id?.startsWith('climate.'));
 
-                // Find climate entities
-                const climateEntities = allStates.filter((e: any) => e.entity_id.startsWith('climate.'));
-
-                // Find outdoor weather/sensor
                 const outdoorEntity = allStates.find((e: any) =>
-                    (e.entity_id.includes('outdoor') && e.attributes.unit_of_measurement === "°C") ||
-                    e.entity_id.startsWith('weather.')
+                    (e.entity_id?.includes('outdoor') && e.attributes?.unit_of_measurement === "°C") ||
+                    e.entity_id?.startsWith('weather.')
                 );
 
-                // Find humidity sensors per room
                 const humiditySensors = allStates.filter((e: any) =>
                     e.attributes?.unit_of_measurement === '%' &&
                     e.attributes?.device_class === 'humidity'
@@ -94,47 +106,55 @@ Deno.serve(async (req: Request) => {
                     continue;
                 }
 
-                // 2. Fetch 7 days of history (HA default retention)
+                // Fetch 7 days of FULL history — IMPORTANT: omit `minimal_response` completely so HA includes attributes!
                 const startTime = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
                 const entityIds = [
                     ...climateEntities.map((e: any) => e.entity_id),
                     ...(outdoorEntity ? [outdoorEntity.entity_id] : []),
-                    ...humiditySensors.map((e: any) => e.entity_id)
+                    ...humiditySensors.slice(0, 10).map((e: any) => e.entity_id)
                 ];
 
-                const historyUrl = `${conn.api_url}/api/history/period/${startTime}?filter_entity_id=${entityIds.join(',')}&minimal_response=false`;
-                const histRes = await fetch(historyUrl, {
+                const historyUrl = `${baseUrl}/api/history/period/${encodeURIComponent(startTime)}?filter_entity_id=${encodeURIComponent(entityIds.join(','))}`;
+                const histRes = await fetchWithTimeout(historyUrl, {
                     headers: { "Authorization": `Bearer ${conn.api_token}` }
-                });
-                const historyData = await histRes.json();
+                }, 25000);
 
-                // 3. Process each climate entity
+                if (!histRes.ok) {
+                    throw new Error(`HA history fetch failed: ${histRes.status}`);
+                }
+                const historyData = await histRes.json();
+                if (!Array.isArray(historyData)) {
+                    throw new Error("Invalid HA history payload");
+                }
+
                 let insertCount = 0;
                 let skipCount = 0;
                 let updateCount = 0;
 
                 for (const climateEntity of climateEntities) {
                     const climateHist = historyData.find((arr: any[]) =>
-                        arr.length > 0 && arr[0].entity_id === climateEntity.entity_id
+                        Array.isArray(arr) && arr.length > 0 && arr[0].entity_id === climateEntity.entity_id
                     );
 
                     if (!climateHist || climateHist.length < 10) continue;
 
-                    // Extract room name from entity_id (e.g., climate.living_room -> living_room)
                     const room = climateEntity.entity_id.replace('climate.', '');
+                    const hasHvacAction = climateHist.some((s: any) => s.attributes?.hvac_action !== undefined);
 
-                    // Find heating cycles
                     const heatingCycles: any[] = [];
                     let currentCycle: any = null;
 
                     for (let i = 0; i < climateHist.length; i++) {
                         const state = climateHist[i];
-                        const isHeating = state.attributes?.hvac_action === 'heating' || state.state === 'heat';
-                        const currentTemp = state.attributes?.current_temperature;
-                        const timestamp = new Date(state.last_updated).getTime();
+                        // Prefer true active heating (`hvac_action === 'heating'`) over setpoint mode (`state === 'heat'`)
+                        const isHeating = hasHvacAction
+                            ? state.attributes?.hvac_action === 'heating'
+                            : state.state === 'heat';
+                        const currentTemp = parseFinite(state.attributes?.current_temperature);
+                        const timestamp = new Date(state.last_updated || state.last_changed).getTime();
+                        if (!Number.isFinite(timestamp)) continue;
 
-                        if (isHeating && !currentCycle && currentTemp) {
-                            // Start of heating cycle - capture context
+                        if (isHeating && !currentCycle && currentTemp !== null) {
                             const outsideTemp = getOutsideTemp(historyData, outdoorEntity?.entity_id, timestamp);
                             const roomHumidity = getRoomHumidity(historyData, humiditySensors, room, timestamp);
                             const outsideHumidity = getOutsideHumidity(historyData, outdoorEntity?.entity_id, timestamp);
@@ -146,16 +166,14 @@ Deno.serve(async (req: Request) => {
                                 roomHumidity,
                                 outsideHumidity
                             };
-                        } else if (!isHeating && currentCycle) {
-                            // End of heating cycle
+                        } else if (!isHeating && currentCycle && currentTemp !== null) {
                             currentCycle.end = timestamp;
                             currentCycle.endTemp = currentTemp;
 
                             const durationMins = (currentCycle.end - currentCycle.start) / 60000;
                             const tempDiff = currentCycle.endTemp - currentCycle.startTemp;
 
-                            // Validate cycle (> 10 mins, positive temp change)
-                            if (durationMins > 10 && tempDiff > 0.5) {
+                            if (durationMins > 10 && durationMins < 720 && tempDiff > 0.5) {
                                 heatingCycles.push({
                                     ...currentCycle,
                                     durationMins,
@@ -167,7 +185,6 @@ Deno.serve(async (req: Request) => {
                         }
                     }
 
-                    // 4. Store each cycle with bucket logic
                     for (const cycle of heatingCycles) {
                         const bucketKey = {
                             connection_id: conn.id,
@@ -178,15 +195,13 @@ Deno.serve(async (req: Request) => {
                             outside_humidity_bucket: getHumidityBucket(cycle.outsideHumidity ?? 50)
                         };
 
-                        // Check if bucket exists
                         const { data: existing } = await supabase
                             .from('climate_heating_rates')
                             .select('id, last_updated, avg_heating_rate, sample_count')
                             .match(bucketKey)
-                            .single();
+                            .maybeSingle();
 
                         if (!existing) {
-                            // NEW bucket - INSERT
                             await supabase.from('climate_heating_rates').insert({
                                 ...bucketKey,
                                 avg_heating_rate: cycle.heatingRate,
@@ -194,7 +209,6 @@ Deno.serve(async (req: Request) => {
                             });
                             insertCount++;
                         } else if (isOlderThanYear(existing.last_updated)) {
-                            // OLD data - UPDATE with weighted average
                             const newAvg = (existing.avg_heating_rate * existing.sample_count + cycle.heatingRate) / (existing.sample_count + 1);
                             await supabase.from('climate_heating_rates').update({
                                 avg_heating_rate: newAvg,
@@ -203,16 +217,17 @@ Deno.serve(async (req: Request) => {
                             }).eq('id', existing.id);
                             updateCount++;
                         } else {
-                            // Recent data - SKIP
                             skipCount++;
                         }
                     }
                 }
 
+                const found = insertCount + skipCount + updateCount;
+                totalCycles += found;
                 stats.push({
                     id: conn.id,
                     status: "processed",
-                    cycles_found: insertCount + skipCount + updateCount,
+                    cycles_found: found,
                     inserted: insertCount,
                     updated: updateCount,
                     skipped: skipCount
@@ -224,60 +239,58 @@ Deno.serve(async (req: Request) => {
             }
         }
 
-        return new Response(JSON.stringify(stats), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" }
+        return new Response(JSON.stringify({
+            success: true,
+            message: `Klimaat-analyse voltooid: ${totalCycles} verwarmingscycli verwerkt.`,
+            stats
+        }), {
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
         });
 
     } catch (err: any) {
         return new Response(JSON.stringify({ error: err.message }), {
             status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-        })
+            headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        });
     }
-})
+});
 
-// Helper: Get outside temperature at a specific timestamp
 function getOutsideTemp(historyData: any[], entityId: string | undefined, timestamp: number): number | null {
     if (!entityId) return null;
-    const hist = historyData.find((arr: any[]) => arr.length > 0 && arr[0].entity_id === entityId);
+    const hist = historyData.find((arr: any[]) => Array.isArray(arr) && arr.length > 0 && arr[0].entity_id === entityId);
     if (!hist) return null;
 
-    // Find closest state before timestamp
     for (let i = hist.length - 1; i >= 0; i--) {
-        if (new Date(hist[i].last_updated).getTime() <= timestamp) {
-            // Weather entities store temp in attributes, sensors in state
-            return hist[i].attributes?.temperature ?? parseFloat(hist[i].state) ?? null;
+        if (new Date(hist[i].last_updated || hist[i].last_changed).getTime() <= timestamp) {
+            return parseFinite(hist[i].attributes?.temperature) ?? parseFinite(hist[i].state);
         }
     }
     return null;
 }
 
-// Helper: Get room humidity at a specific timestamp
 function getRoomHumidity(historyData: any[], sensors: any[], room: string, timestamp: number): number | null {
-    // Find humidity sensor for this room
-    const sensor = sensors.find((s: any) => s.entity_id.includes(room));
+    const sensor = sensors.find((s: any) => s.entity_id?.includes(room));
     if (!sensor) return null;
 
-    const hist = historyData.find((arr: any[]) => arr.length > 0 && arr[0].entity_id === sensor.entity_id);
+    const hist = historyData.find((arr: any[]) => Array.isArray(arr) && arr.length > 0 && arr[0].entity_id === sensor.entity_id);
     if (!hist) return null;
 
     for (let i = hist.length - 1; i >= 0; i--) {
-        if (new Date(hist[i].last_updated).getTime() <= timestamp) {
-            return parseFloat(hist[i].state) ?? null;
+        if (new Date(hist[i].last_updated || hist[i].last_changed).getTime() <= timestamp) {
+            return parseFinite(hist[i].state);
         }
     }
     return null;
 }
 
-// Helper: Get outside humidity at a specific timestamp
 function getOutsideHumidity(historyData: any[], entityId: string | undefined, timestamp: number): number | null {
     if (!entityId) return null;
-    const hist = historyData.find((arr: any[]) => arr.length > 0 && arr[0].entity_id === entityId);
+    const hist = historyData.find((arr: any[]) => Array.isArray(arr) && arr.length > 0 && arr[0].entity_id === entityId);
     if (!hist) return null;
 
     for (let i = hist.length - 1; i >= 0; i--) {
-        if (new Date(hist[i].last_updated).getTime() <= timestamp) {
-            return hist[i].attributes?.humidity ?? null;
+        if (new Date(hist[i].last_updated || hist[i].last_changed).getTime() <= timestamp) {
+            return parseFinite(hist[i].attributes?.humidity);
         }
     }
     return null;
