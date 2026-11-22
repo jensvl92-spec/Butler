@@ -935,10 +935,11 @@ export function useAIChatLogic() {
                 setConversationMode(aiData.conversation_mode);
             }
 
-            // 5. Neural TTS Playback (Sanitized — never reads Markdown asterisks aloud, supports Dutch & English)
-            if (responseText) {
+            // 5. Neural TTS Playback (Dedicated conversational spoken_text channel — never stiff lists or markdown!)
+            const textToSpeak = (aiData.spoken_text || responseText || '').trim();
+            if (textToSpeak) {
                 const shouldAutoListen = conversationMode || !!aiData.conversation_mode;
-                speakResponse(responseText, responseLanguage, shouldAutoListen, options?.isWhisper).catch(() => {});
+                speakResponse(textToSpeak, responseLanguage, shouldAutoListen, options?.isWhisper).catch(() => {});
             }
         } catch (e: any) {
             logger.error('AI Logic Exception', e);

@@ -80,6 +80,7 @@ export interface LLMRequest {
 
 export interface LLMResponse {
   text: string;
+  spoken_text?: string;
   actions: Action[];
   scheduled_actions?: ScheduledAction[];
   language: string;

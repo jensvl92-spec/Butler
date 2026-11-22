@@ -1365,7 +1365,107 @@ ${storedMems}
 3. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³) en naam voordat je antwoordt.
 4. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
 5. **Adaptief redeneren**: Behandel snelle dagelijkse vragen (apparaten, weer, prijzen, timers, agenda) direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live HA/sensor-data eerst hebt opgehaald).
-6. Geef altijd een helder, beknopt, natuurlijk en to-the-point antwoord zonder overbodige meta-tekst.`;
+
+### ANTWOORDSTIJL (DUBBEL KANAAL: MENSELIJKE SPRAAK + VISUEEL OVERZICHT):
+Geef altijd een natuurlijk, vlot antwoord zonder stijf taalgebruik. Gebruik daarbij twee gescheiden kanalen in je uiteindelijke antwoord:
+
+1. **Spraak-kanaal (\`<spoken>...</spoken>\`) — VERPLICHT bij elk eindantwoord**:
+   - Schrijf hierin precies wat Butler luidop tegen de gebruiker zegt, alsof een vriendelijke, slimme menselijke assistent naast je in de woonkamer praat.
+   - Gebruik NOOIT opsommingen, dubbele punten met label-waarde paren ("Temperatuur: 15 graden; Dauwpunt: 5 graden"), puntkomma's, lijstjes, haakjes of stijve telegramstijl in \`<spoken>\`.
+   - Maak er vlotte, warme mensentaal van in 1 tot 3 korte zinnen (bijv. *"Het is buiten 15 graden met een dauwpunt van 5 graden en een zacht briesje, lekker aangenaam dus."* of *"De wasmachine draait nog op katoen en is over 32 minuten klaar. De droogkast staat momenteel uit."*).
+
+2. **Visueel Overzicht (\`<card>...</card>\`) — GEBRUIK WANNEER CIJFERS, STATUSSEN, TIJDEN, VERGELIJKINGEN OF MEERDERE GEGEVENS HELDERDER ZIJN IN 1 OOGOPSLAG**:
+   - Zodra je meerdere meetwaarden, apparaatstatussen (zoals wasmachine & droogkast), uurtarieven, vergelijkingen, berekeningen, schema's of overzichten toont, voeg dan een compact, geldig JSON-blok toe in \`<card>...</card>\` zodat de gebruiker zonder lezen in één oogopslag het antwoord ziet.
+   - Sla \`<card>\` over bij simpele éénzins-bevestigingen (zoals "Het licht staat aan").
+   - Gebruik alleen de velden die echt relevant zijn voor de vraag (niet overvol maken!):
+     \`\`\`json
+     <card>
+     {
+       "title": "Korte heldere titel",
+       "subtitle": "Optioneel tijdstip of context",
+       "icon": "🫧",
+       "highlights": [
+         { "label": "Wasmachine", "value": "32 min", "sub": "Katoen 40°C", "tone": "active" },
+         { "label": "Droogkast", "value": "Uit", "sub": "Stand-by", "tone": "neutral" }
+       ],
+       "rows": [
+         { "label": "Eindtijd", "value": "14:45", "badge": "Bezig", "tone": "good" }
+       ],
+       "columns": ["Tijd", "Prijs", "Status"],
+       "table": [
+         ["14:00", "€0,24", "Goedkoop"],
+         ["15:00", "€0,22", "Laagst"]
+       ],
+       "footer": "Optionele korte tip"
+     }
+     </card>
+     \`\`\`
+   - Geldige \`tone\`-waarden: \`"good"\` (groen), \`"active"\` (blauw/paars), \`"warn"\` (oranje), \`"alert"\` (rood), \`"neutral"\` (neutraal).
+   - Buiten \`<spoken>\` en \`<card>\` mag je kort en helder een 1-zins toelichting in de chat zetten (of leeg laten als \`<spoken>\` + \`<card>\` al alles dekken; herhaal nooit dezelfde tabel of cijfers dubbel als platte tekst).`;
+}
+
+interface ParsedDualChannel {
+    displayText: string;
+    spokenText: string;
+    visualCards: Record<string, any>[];
+}
+
+function parseDualChannelResponse(rawText: string): ParsedDualChannel {
+    if (!rawText || !rawText.trim()) {
+        return { displayText: '', spokenText: '', visualCards: [] };
+    }
+
+    let working = rawText;
+
+    // 1. Extract <spoken>...</spoken>
+    let spokenText = '';
+    const spokenMatches = Array.from(working.matchAll(/<spoken>([\s\S]*?)<\/spoken>/gi));
+    if (spokenMatches.length > 0) {
+        spokenText = spokenMatches.map(m => (m[1] || '').trim()).filter(Boolean).join(' ');
+        working = working.replace(/<spoken>[\s\S]*?<\/spoken>/gi, '');
+    }
+
+    // 2. Extract all <card>...</card> JSON blocks defensively
+    const visualCards: Record<string, any>[] = [];
+    working = working.replace(/<card>([\s\S]*?)<\/card>/gi, (_full, inner) => {
+        const cleanedJson = String(inner || '')
+            .replace(/^```(?:json)?\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+        if (!cleanedJson) return '';
+        try {
+            const parsed = JSON.parse(cleanedJson);
+            if (
+                parsed &&
+                typeof parsed === 'object' &&
+                (parsed.title ||
+                    (Array.isArray(parsed.highlights) && parsed.highlights.length > 0) ||
+                    (Array.isArray(parsed.rows) && parsed.rows.length > 0) ||
+                    (Array.isArray(parsed.table) && parsed.table.length > 0))
+            ) {
+                visualCards.push(parsed);
+            }
+        } catch (err) {
+            logger.warn('[ClientOrchestrator] Ignored malformed <card> JSON:', err);
+        }
+        return '';
+    });
+
+    // 3. Defensively strip any stray/unclosed protocol tags
+    const displayCandidate = working
+        .replace(/<\/?(?:spoken|card)\b[^>]*>/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    // 4. Reconcile display & spoken cleanly so neither is ever blank
+    const finalDisplay = displayCandidate || spokenText || rawText.trim();
+    const finalSpoken = spokenText || finalDisplay;
+
+    return {
+        displayText: finalDisplay,
+        spokenText: finalSpoken,
+        visualCards
+    };
 }
 
 // -------------------------------------------------------------
@@ -1934,8 +2034,22 @@ export async function runClientReActOrchestrator(
         }
     }
 
+    const parsedOutput = parseDualChannelResponse(finalResponseText);
+    for (const card of parsedOutput.visualCards) {
+        actionsTaken.push({
+            type: 'visual_card',
+            entity_id: card.title || 'visual_card',
+            service: 'ui.visual_card',
+            data: card,
+            result: 'success',
+            executedLocally: true
+        });
+    }
+
+    const fallbackMsg = 'Ik kon geen antwoord genereren. Probeer het nog eens.';
     return {
-        text: finalResponseText || 'Ik kon geen antwoord genereren. Probeer het nog eens.',
+        text: parsedOutput.displayText || fallbackMsg,
+        spoken_text: parsedOutput.spokenText || parsedOutput.displayText || fallbackMsg,
         actions: actionsTaken,
         language: options.language || 'nl',
         confidence: 1.0,

@@ -48,6 +48,42 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   return nodes;
 }
 
+function getVisualToneStyle(tone?: string): { bg: string; border: string; text: string } {
+  switch ((tone || '').toLowerCase()) {
+    case 'good':
+    case 'green':
+    case 'success':
+      return { bg: 'rgba(16, 185, 129, 0.14)', border: 'rgba(16, 185, 129, 0.35)', text: '#34d399' };
+    case 'active':
+    case 'info':
+    case 'blue':
+      return { bg: 'rgba(99, 102, 241, 0.16)', border: 'rgba(99, 102, 241, 0.38)', text: '#a5b4fc' };
+    case 'warn':
+    case 'warning':
+    case 'amber':
+      return { bg: 'rgba(245, 158, 11, 0.14)', border: 'rgba(245, 158, 11, 0.35)', text: '#fbbf24' };
+    case 'alert':
+    case 'error':
+    case 'red':
+      return { bg: 'rgba(239, 68, 68, 0.14)', border: 'rgba(239, 68, 68, 0.35)', text: '#f87171' };
+    default:
+      return { bg: 'rgba(255, 255, 255, 0.05)', border: 'rgba(255, 255, 255, 0.12)', text: 'var(--text-primary, #f1f5f9)' };
+  }
+}
+
+function parseTableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(c => c.trim());
+}
+
+function isTableSeparatorLine(line: string): boolean {
+  return /^\|?[\s:-]+\|[\s|:-]*$/.test(line.trim());
+}
+
 function renderRichMessage(raw: string): React.ReactNode {
   let displayText = raw;
   try {
@@ -57,31 +93,93 @@ function renderRichMessage(raw: string): React.ReactNode {
     }
   } catch { }
 
+  // Defensively strip any stray dual-channel tags if an older message had them
+  displayText = displayText
+    .replace(/<card>[\s\S]*?<\/card>/gi, '')
+    .replace(/<\/?(?:spoken|card)\b[^>]*>/gi, '')
+    .trim();
+
   const lines = displayText.split(/\r?\n/);
+  const blocks: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+
+    // Detect Markdown Table (header row with | followed by separator row |---|---|)
+    if (trimmed.includes('|') && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1])) {
+      const headers = parseTableCells(lines[i]);
+      i += 2;
+      const bodyRows: string[][] = [];
+      while (i < lines.length && lines[i].trim().includes('|') && !isTableSeparatorLine(lines[i])) {
+        bodyRows.push(parseTableCells(lines[i]));
+        i++;
+      }
+      blocks.push(
+        <div key={`tbl-${i}`} style={{ overflowX: 'auto', margin: '4px 0', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+            <thead>
+              <tr style={{ background: 'rgba(99, 102, 241, 0.12)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                {headers.map((h, hi) => (
+                  <th key={hi} style={{ textAlign: 'left', padding: '7px 10px', fontWeight: 700, color: '#c7d2fe', whiteSpace: 'nowrap' }}>
+                    {renderInlineMarkdown(h)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ri) => (
+                <tr key={ri} style={{ borderBottom: ri < bodyRows.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none', background: ri % 2 === 1 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} style={{ padding: '6px 10px', color: 'var(--text-primary, #f1f5f9)' }}>
+                      {renderInlineMarkdown(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    if (!trimmed) {
+      blocks.push(<div key={`sp-${i}`} style={{ height: '4px' }} />);
+      i++;
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^#{1,4}\s+(.*)$/);
+    if (headingMatch) {
+      blocks.push(
+        <div key={`hd-${i}`} style={{ fontWeight: 700, fontSize: '0.96rem', marginTop: i > 0 ? '4px' : 0 }}>
+          {renderInlineMarkdown(headingMatch[1])}
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*•]\s+(.*)$/);
+    if (bulletMatch) {
+      blocks.push(
+        <div key={`bl-${i}`} style={{ display: 'flex', gap: '6px', paddingLeft: '4px' }}>
+          <span style={{ opacity: 0.7 }}>•</span>
+          <span>{renderInlineMarkdown(bulletMatch[1])}</span>
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    blocks.push(<div key={`ln-${i}`}>{renderInlineMarkdown(lines[i])}</div>);
+    i++;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', lineHeight: 1.5 }}>
-      {lines.map((line, idx) => {
-        const trimmed = line.trim();
-        if (!trimmed) return <div key={idx} style={{ height: '4px' }} />;
-        const headingMatch = trimmed.match(/^#{1,4}\s+(.*)$/);
-        if (headingMatch) {
-          return (
-            <div key={idx} style={{ fontWeight: 700, fontSize: '0.96rem', marginTop: idx > 0 ? '4px' : 0 }}>
-              {renderInlineMarkdown(headingMatch[1])}
-            </div>
-          );
-        }
-        const bulletMatch = trimmed.match(/^[-*•]\s+(.*)$/);
-        if (bulletMatch) {
-          return (
-            <div key={idx} style={{ display: 'flex', gap: '6px', paddingLeft: '4px' }}>
-              <span style={{ opacity: 0.7 }}>•</span>
-              <span>{renderInlineMarkdown(bulletMatch[1])}</span>
-            </div>
-          );
-        }
-        return <div key={idx}>{renderInlineMarkdown(line)}</div>;
-      })}
+      {blocks}
     </div>
   );
 }
@@ -101,7 +199,7 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
   const [expandedYaml, setExpandedYaml] = useState<Record<string, boolean>>({})
   const chatEndRef = useRef<HTMLDivElement>(null)
 
-  const { isListening, isStarting, partialTranscript, startListening, stopListening, error: voiceError, isWhisper } = useDeepgramVoice({
+  const { isListening, isStarting, isFinalizing, partialTranscript, startListening, stopListening, error: voiceError, isWhisper } = useDeepgramVoice({
     language: uiState.language,
     onTranscript: (text) => setInputText(text),
     onFinalTranscript: (text) => {
@@ -601,6 +699,177 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
                           );
                         }
 
+                        // G0. Glanceable Visual Summary Card (KPI highlights, key-value rows, compact tables)
+                        if (a.type === 'visual_card' && a.data) {
+                          const card = a.data;
+                          const highlights = Array.isArray(card.highlights) ? card.highlights : [];
+                          const rows = Array.isArray(card.rows) ? card.rows : [];
+                          const columns = Array.isArray(card.columns) ? card.columns : [];
+                          const tableRows = Array.isArray(card.table) ? card.table : [];
+
+                          return (
+                            <div
+                              key={i}
+                              className="chat-widget-card"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '10px',
+                                padding: '12px 14px',
+                                borderRadius: '14px',
+                                background: 'linear-gradient(145deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.85))',
+                                border: '1px solid rgba(148, 163, 184, 0.18)',
+                                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.22)'
+                              }}
+                            >
+                              {/* Card Header */}
+                              {(card.title || card.subtitle) && (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                    {card.icon && <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>{card.icon}</span>}
+                                    <div style={{ minWidth: 0 }}>
+                                      {card.title && (
+                                        <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#f8fafc', letterSpacing: '-0.01em' }}>
+                                          {card.title}
+                                        </div>
+                                      )}
+                                      {card.subtitle && (
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary, #94a3b8)', marginTop: '1px' }}>
+                                          {card.subtitle}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* KPI Highlights Grid — instant 1-glance comprehension */}
+                              {highlights.length > 0 && (
+                                <div style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: highlights.length === 1 ? '1fr' : 'repeat(auto-fit, minmax(115px, 1fr))',
+                                  gap: '8px'
+                                }}>
+                                  {highlights.map((h: any, hi: number) => {
+                                    const tone = getVisualToneStyle(h.tone);
+                                    return (
+                                      <div
+                                        key={hi}
+                                        style={{
+                                          padding: '9px 11px',
+                                          borderRadius: '11px',
+                                          background: tone.bg,
+                                          border: `1px solid ${tone.border}`,
+                                          display: 'flex',
+                                          flexDirection: 'column',
+                                          gap: '2px'
+                                        }}
+                                      >
+                                        <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary, #94a3b8)', fontWeight: 600 }}>
+                                          {h.label}
+                                        </span>
+                                        <span style={{ fontSize: '1.15rem', fontWeight: 800, color: tone.text, lineHeight: 1.2 }}>
+                                          {h.value}{h.unit ? ` ${h.unit}` : ''}
+                                        </span>
+                                        {h.sub && (
+                                          <span style={{ fontSize: '0.72rem', color: 'rgba(226, 232, 240, 0.78)' }}>
+                                            {h.sub}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Key-Value Rows */}
+                              {rows.length > 0 && (
+                                <div style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  borderRadius: '10px',
+                                  background: 'rgba(255, 255, 255, 0.03)',
+                                  border: '1px solid rgba(255, 255, 255, 0.07)',
+                                  overflow: 'hidden'
+                                }}>
+                                  {rows.map((r: any, ri: number) => {
+                                    const badgeTone = r.badge ? getVisualToneStyle(r.tone) : null;
+                                    return (
+                                      <div
+                                        key={ri}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          gap: '10px',
+                                          padding: '7px 10px',
+                                          borderBottom: ri < rows.length - 1 ? '1px solid rgba(255, 255, 255, 0.06)' : 'none',
+                                          fontSize: '0.82rem'
+                                        }}
+                                      >
+                                        <span style={{ color: 'var(--text-secondary, #cbd5e1)' }}>{r.label}</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', textAlign: 'right' }}>
+                                          <span style={{ fontWeight: 700, color: '#f8fafc' }}>{r.value}</span>
+                                          {r.badge && badgeTone && (
+                                            <span style={{
+                                              fontSize: '0.68rem',
+                                              fontWeight: 700,
+                                              padding: '2px 7px',
+                                              borderRadius: '999px',
+                                              background: badgeTone.bg,
+                                              color: badgeTone.text,
+                                              border: `1px solid ${badgeTone.border}`
+                                            }}>
+                                              {r.badge}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Compact Scannable Table */}
+                              {tableRows.length > 0 && (
+                                <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.09)', background: 'rgba(255, 255, 255, 0.02)' }}>
+                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                                    {columns.length > 0 && (
+                                      <thead>
+                                        <tr style={{ background: 'rgba(99, 102, 241, 0.12)', borderBottom: '1px solid rgba(255, 255, 255, 0.09)' }}>
+                                          {columns.map((col: string, ci: number) => (
+                                            <th key={ci} style={{ textAlign: ci === columns.length - 1 ? 'right' : 'left', padding: '6px 9px', fontWeight: 700, color: '#c7d2fe', whiteSpace: 'nowrap' }}>
+                                              {col}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                    )}
+                                    <tbody>
+                                      {tableRows.map((tr: any[], ri: number) => (
+                                        <tr key={ri} style={{ borderBottom: ri < tableRows.length - 1 ? '1px solid rgba(255, 255, 255, 0.05)' : 'none', background: ri % 2 === 1 ? 'rgba(255, 255, 255, 0.02)' : 'transparent' }}>
+                                          {(Array.isArray(tr) ? tr : []).map((cell: any, ci: number) => (
+                                            <td key={ci} style={{ textAlign: ci === tr.length - 1 ? 'right' : 'left', padding: '6px 9px', color: ci === 0 ? '#e2e8f0' : '#f8fafc', fontWeight: ci === tr.length - 1 ? 600 : 400 }}>
+                                              {String(cell ?? '')}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+
+                              {/* Footer Tip */}
+                              {card.footer && (
+                                <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary, #94a3b8)', borderTop: '1px solid rgba(255, 255, 255, 0.07)', paddingTop: '6px' }}>
+                                  💡 {card.footer}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
                         // G. Adaptive Deep Reasoning escalation badge
                         if (a.type === 'deep_reasoning' && a.data) {
                           const depthLabel = a.data.depth === 'high' ? 'Diep (High)' : 'Nauwkeurig (Medium)';
@@ -674,16 +943,18 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
 
       {/* Voice Transcript & Listening Waveform Indicator */}
       {isListening && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '6px 0', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '12px', margin: '4px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '6px 0', background: isFinalizing ? 'rgba(99, 102, 241, 0.12)' : 'rgba(239, 68, 68, 0.08)', borderRadius: '12px', margin: '4px 12px' }}>
           <div className="waveform-bars">
-            <div className="waveform-bar" style={{ background: '#ef4444' }} />
-            <div className="waveform-bar" style={{ background: '#ef4444' }} />
-            <div className="waveform-bar" style={{ background: '#ef4444' }} />
-            <div className="waveform-bar" style={{ background: '#ef4444' }} />
-            <div className="waveform-bar" style={{ background: '#ef4444' }} />
+            <div className="waveform-bar" style={{ background: isFinalizing ? '#818cf8' : '#ef4444' }} />
+            <div className="waveform-bar" style={{ background: isFinalizing ? '#818cf8' : '#ef4444' }} />
+            <div className="waveform-bar" style={{ background: isFinalizing ? '#818cf8' : '#ef4444' }} />
+            <div className="waveform-bar" style={{ background: isFinalizing ? '#818cf8' : '#ef4444' }} />
+            <div className="waveform-bar" style={{ background: isFinalizing ? '#818cf8' : '#ef4444' }} />
           </div>
-          <span style={{ fontSize: '0.8rem', color: '#ef4444', fontWeight: 600 }}>
-            {partialTranscript ? `${isWhisper ? '🤫 ' : ''}${partialTranscript}` : 'Butler luistert...'}
+          <span style={{ fontSize: '0.8rem', color: isFinalizing ? '#a5b4fc' : '#ef4444', fontWeight: 600 }}>
+            {partialTranscript
+              ? `${isWhisper ? '🤫 ' : ''}${partialTranscript}${isFinalizing ? ' …' : ''}`
+              : isFinalizing ? 'Even verwerken...' : 'Butler luistert...'}
           </span>
         </div>
       )}

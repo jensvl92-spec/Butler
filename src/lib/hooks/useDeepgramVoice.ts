@@ -1,18 +1,22 @@
 /**
- * useDeepgramVoice - High reliability Speech-to-Text hook
+ * useDeepgramVoice - SOTA Speech-to-Text hook for Android/iOS & Web
  *
- * Uses @capacitor-community/speech-recognition on Android/iOS native platforms
- * and falls back to Web Speech API in browser environments.
- *
- * CRITICAL ANDROID FIXES:
+ * CRITICAL ANDROID SPEECHRECOGNIZER ENGINEERING:
  * 1. @capacitor-community/speech-recognition@6.0.1 never calls call.resolve() in Android stop(),
- *    so awaiting SpeechRecognition.stop() previously hung FOREVER after the first utterance,
- *    locking isStoppingRef=true and isListening=true permanently.
- *    We now race stop()/removeAllListeners() against a 350ms timeout and always reset state in finally.
- * 2. Android SpeechRecognizer silently drops onError (ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT)
- *    without emitting listeningState='stopped' when partialResults=true. A native watchdog polls
- *    SpeechRecognition.isListening() and enforces a clean no-speech timeout so the mic never sticks.
- * 3. Session ID guards prevent stale callbacks/timers from interfering with subsequent taps.
+ *    so SpeechRecognition.stop() is ALWAYS bounded by raceTimeout(300ms) and state is released in finally.
+ * 2. LAST-WORD PRESERVATION (Android RecognitionListener order):
+ *    Android fires onEndOfSpeech() -> listeningState:'stopped' BEFORE decoding the final acoustic
+ *    frames and delivering onResults() (~150-600ms later via 'partialResults').
+ *    Previously, removing listeners immediately upon listeningState:'stopped' or silence timeout
+ *    discarded onResults() and clipped the last word!
+ *    Now:
+ *    - On listeningState:'stopped', we enter `awaitingFinalResults` for up to 850ms so Android's
+ *      final onResults() (with the complete last word & punctuation) ALWAYS lands first, then
+ *      settles cleanly in 160ms.
+ *    - On manual stop or 2.8s silence fallback, we call SpeechRecognition.stop() BEFORE removing
+ *      listeners, allowing Android SpeechRecognizer.stopListening() to flush the final word into
+ *      onResults() within a 550ms window before finalizing.
+ *    - The silent-error watchdog never interrupts an active `awaitingFinalResults` window.
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -36,6 +40,7 @@ function raceTimeout<T>(promise: Promise<T>, ms = 350): Promise<T | void> {
 export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: UseDeepgramVoiceProps) {
     const [isListening, setIsListening] = useState(false);
     const [isConnecting, setIsConnecting] = useState(false);
+    const [isFinalizing, setIsFinalizing] = useState(false);
     const [partialTranscript, setPartialTranscript] = useState('');
     const [error, setError] = useState<string>('');
     const [isWhisper] = useState(false);
@@ -43,6 +48,7 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
 
     const isListeningRef = useRef<boolean>(false);
     const isConnectingRef = useRef<boolean>(false);
+    const awaitingFinalResultsRef = useRef<boolean>(false);
     const sessionIdRef = useRef<number>(0);
     const latestTranscriptRef = useRef<string>('');
     const hasEmittedFinalRef = useRef<boolean>(false);
@@ -50,7 +56,7 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
 
     const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const noSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const stoppedGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const finalResultsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const nativeWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const webRecognitionRef = useRef<any>(null);
@@ -71,9 +77,9 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
             clearTimeout(noSpeechTimerRef.current);
             noSpeechTimerRef.current = null;
         }
-        if (stoppedGraceTimerRef.current) {
-            clearTimeout(stoppedGraceTimerRef.current);
-            stoppedGraceTimerRef.current = null;
+        if (finalResultsTimerRef.current) {
+            clearTimeout(finalResultsTimerRef.current);
+            finalResultsTimerRef.current = null;
         }
         if (nativeWatchdogRef.current) {
             clearInterval(nativeWatchdogRef.current);
@@ -96,32 +102,33 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
         callbacksRef.current.onFinalTranscript(trimmed);
     }, []);
 
-    const stopListening = useCallback(async (reason = 'manual') => {
+    // Hard finalization: tears down native/web listeners, releases UI state, and emits final transcript
+    const finalizeAndCleanup = useCallback(async (reason = 'manual') => {
         if (isStoppingRef.current && reason !== 'cleanup') return;
         isStoppingRef.current = true;
         sessionIdRef.current += 1;
+        awaitingFinalResultsRef.current = false;
 
-        logger.info(`🎤 [Speech] Stopping... (Reason: ${reason})`);
+        logger.info(`🎤 [Speech] Finalizing... (Reason: ${reason})`);
         clearTimers();
 
-        // Capture & clear transcript BEFORE invoking native/web stop so callbacks cannot double-emit
         const finalCandidate = latestTranscriptRef.current.trim();
         latestTranscriptRef.current = '';
         const shouldEmit = reason !== 'cleanup' && reason !== 'error' && reason !== 'cancel';
 
-        // Immediately release UI state so the mic button NEVER appears stuck!
         isListeningRef.current = false;
         isConnectingRef.current = false;
         if (reason !== 'cleanup') {
             setIsListening(false);
             setIsConnecting(false);
+            setIsFinalizing(false);
             setPartialTranscript('');
         }
 
         try {
             if (Capacitor.isNativePlatform()) {
-                // CRITICAL: SpeechRecognition.stop() in v6.0.1 Android Java NEVER calls call.resolve()!
-                // Must be bounded with raceTimeout so stopListening ALWAYS completes cleanly.
+                // Bounded with raceTimeout because @capacitor-community/speech-recognition@6.0.1
+                // never resolves call in Android stop().
                 await raceTimeout(SpeechRecognition.removeAllListeners(), 250);
                 await raceTimeout(SpeechRecognition.stop(), 300);
             } else if (webRecognitionRef.current) {
@@ -144,12 +151,50 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
         }
     }, [clearTimers, emitFinalOnce]);
 
+    // Soft stop: on Android, flushes the final buffered word via SpeechRecognition.stop()
+    // while keeping listeners briefly alive to catch onResults() before tearing down!
+    const stopListening = useCallback(async (reason = 'manual') => {
+        if (reason === 'cleanup' || reason === 'error' || reason === 'cancel') {
+            await finalizeAndCleanup(reason);
+            return;
+        }
+
+        if (Capacitor.isNativePlatform() && isListeningRef.current && !awaitingFinalResultsRef.current) {
+            const activeSessionId = sessionIdRef.current;
+            awaitingFinalResultsRef.current = true;
+            setIsFinalizing(true);
+
+            // Clear speaking timers but KEEP listeners alive so Android's final onResults() can land!
+            if (silenceTimerRef.current) {
+                clearTimeout(silenceTimerRef.current);
+                silenceTimerRef.current = null;
+            }
+            if (noSpeechTimerRef.current) {
+                clearTimeout(noSpeechTimerRef.current);
+                noSpeechTimerRef.current = null;
+            }
+
+            logger.info(`🎤 [Speech] Flushing Android recognizer for final word... (Reason: ${reason})`);
+            // Fire-and-forget stop() so SpeechRecognizer.stopListening() flushes its last audio frame into onResults()
+            SpeechRecognition.stop().catch(() => {});
+
+            if (finalResultsTimerRef.current) clearTimeout(finalResultsTimerRef.current);
+            finalResultsTimerRef.current = setTimeout(() => {
+                if (sessionIdRef.current !== activeSessionId) return;
+                finalizeAndCleanup(`${reason}_flush_timeout`);
+            }, 600);
+            return;
+        }
+
+        await finalizeAndCleanup(reason);
+    }, [finalizeAndCleanup]);
+
     // Cleanup on unmount ONLY
     useEffect(() => {
         return () => {
-            stopListening('cleanup');
+            finalizeAndCleanup('cleanup');
         };
-    }, [stopListening]);
+    }, [finalizeAndCleanup]);
 
     const resetSilenceTimer = useCallback((activeSessionId: number) => {
         if (silenceTimerRef.current) {
@@ -159,13 +204,17 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
             clearTimeout(noSpeechTimerRef.current);
             noSpeechTimerRef.current = null;
         }
+        // Native Android has built-in end-of-speech VAD (onEndOfSpeech -> listeningState:'stopped').
+        // Use a generous 2.8s silence fallback on native (1.8s on web) so natural pauses before the
+        // last word are NEVER prematurely clipped!
+        const silenceMs = Capacitor.isNativePlatform() ? 2800 : 1800;
         silenceTimerRef.current = setTimeout(() => {
-            if (sessionIdRef.current !== activeSessionId) return;
+            if (sessionIdRef.current !== activeSessionId || awaitingFinalResultsRef.current) return;
             if (latestTranscriptRef.current.trim()) {
-                logger.info('🎤 [Speech] Silence timeout reached, finalizing');
+                logger.info('🎤 [Speech] Silence fallback reached, flushing final results');
                 stopListening('silence');
             }
-        }, 1600);
+        }, silenceMs);
     }, [stopListening]);
 
     const startListening = useCallback(async () => {
@@ -173,9 +222,11 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
 
         const currentSessionId = sessionIdRef.current + 1;
         sessionIdRef.current = currentSessionId;
+        awaitingFinalResultsRef.current = false;
 
         isConnectingRef.current = true;
         setIsConnecting(true);
+        setIsFinalizing(false);
         setError('');
         setPartialTranscript('');
         latestTranscriptRef.current = '';
@@ -206,18 +257,29 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
                     throw new Error('Spraakherkenning is niet beschikbaar op dit apparaat.');
                 }
 
-                // Cleanly ensure any leftover native session/listeners are cleared
                 await raceTimeout(SpeechRecognition.removeAllListeners(), 250);
                 if (sessionIdRef.current !== currentSessionId) return;
 
                 await SpeechRecognition.addListener('partialResults', (data: { matches: string[] }) => {
                     if (sessionIdRef.current !== currentSessionId) return;
                     if (data.matches && data.matches.length > 0) {
-                        const recognized = data.matches[0];
-                        if (recognized && recognized.trim()) {
-                            latestTranscriptRef.current = recognized;
-                            setPartialTranscript(recognized);
-                            callbacksRef.current.onTranscript(recognized);
+                        const recognized = (data.matches[0] || '').trim();
+                        if (!recognized) return;
+
+                        latestTranscriptRef.current = recognized;
+                        setPartialTranscript(recognized);
+                        callbacksRef.current.onTranscript(recognized);
+
+                        if (awaitingFinalResultsRef.current) {
+                            // Android's onResults() just landed with the complete final sentence (including the last word)!
+                            // Give a tiny 160ms settle window in case a trailing partial + final fired back-to-back.
+                            logger.info('🎤 [Speech] Received post-stop final result:', recognized);
+                            if (finalResultsTimerRef.current) clearTimeout(finalResultsTimerRef.current);
+                            finalResultsTimerRef.current = setTimeout(() => {
+                                if (sessionIdRef.current !== currentSessionId) return;
+                                finalizeAndCleanup('native_final_result');
+                            }, 160);
+                        } else {
                             resetSilenceTimer(currentSessionId);
                         }
                     }
@@ -232,15 +294,25 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
                         setIsConnecting(false);
                         setIsListening(true);
                     } else if (data.status === 'stopped') {
-                        // Android emits onEndOfSpeech BEFORE onResults; wait briefly if transcript isn't here yet
-                        if (latestTranscriptRef.current.trim()) {
-                            stopListening('native_stopped');
-                        } else {
-                            if (stoppedGraceTimerRef.current) clearTimeout(stoppedGraceTimerRef.current);
-                            stoppedGraceTimerRef.current = setTimeout(() => {
+                        // CRITICAL: Android fires onEndOfSpeech (listeningState:'stopped') BEFORE onResults()!
+                        // NEVER tear down listeners immediately here — wait up to 850ms for onResults()
+                        // so the final spoken word is ALWAYS captured!
+                        if (!awaitingFinalResultsRef.current) {
+                            awaitingFinalResultsRef.current = true;
+                            setIsFinalizing(true);
+                            if (silenceTimerRef.current) {
+                                clearTimeout(silenceTimerRef.current);
+                                silenceTimerRef.current = null;
+                            }
+                            if (noSpeechTimerRef.current) {
+                                clearTimeout(noSpeechTimerRef.current);
+                                noSpeechTimerRef.current = null;
+                            }
+                            if (finalResultsTimerRef.current) clearTimeout(finalResultsTimerRef.current);
+                            finalResultsTimerRef.current = setTimeout(() => {
                                 if (sessionIdRef.current !== currentSessionId) return;
-                                stopListening('native_stopped_grace');
-                            }, 450);
+                                finalizeAndCleanup('native_stopped_grace');
+                            }, 850);
                         }
                     }
                 });
@@ -261,27 +333,34 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
                 setIsListening(true);
 
                 // Native Watchdog: detects silent Android ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT
-                // where native recognizer stops without emitting listeningState='stopped'
+                // NEVER interrupts an active `awaitingFinalResults` window!
                 const startedAt = Date.now();
                 nativeWatchdogRef.current = setInterval(async () => {
                     if (sessionIdRef.current !== currentSessionId) return;
-                    if (Date.now() - startedAt < 2200) return;
+                    if (awaitingFinalResultsRef.current) return;
+                    if (Date.now() - startedAt < 2500) return;
                     try {
                         const status = await SpeechRecognition.isListening();
-                        if (sessionIdRef.current !== currentSessionId) return;
+                        if (sessionIdRef.current !== currentSessionId || awaitingFinalResultsRef.current) return;
                         if (status && status.listening === false) {
-                            logger.info('🎤 [Speech] Native watchdog detected recognizer stopped silently — resetting');
-                            stopListening('native_watchdog');
+                            logger.info('🎤 [Speech] Native watchdog detected recognizer stopped — entering grace window');
+                            awaitingFinalResultsRef.current = true;
+                            setIsFinalizing(true);
+                            if (finalResultsTimerRef.current) clearTimeout(finalResultsTimerRef.current);
+                            finalResultsTimerRef.current = setTimeout(() => {
+                                if (sessionIdRef.current !== currentSessionId) return;
+                                finalizeAndCleanup('native_watchdog');
+                            }, 700);
                         }
                     } catch { }
-                }, 1000);
+                }, 950);
 
-                // Absolute no-speech safety timeout (14s) so the mic can never spin indefinitely
+                // Absolute no-speech safety timeout (15s) so the mic can never spin indefinitely
                 noSpeechTimerRef.current = setTimeout(() => {
-                    if (sessionIdRef.current !== currentSessionId) return;
+                    if (sessionIdRef.current !== currentSessionId || awaitingFinalResultsRef.current) return;
                     logger.info('🎤 [Speech] No-speech timeout reached, stopping');
-                    stopListening('no_speech_timeout');
-                }, 14000);
+                    finalizeAndCleanup('no_speech_timeout');
+                }, 15000);
             } else {
                 const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
                 if (!SpeechRecognitionClass) {
@@ -324,12 +403,12 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
                     if (event.error !== 'no-speech' && event.error !== 'aborted') {
                         setError(`Spraakfout: ${event.error}`);
                     }
-                    stopListening('error');
+                    finalizeAndCleanup('error');
                 };
 
                 recognition.onend = () => {
                     if (sessionIdRef.current !== currentSessionId) return;
-                    stopListening('end');
+                    finalizeAndCleanup('end');
                 };
 
                 recognition.start();
@@ -339,15 +418,18 @@ export function useDeepgramVoice({ onTranscript, onFinalTranscript, language }: 
             setError(err?.message || 'Kon spraakherkenning niet starten');
             isConnectingRef.current = false;
             isListeningRef.current = false;
+            awaitingFinalResultsRef.current = false;
             setIsConnecting(false);
             setIsListening(false);
+            setIsFinalizing(false);
             clearTimers();
         }
-    }, [clearTimers, effectiveLang, stopListening, resetSilenceTimer]);
+    }, [clearTimers, effectiveLang, finalizeAndCleanup, resetSilenceTimer]);
 
     return {
         isListening,
         isStarting: isConnecting,
+        isFinalizing,
         partialTranscript,
         error,
         isWhisper,

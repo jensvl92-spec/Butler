@@ -230,8 +230,8 @@ export async function synthesizeGeminiTTS(
                     style: options?.isWhisper
                         ? 'soft, quiet, gentle whisper'
                         : isDutch
-                            ? 'natural, warm, conversational Dutch voice assistant, clear and friendly'
-                            : 'natural, warm, conversational voice assistant, clear and friendly'
+                            ? 'warm, relaxed, natural conversational Dutch speech, as if a friendly human assistant is talking smoothly and casually in the living room'
+                            : 'warm, relaxed, natural conversational speech, as if a friendly human assistant is talking smoothly and casually'
                 };
             }
 
