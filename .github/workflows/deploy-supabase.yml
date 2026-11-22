@@ -17,6 +17,7 @@ on:
     branches:
       - main
     paths:
+      - '.github/workflows/deploy-supabase.yml'
       - 'supabase/functions/**'
       - 'supabase/migrations/20261121000001_security_rls_and_schema_hardening.sql'
       - 'supabase/config.toml'
@@ -63,7 +64,7 @@ jobs:
               continue
             fi
             echo "🚀 Deploying Edge Function: ${fn_name}"
-            supabase functions deploy "$fn_name" --project-ref "$SUPABASE_PROJECT_REF"
+            supabase functions deploy "$fn_name" --remote="$SUPABASE_PROJECT_REF" --yes
           done
 
       - name: Apply idempotent RLS & Schema Hardening Migration
