@@ -1366,7 +1366,10 @@ function selectInitialContextEntities(
             : name;
         const areaTag = d.area_name ? ` [${d.area_name}]` : '';
         const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
-        return `- ${d.entity_id} (${devLabel}${areaTag}): ${d.state}${uom}`;
+        const opts = Array.isArray(d.attributes?.options) && d.attributes.options.length > 0
+            ? ` (opties: ${d.attributes.options.slice(0, 20).join(', ')})`
+            : '';
+        return `- ${d.entity_id} (${devLabel}${areaTag}): ${d.state}${uom}${opts}`;
     }).join('\n');
 
     return {

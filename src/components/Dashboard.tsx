@@ -773,7 +773,25 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             deviceGroups: []
         }
 
+        const INTERACTIVE_CONTROL_DOMAINS = new Set([
+            'light', 'switch', 'input_boolean', 'select', 'input_select', 'button', 'input_button',
+            'number', 'input_number', 'climate', 'water_heater', 'cover', 'lock', 'valve', 'fan',
+            'humidifier', 'vacuum', 'lawn_mower', 'media_player', 'siren', 'remote', 'scene', 'script',
+            'alarm_control_panel'
+        ])
+
         const isDiagEntity = (entityId: string, entityCategory?: string) => {
+            const domain = (entityId || '').split('.')[0].toLowerCase()
+            // Never bury interactive controls (like program/cycle selects, switches, buttons, numbers)
+            // inside read-only diagnostics just because HA marked them entity_category="config"!
+            if (INTERACTIVE_CONTROL_DOMAINS.has(domain)) {
+                if (entityCategory === 'diagnostic') {
+                    // Only rare diagnostic-only buttons like "identify" / "reboot" stay in diagnostics
+                    const lower = entityId.toLowerCase()
+                    return lower.includes('_identify') || lower.includes('_reboot') || lower.includes('_restart')
+                }
+                return false
+            }
             if (entityCategory === 'diagnostic' || entityCategory === 'config') return true
             const lower = entityId.toLowerCase()
             return (
@@ -1009,8 +1027,8 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     // Automatic smart sync:
     // 1. Populates when dashboard has 0 devices
-    // 2. Automatically updates stale localStorage caches whenever HA adds new integrations/devices (like LocalThings)
-    //    or when cached tiles from older versions lack integration `platform` metadata.
+    // 2. Automatically updates stale localStorage caches whenever HA adds new integrations/devices (like LocalThings),
+    //    when cached tiles lack integration `platform` metadata, OR when older caches marked interactive controls as diagnostic.
     useEffect(() => {
         if (!activeConnection?.id) return
         if (loadedConnectionIdRef.current !== activeConnection.id) return
@@ -1019,11 +1037,18 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const stateCount = Object.keys(entityStates || {}).length
         if (!hasRegistryData && stateCount === 0) return
 
-        const sig = `${activeConnection.id}:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
+        const sig = `${activeConnection.id}:v25:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
         if (lastSyncedSigRef.current === sig) return
+
+        const interactiveTypes = new Set([
+            'light', 'switch', 'input_boolean', 'select', 'input_select', 'button', 'input_button',
+            'number', 'input_number', 'climate', 'water_heater', 'cover', 'lock', 'valve', 'fan',
+            'humidifier', 'vacuum', 'lawn_mower', 'media', 'siren', 'remote', 'scene', 'script'
+        ])
 
         const existingEntityIds = new Set<string>()
         let hasAnyPlatformMeta = false
+        let hasMisclassifiedInteractiveDiag = false
         let totalDevicesInTiles = 0
         tiles.forEach(t => {
             (t.deviceGroups || []).forEach(g => {
@@ -1031,6 +1056,12 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 if (g.platform) hasAnyPlatformMeta = true
                 ;(g.entities || []).forEach(e => {
                     if (e.entityId) existingEntityIds.add(e.entityId)
+                    if (e.isDiagnostic && interactiveTypes.has(e.type)) {
+                        const eidLower = (e.entityId || '').toLowerCase()
+                        if (!eidLower.includes('_identify') && !eidLower.includes('_reboot') && !eidLower.includes('_restart')) {
+                            hasMisclassifiedInteractiveDiag = true
+                        }
+                    }
                 })
             })
         })
@@ -1040,7 +1071,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         )
         const needsPlatformUpgrade = hasRegistryData && totalDevicesInTiles > 0 && !hasAnyPlatformMeta
 
-        if (totalDevicesInTiles === 0 || hasNewRegistryEntities || needsPlatformUpgrade) {
+        if (totalDevicesInTiles === 0 || hasNewRegistryEntities || needsPlatformUpgrade || hasMisclassifiedInteractiveDiag) {
             const { newTiles, devicesAddedCount } = buildTilesFromHA(haAreas, haDevices, haEntitiesRegistry, entityStates)
             if (devicesAddedCount > 0) {
                 lastSyncedSigRef.current = sig
@@ -1543,7 +1574,14 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const numberTypes = new Set(['number', 'input_number'])
 
         const mainControls = nonDiag.filter(e => switchAndMainTypes.has(e.type))
-        const selectControls = nonDiag.filter(e => selectTypes.has(e.type))
+        const allSelectControls = nonDiag.filter(e => selectTypes.has(e.type))
+        const isProgramSelect = (e: RoomDevice) => {
+            const hay = `${e.entityId || ''} ${e.name || ''}`.toLowerCase()
+            return /cycle|course|program|programma|wasprogramma|droogprogramma|selected_program|active_program|wash_mode|dry_mode|operation_mode|\bmode\b|\bmodus\b/.test(hay) &&
+                !/rinse|spin|temp|soil|dry_level|droogniveau|water|detergent|softener|delay|uitstel|reminder|sound|volume|tone/.test(hay)
+        }
+        const programSelectControls = allSelectControls.filter(isProgramSelect)
+        const parameterSelectControls = allSelectControls.filter(e => !isProgramSelect(e))
         const actionControls = nonDiag.filter(e => buttonTypes.has(e.type))
         const numberControls = nonDiag.filter(e => numberTypes.has(e.type))
         const sensorEntities = nonDiag.filter(e =>
@@ -1552,6 +1590,81 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             !buttonTypes.has(e.type) &&
             !numberTypes.has(e.type)
         )
+
+        // Check if Home Assistant has any disabled entities on this device (e.g. disabled_by="integration")
+        const disabledDeviceEntities = (haEntitiesRegistry || []).filter(
+            (e: any) => e?.device_id && e.device_id === group.id && e.disabled_by
+        )
+        const disabledProgramEntity = disabledDeviceEntities.find((e: any) =>
+            /cycle|course|program|programma|mode/.test(`${e.entity_id || ''} ${e.name || ''} ${e.original_name || ''}`.toLowerCase())
+        )
+        const isLikelyAppliance = /wasmachine|washer|washing|droogkast|droger|dryer|tumble|vaatwasser|dishwasher|oven|localthings|smartthings|home_connect|miele|thinq/i.test(
+            `${group.name} ${group.platform || ''} ${group.manufacturer || ''} ${group.model || ''}`
+        )
+        const hasAnyControls = mainControls.length + allSelectControls.length + actionControls.length + numberControls.length > 0
+        const showMissingProgramHint = isLikelyAppliance && hasAnyControls && programSelectControls.length === 0
+
+        const renderSelectCard = (ent: RoomDevice, isProgramHero = false) => {
+            const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+            if (!ent.entityId || !ha) return null
+            const label = getCleanSubEntityName(ent.name, group.name)
+            const options: string[] = Array.isArray(ha.attributes?.options) ? ha.attributes.options : []
+            const currentVal = ha.state
+            const isUnavailable = currentVal === 'unavailable'
+            const isUnknown = currentVal === 'unknown' || currentVal === 'none' || !currentVal
+
+            return (
+                <div
+                    key={ent.id}
+                    className="control-block"
+                    style={isProgramHero ? {
+                        borderColor: 'rgba(99, 102, 241, 0.38)',
+                        background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(15, 23, 42, 0.45))'
+                    } : undefined}
+                >
+                    <div className="control-block-row">
+                        <div className="control-block-label">
+                            <span>{isProgramHero ? '🧺' : '🎛️'}</span>
+                            <span>{label}</span>
+                        </div>
+                        <span className="control-block-value">
+                            {formatHAStateLabel(currentVal)}
+                            {options.length > 0 ? ` (${options.length})` : ''}
+                        </span>
+                    </div>
+
+                    {isUnavailable && (
+                        <div style={{ fontSize: '0.75rem', color: '#fbbf24', opacity: 0.9 }}>
+                            ⚠️ Apparaat staat uit of is niet bereikbaar — zet het toestel (en Smart Control) aan om te kiezen.
+                        </div>
+                    )}
+
+                    {options.length > 0 ? (
+                        <div
+                            className="control-pill-grid"
+                            style={options.length > 14 ? { maxHeight: '220px', overflowY: 'auto', paddingRight: '4px' } : undefined}
+                        >
+                            {options.map(opt => (
+                                <button
+                                    key={opt}
+                                    type="button"
+                                    className={`control-pill-btn ${!isUnknown && !isUnavailable && currentVal === opt ? 'active' : ''}`}
+                                    onClick={() => handleSelectOption(ent.entityId!, opt)}
+                                >
+                                    {formatHAStateLabel(opt)}
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={{ fontSize: '0.78rem', opacity: 0.65 }}>
+                            {isUnavailable || isUnknown
+                                ? 'Opties worden door Home Assistant geladen zodra het apparaat aan staat.'
+                                : 'Geen opties gerapporteerd door Home Assistant.'}
+                        </div>
+                    )}
+                </div>
+            )
+        }
 
         const getActionIcon = (label: string, type: string) => {
             const l = label.toLowerCase()
@@ -1599,6 +1712,41 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
                 {/* Scrollable Control Sections */}
                 <div className="device-sheet-scroller">
+
+                    {/* 0. Dedicated Machine Program / Cycle Selector at the VERY TOP */}
+                    {programSelectControls.length > 0 && (
+                        <div>
+                            <div className="control-section-header">🧺 Programma / Cyclus kiezen</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {programSelectControls.map(ent => renderSelectCard(ent, true))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Helpful diagnostic hint if an appliance has parameters in HA but NO program select entity */}
+                    {showMissingProgramHint && (
+                        <div style={{
+                            padding: '11px 13px',
+                            borderRadius: '14px',
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                            fontSize: '0.78rem',
+                            lineHeight: 1.45,
+                            color: '#fde68a'
+                        }}>
+                            {disabledProgramEntity ? (
+                                <>
+                                    <strong>⚠️ Programmakeuze staat uitgeschakeld in Home Assistant:</strong>{' '}
+                                    <code>{disabledProgramEntity.entity_id}</code>. Schakel deze entiteit in via Home Assistant → Instellingen → Apparaten → {group.name}.
+                                </>
+                            ) : (
+                                <>
+                                    <strong>ℹ️ Geen programmakeuze ontvangen van Home Assistant:</strong>{' '}
+                                    De integratie{group.platform ? ` (${group.platform})` : ''} levert voor dit model momenteel alleen losse parameters en geen <code>select.*_cycle</code>/<code>program</code> entiteit. Controleer in Home Assistant → Apparaten → {group.name} of de integratie geüpdatet moet worden of dat Smart Control actief is op het toestel.
+                                </>
+                            )}
+                        </div>
+                    )}
 
                     {/* 1. Primary Switches, Lights, Climate, Covers, Media */}
                     {mainControls.length > 0 && (
@@ -1740,79 +1888,12 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                         </div>
                     )}
 
-                    {/* 2. Select & Input Select — Tactile Pill Buttons! */}
-                    {selectControls.length > 0 && (
+                    {/* 2. Parameter Select & Input Select — All Options as Tactile Pill Buttons */}
+                    {parameterSelectControls.length > 0 && (
                         <div>
-                            <div className="control-section-header">🎛️ Keuzes & Programma&apos;s</div>
+                            <div className="control-section-header">🎛️ Parameters & Opties</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                {selectControls.map(ent => {
-                                    const ha = ent.entityId ? entityStates[ent.entityId] : undefined
-                                    if (!ent.entityId || !ha) return null
-                                    const label = getCleanSubEntityName(ent.name, group.name)
-                                    const options: string[] = Array.isArray(ha.attributes?.options) ? ha.attributes.options : []
-                                    const currentVal = ha.state
-
-                                    return (
-                                        <div key={ent.id} className="control-block">
-                                            <div className="control-block-row">
-                                                <div className="control-block-label"><span>🎛️</span> {label}</div>
-                                                <span className="control-block-value">{formatHAStateLabel(currentVal)}</span>
-                                            </div>
-                                            {options.length > 0 && options.length <= 10 ? (
-                                                <div className="control-pill-grid">
-                                                    {options.map(opt => (
-                                                        <button
-                                                            key={opt}
-                                                            type="button"
-                                                            className={`control-pill-btn ${currentVal === opt ? 'active' : ''}`}
-                                                            onClick={() => handleSelectOption(ent.entityId!, opt)}
-                                                        >
-                                                            {formatHAStateLabel(opt)}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            ) : options.length > 10 ? (
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                    <select
-                                                        value={currentVal}
-                                                        onChange={(e) => handleSelectOption(ent.entityId!, e.target.value)}
-                                                        style={{
-                                                            width: '100%',
-                                                            padding: '10px 12px',
-                                                            borderRadius: '12px',
-                                                            border: '1px solid rgba(99, 102, 241, 0.4)',
-                                                            background: 'rgba(15, 23, 42, 0.7)',
-                                                            color: '#ffffff',
-                                                            fontSize: '0.88rem',
-                                                            fontWeight: 600,
-                                                            outline: 'none'
-                                                        }}
-                                                    >
-                                                        {options.map(opt => (
-                                                            <option key={opt} value={opt} style={{ background: '#1a1a24', color: '#ffffff' }}>
-                                                                {formatHAStateLabel(opt)}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <div className="control-pill-grid">
-                                                        {options.slice(0, 6).map(opt => (
-                                                            <button
-                                                                key={opt}
-                                                                type="button"
-                                                                className={`control-pill-btn ${currentVal === opt ? 'active' : ''}`}
-                                                                onClick={() => handleSelectOption(ent.entityId!, opt)}
-                                                            >
-                                                                {formatHAStateLabel(opt)}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <div style={{ fontSize: '0.78rem', opacity: 0.6 }}>Geen opties beschikbaar</div>
-                                            )}
-                                        </div>
-                                    )
-                                })}
+                                {parameterSelectControls.map(ent => renderSelectCard(ent, false))}
                             </div>
                         </div>
                     )}
@@ -1901,31 +1982,46 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                         </div>
                     )}
 
-                    {/* 6. Collapsible Diagnostics & Advanced Config */}
-                    {diagEntities.length > 0 && (
+                    {/* 6. Collapsible Diagnostics & HA Entity Inspector */}
+                    {(diagEntities.length > 0 || disabledDeviceEntities.length > 0) && (
                         <div>
                             <button
                                 type="button"
                                 className="diag-accordion-btn"
                                 onClick={() => setShowDiagnostics(prev => !prev)}
                             >
-                                <span>⚙️ Diagnostiek & Geavanceerd ({diagEntities.length})</span>
+                                <span>⚙️ Diagnostiek & HA-entiteiten ({diagEntities.length + disabledDeviceEntities.length})</span>
                                 <span>{showDiagnostics ? '▲' : '▼'}</span>
                             </button>
                             {showDiagnostics && (
-                                <div className="device-sensor-grid" style={{ marginTop: '10px' }}>
-                                    {diagEntities.map(ent => {
-                                        const ha = ent.entityId ? entityStates[ent.entityId] : undefined
-                                        if (!ha) return null
-                                        const label = getCleanSubEntityName(ent.name, group.name)
-                                        const formatted = formatHAStateLabel(ha.state, ha.attributes, ent.entityId)
-                                        return (
-                                            <div key={ent.id} className="device-sensor-tile" style={{ opacity: 0.85 }}>
-                                                <div className="device-sensor-label">{label}</div>
-                                                <div className="device-sensor-value" style={{ fontSize: '0.86rem' }}>{formatted}</div>
-                                            </div>
-                                        )
-                                    })}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
+                                    {diagEntities.length > 0 && (
+                                        <div className="device-sensor-grid">
+                                            {diagEntities.map(ent => {
+                                                const ha = ent.entityId ? entityStates[ent.entityId] : undefined
+                                                if (!ha) return null
+                                                const label = getCleanSubEntityName(ent.name, group.name)
+                                                const formatted = formatHAStateLabel(ha.state, ha.attributes, ent.entityId)
+                                                return (
+                                                    <div key={ent.id} className="device-sensor-tile" style={{ opacity: 0.88 }}>
+                                                        <div className="device-sensor-label">{label}</div>
+                                                        <div className="device-sensor-value" style={{ fontSize: '0.86rem' }}>{formatted}</div>
+                                                        <div style={{ fontSize: '0.64rem', opacity: 0.5, fontFamily: 'monospace', wordBreak: 'break-all' }}>{ent.entityId}</div>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                    {disabledDeviceEntities.length > 0 && (
+                                        <div style={{ fontSize: '0.74rem', opacity: 0.78, padding: '8px 10px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                            <div style={{ fontWeight: 600, marginBottom: '4px' }}>Uitgeschakeld in Home Assistant ({disabledDeviceEntities.length}):</div>
+                                            {disabledDeviceEntities.map((de: any) => (
+                                                <div key={de.entity_id} style={{ fontFamily: 'monospace', fontSize: '0.7rem', opacity: 0.8 }}>
+                                                    • {de.entity_id} ({de.disabled_by})
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
