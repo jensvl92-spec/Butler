@@ -47,3 +47,8 @@ entrypoint = "./functions/auth-google-callback/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/mcp-proxy/index.ts"
+
+[functions.deepgram-stt]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/deepgram-stt/index.ts"

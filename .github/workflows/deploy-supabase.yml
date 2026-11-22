@@ -1,0 +1,96 @@
+name: Deploy Supabase Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_functions:
+        description: 'Deploy all Supabase Edge Functions'
+        required: true
+        default: true
+        type: boolean
+      apply_security_migration:
+        description: 'Apply idempotent RLS & schema hardening SQL migration'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/migrations/20261121000001_security_rls_and_schema_hardening.sql'
+      - 'supabase/config.toml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::Missing GitHub Secret: SUPABASE_ACCESS_TOKEN (create one at https://supabase.com/dashboard/account/tokens)"
+            exit 1
+          fi
+          if [ -z "$SUPABASE_PROJECT_REF" ]; then
+            echo "::error::Missing GitHub Secret: SUPABASE_PROJECT_REF (20-char project ref from your Supabase URL)"
+            exit 1
+          fi
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy all Edge Functions
+        if: ${{ github.event_name == 'push' || inputs.deploy_functions }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          for fn_dir in supabase/functions/*/; do
+            fn_name="$(basename "$fn_dir")"
+            if [ "$fn_name" = "_shared" ]; then
+              continue
+            fi
+            if [ ! -f "${fn_dir}index.ts" ]; then
+              continue
+            fi
+            echo "🚀 Deploying Edge Function: ${fn_name}"
+            supabase functions deploy "$fn_name" --project-ref "$SUPABASE_PROJECT_REF"
+          done
+
+      - name: Apply idempotent RLS & Schema Hardening Migration
+        if: ${{ github.event_name == 'push' || inputs.apply_security_migration }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          MIGRATION_FILE="supabase/migrations/20261121000001_security_rls_and_schema_hardening.sql"
+          echo "🛡️ Applying idempotent migration: ${MIGRATION_FILE}"
+          PAYLOAD=$(python3 -c '
+          import json, sys
+          with open(sys.argv[1], "r", encoding="utf-8") as f:
+              print(json.dumps({"query": f.read()}))
+          ' "$MIGRATION_FILE")
+
+          HTTP_CODE=$(curl -sS -o /tmp/sb_mig_resp.txt -w "%{http_code}" \
+            -X POST "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/database/query" \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "Supabase Management API HTTP status: ${HTTP_CODE}"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            cat /tmp/sb_mig_resp.txt
+            echo ""
+            exit 1
+          fi
+          echo "✅ RLS & schema hardening migration applied successfully!"
