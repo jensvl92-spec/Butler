@@ -46,7 +46,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini');
     const [apiKeyInput, setApiKeyInput] = useState('');
     const [llmModel, setLlmModel] = useState(DEFAULT_GEMINI_MODEL);
-    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('low');
+    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('auto');
     const [isCustomModel, setIsCustomModel] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [testingKey, setTestingKey] = useState(false);
@@ -79,7 +79,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         setIsCustomModel(!presets.some(m => m.id === cleanSavedModel));
 
         const savedEffort = localStorage.getItem('butler.reasoning_effort') as ReasoningEffort | null;
-        if (savedEffort && ['low', 'medium', 'high'].includes(savedEffort)) {
+        if (savedEffort && ['auto', 'low', 'medium', 'high'].includes(savedEffort)) {
             setReasoningEffort(savedEffort);
         }
 
@@ -426,16 +426,24 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 outline: 'none'
                             }}
                         >
+                            <option value="auto" style={{ background: '#1a1a24', color: '#ffffff' }}>
+                                ✨ Automatisch / Adaptief (Aanbevolen — snel op Flash, escaleert zelf naar Hydrogen/Argon)
+                            </option>
                             <option value="low" style={{ background: '#1a1a24', color: '#ffffff' }}>
-                                ⚡ Laag (Aanbevolen — snelste spraak & smart home acties)
+                                ⚡ Altijd Laag (Snelste spraak & smart home acties)
                             </option>
                             <option value="medium" style={{ background: '#1a1a24', color: '#ffffff' }}>
-                                ⚖️ Gemiddeld (Gebalanceerd voor analyses & planning)
+                                ⚖️ Altijd Gemiddeld (Extra nauwkeurig voor analyses & planning)
                             </option>
                             <option value="high" style={{ background: '#1a1a24', color: '#ffffff' }}>
-                                🧠 Hoog (Diep redeneren voor complexe automatiseringen)
+                                🧠 Altijd Hoog (Maximaal redeneren bij elke vraag)
                             </option>
                         </select>
+                        {reasoningEffort === 'auto' && (
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.72rem', color: 'var(--text-secondary, #9ca3af)', lineHeight: '1.35' }}>
+                                Butler beantwoordt dagelijkse commando&apos;s razendsnel op <strong>low</strong> en schakelt bij complexe vragen, planning of automatiseringen zelf op naar <strong>Gemini 4 Hydrogen (medium)</strong> of <strong>Gemini 4 Argon (high)</strong>.
+                            </p>
+                        )}
                     </div>
                 )}
 

@@ -541,7 +541,26 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
                           );
                         }
 
-                        // G. Fallback for device actions / proactive workers / generic actions
+                        // G. Adaptive Deep Reasoning escalation badge
+                        if (a.type === 'deep_reasoning' && a.data) {
+                          const depthLabel = a.data.depth === 'high' ? 'Diep (High)' : 'Nauwkeurig (Medium)';
+                          return (
+                            <div
+                              key={i}
+                              className="action-badge"
+                              style={{
+                                alignSelf: 'flex-start',
+                                background: 'rgba(139, 92, 246, 0.14)',
+                                color: '#c4b5fd',
+                                border: '1px solid rgba(139, 92, 246, 0.35)'
+                              }}
+                            >
+                              🧠 Adaptief geëscaleerd → {a.data.model_used || 'Deep Reasoner'} ({depthLabel})
+                            </div>
+                          );
+                        }
+
+                        // H. Fallback for device actions / proactive workers / generic actions
                         const isError = a.result === 'error';
                         return (
                           <div

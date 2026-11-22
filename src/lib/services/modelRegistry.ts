@@ -7,7 +7,7 @@
  */
 
 export type AIProvider = 'gemini' | 'openrouter';
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high';
 export type ModelTier = 'fast_interactive' | 'high_accuracy' | 'lite_fast' | 'deep_reasoning';
 
 export const GOOGLE_GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -99,6 +99,22 @@ export function getFailoverModels(primaryModel: string, provider: AIProvider): s
 
     const ordered = [primaryModel, ...baseChain.filter(m => m !== primaryModel)];
     return Array.from(new Set(ordered));
+}
+
+/**
+ * Escalation model chains for Self-Escalating Adaptive Reasoning (`consult_deep_reasoner`).
+ * - 'medium' -> Gemini 4 Hydrogen (high accuracy, 5x fewer hallucinations, balanced latency)
+ * - 'high'   -> Gemini 4 Argon (frontier deep reasoning for complex logic, YAML, planning, coding)
+ */
+export function getEscalationModels(depth: 'medium' | 'high', provider: AIProvider): string[] {
+    if (depth === 'high') {
+        return provider === 'gemini'
+            ? ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash']
+            : ['google/gemini-4-argon', 'google/gemini-4-hydrogen', 'google/gemini-3.8-flash'];
+    }
+    return provider === 'gemini'
+        ? ['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.8-flash']
+        : ['google/gemini-4-hydrogen', 'google/gemini-4-argon', 'google/gemini-3.8-flash'];
 }
 
 /**
@@ -253,9 +269,9 @@ export function resolveAIConfig(
 
     const storedEffort = localStorage.getItem('butler.reasoning_effort') as ReasoningEffort | null;
     const reasoningEffort: ReasoningEffort =
-        storedEffort && ['low', 'medium', 'high'].includes(storedEffort)
+        storedEffort && ['auto', 'low', 'medium', 'high'].includes(storedEffort)
             ? storedEffort
-            : 'low';
+            : 'auto';
 
     return { apiKey, provider, model, endpoint, fallbackModels, reasoningEffort };
 }

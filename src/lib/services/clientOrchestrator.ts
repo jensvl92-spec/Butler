@@ -31,6 +31,7 @@ import {
     OPENROUTER_API_URL,
     sanitizeModelId,
     resolveAIConfig,
+    getEscalationModels,
     supportsTemperatureParam,
     supportsReasoningEffort
 } from './modelRegistry';
@@ -313,6 +314,32 @@ const ORCHESTRATOR_TOOLS = [
                     extra_params: { type: 'object', description: 'Optionele extra parameters voor de worker.' }
                 },
                 required: ['worker']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'consult_deep_reasoner',
+            description: 'Schakelt een krachtiger redeneermodel in voor complexe taken die dieper denkwerk, hoge precisie of meerstaps-logica vereisen (zoals ingewikkelde Home Assistant-automatiseringen ontwerpen, diepe data-/energie-analyse, programmeren, debugging, financiële/wiskundige berekeningen of strategische planning). Gebruik deze tool NIET voor simpele dagelijkse commando\'s zoals lampen schakelen, weer, timers of korte feiten.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    task: {
+                        type: 'string',
+                        description: 'De volledige, heldere taak of complexe vraag om diep over na te denken.'
+                    },
+                    context: {
+                        type: 'string',
+                        description: 'Alle relevante reeds opgehaalde feiten, sensorwaarden, entity_ids, prijzen of voorkeuren.'
+                    },
+                    depth: {
+                        type: 'string',
+                        enum: ['medium', 'high'],
+                        description: 'medium = Gemini 4 Hydrogen (hoge nauwkeurigheid, analyses, vergelijkingen, advies); high = Gemini 4 Argon (diep redeneren, complexe YAML/automatiseringen, wiskunde, programmeren, debugging).'
+                    }
+                },
+                required: ['task', 'depth']
             }
         }
     }
@@ -1227,12 +1254,97 @@ ${storedMems}
 2. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
 3. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³) en naam voordat je antwoordt.
 4. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
-5. Geef altijd een helder, beknopt, natuurlijk en to-the-point antwoord zonder overbodige meta-tekst.`;
+5. **Adaptief redeneren**: Behandel snelle dagelijkse vragen (apparaten, weer, prijzen, timers, agenda) direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live HA/sensor-data eerst hebt opgehaald).
+6. Geef altijd een helder, beknopt, natuurlijk en to-the-point antwoord zonder overbodige meta-tekst.`;
 }
 
 // -------------------------------------------------------------
-// 10. Unified SOTA ReAct Loop with Automatic Model Failover & Parallel Tool Execution
+// 10. Unified SOTA ReAct Loop with Automatic Model Failover, Parallel Tools & Self-Escalation
 // -------------------------------------------------------------
+async function executeDeepReasonerTool(
+    args: { task?: string; context?: string; depth?: 'medium' | 'high' },
+    config: AIResolvedConfig,
+    language: string,
+    log: (msg: string) => void
+): Promise<{ answer: string; model_used: string; depth: 'medium' | 'high'; elapsed_ms: number } | { error: string }> {
+    const depth: 'medium' | 'high' = args.depth === 'high' ? 'high' : 'medium';
+    const task = (args.task || '').trim();
+    if (!task) return { error: 'Geen taak opgegeven voor deep reasoner.' };
+
+    const candidates = getEscalationModels(depth, config.provider);
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`
+    };
+    if (config.provider === 'openrouter') {
+        headers['HTTP-Referer'] = 'https://butler.aiha.app';
+        headers['X-Title'] = 'Butler AI App (Deep Reasoner)';
+    }
+
+    const systemPrompt = `Je bent Butler's diepe redeneer- en analyse-engine.
+Lever een foutloos, grondig doordacht en direct bruikbaar resultaat in taal: ${language}.
+- Gebruik uitsluitend echte entity_ids en feiten uit de aangeleverde context; verzin niets.
+- Bij berekeningen of optimalisaties: controleer elke stap zorgvuldig.
+- Bij Home Assistant-automatiseringen: lever zuivere, uitvoerbare structuur (triggers, conditions, actions).`;
+
+    const userPrompt = args.context?.trim()
+        ? `TAAK:\n${task}\n\nACTUELE CONTEXT & DATA:\n${args.context.trim()}`
+        : `TAAK:\n${task}`;
+
+    const started = Date.now();
+    let lastError = 'Deep Reasoner niet beschikbaar';
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i];
+        const body: Record<string, any> = {
+            model: candidateModel,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            max_tokens: 10000
+        };
+
+        if (supportsTemperatureParam(candidateModel)) {
+            body.temperature = 0.2;
+        }
+        if (supportsReasoningEffort(candidateModel)) {
+            body.reasoning_effort = depth;
+        }
+        if (config.provider === 'openrouter' && i === 0 && candidates.length > 1) {
+            body.models = candidates;
+        }
+
+        try {
+            log(`🧠 Escalating to ${candidateModel} (depth: ${depth})...`);
+            const res = await fetchWithTimeout(config.endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body)
+            }, 60000);
+
+            if (res.ok) {
+                const data = await res.json();
+                const answer = data?.choices?.[0]?.message?.content?.trim();
+                if (answer) {
+                    const elapsed = Date.now() - started;
+                    log(`🧠 Escalation complete via ${candidateModel} in ${elapsed}ms`);
+                    return { answer, model_used: candidateModel, depth, elapsed_ms: elapsed };
+                }
+                lastError = `Leeg antwoord van ${candidateModel}`;
+            } else {
+                const errText = await res.text().catch(() => '');
+                lastError = `${candidateModel} (${res.status}): ${errText.slice(0, 200)}`;
+                if (res.status === 401 || res.status === 403) break;
+            }
+        } catch (err: any) {
+            lastError = err?.name === 'AbortError' ? `Timeout (60s) op ${candidateModel}` : (err?.message || String(err));
+        }
+    }
+
+    return { error: `Deep Reasoner escalatie mislukt: ${lastError}` };
+}
+
 async function callLLMWithFailover(
     config: AIResolvedConfig,
     messages: any[],
@@ -1248,6 +1360,15 @@ async function callLLMWithFailover(
         headers['X-Title'] = 'Butler AI App';
     }
 
+    // In 'auto' adaptive mode, fast turns run at 'low' effort and only escalate via `consult_deep_reasoner`.
+    const effectiveEffort: 'low' | 'medium' | 'high' =
+        config.reasoningEffort === 'auto' ? 'low' : config.reasoningEffort;
+
+    // Only expose `consult_deep_reasoner` when adaptive ('auto') or when running at 'low'/'medium'
+    const activeTools = config.reasoningEffort === 'high'
+        ? ORCHESTRATOR_TOOLS.filter(t => t.function.name !== 'consult_deep_reasoner')
+        : ORCHESTRATOR_TOOLS;
+
     const candidates = config.fallbackModels;
     let lastError = 'Onbekende LLM API fout';
 
@@ -1260,7 +1381,7 @@ async function callLLMWithFailover(
         };
 
         if (includeTools) {
-            body.tools = ORCHESTRATOR_TOOLS;
+            body.tools = activeTools;
             body.tool_choice = 'auto';
         }
 
@@ -1269,7 +1390,7 @@ async function callLLMWithFailover(
             body.temperature = 0.3;
         }
         if (supportsReasoningEffort(candidateModel)) {
-            body.reasoning_effort = config.reasoningEffort;
+            body.reasoning_effort = effectiveEffort;
         }
 
         // On OpenRouter, also supply native fallback models array on the first attempt
@@ -1282,7 +1403,7 @@ async function callLLMWithFailover(
                 method: 'POST',
                 headers,
                 body: JSON.stringify(body)
-            }, 30000);
+            }, 35000);
 
             if (res.ok) {
                 const data = await res.json();
@@ -1295,13 +1416,12 @@ async function callLLMWithFailover(
                 lastError = `${config.provider.toUpperCase()} (${res.status}) op ${candidateModel}: ${errText.slice(0, 250)}`;
                 log(`⚠️ Model ${candidateModel} fout (${res.status}), probeer failover indien mogelijk...`);
 
-                // Do not failover on auth errors (401/403) — key itself is invalid
                 if (res.status === 401 || res.status === 403) {
                     throw new Error(lastError);
                 }
             }
         } catch (err: any) {
-            const msg = err?.name === 'AbortError' ? `Timeout (30s) bij ${candidateModel}` : (err?.message || String(err));
+            const msg = err?.name === 'AbortError' ? `Timeout (35s) bij ${candidateModel}` : (err?.message || String(err));
             lastError = msg;
             if (msg.includes('(401)') || msg.includes('(403)')) {
                 throw err;
@@ -1620,6 +1740,28 @@ export async function runClientReActOrchestrator(
                                     service: `worker.${fnArgs.worker}`,
                                     data: workerRes,
                                     result: workerRes.success ? 'success' : 'error',
+                                    executedLocally: true
+                                });
+                            }
+                        } else if (fnName === 'consult_deep_reasoner') {
+                            const deepRes = await executeDeepReasonerTool(
+                                fnArgs,
+                                config,
+                                options.language || 'nl-BE',
+                                log
+                            );
+                            toolResult = deepRes;
+                            if (!('error' in deepRes)) {
+                                actionsTaken.push({
+                                    type: 'deep_reasoning',
+                                    entity_id: deepRes.model_used,
+                                    service: `reasoning.${deepRes.depth}`,
+                                    data: {
+                                        model_used: deepRes.model_used,
+                                        depth: deepRes.depth,
+                                        elapsed_ms: deepRes.elapsed_ms
+                                    },
+                                    result: 'success',
                                     executedLocally: true
                                 });
                             }
