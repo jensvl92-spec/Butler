@@ -84,6 +84,21 @@ const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
+            name: 'google_search',
+            description: 'Zoekt live op internet via Google Search (met actuele bronnen) naar publieke informatie die niet in Home Assistant staat, zoals Belgische/Nederlandse brandstof- en dieselprijzen vandaag/morgen/gisteren, nieuws, verkeer, openingsuren, sportuitslagen, koersen, recepten of recente feiten.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Concrete zoekvraag in de juiste taal/regio (bv. "maximumprijs diesel B7 België morgen vandaag gisteren FOD Economie").' },
+                    region: { type: 'string', description: 'Optionele regio of land (bv. "België", "Nederland"). Standaard afgeleid van de taal van de gebruiker.' }
+                },
+                required: ['query']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'control_home_device',
             description: 'Bestuurt een apparaat, entiteit of integratie-service in Home Assistant (light, switch, select, button, number, climate, media_player, cover, lock, fan, vacuum, scene, script, of aangepaste integraties zoals localthings).',
             parameters: {
@@ -1409,11 +1424,12 @@ ${ctx.relevantEntitiesSection}
 ${storedMems}
 
 ### RICHTLIJNEN:
-1. Gebruik altijd tools om actuele data (weer, energieprijzen, sensoren, historiek, logboek, agenda, to-do, camera) op te halen — verzin nooit waarden.
-2. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
-3. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³) en naam voordat je antwoordt.
-4. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
-5. **Adaptief redeneren**: Behandel snelle dagelijkse vragen (apparaten, weer, prijzen, timers, agenda) direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live HA/sensor-data eerst hebt opgehaald).
+1. Gebruik altijd tools om actuele data (weer, Google Search, energieprijzen, sensoren, historiek, logboek, agenda, to-do, camera) op te halen — verzin nooit waarden.
+2. **Live Google Search (\`google_search\`)**: Voor elke vraag over actuele publieke informatie buiten Home Assistant (zoals Belgische/Nederlandse brandstof- en dieselprijzen vandaag/morgen/gisteren, nieuws, verkeer, openingsuren, sportuitslagen, koersen, productinfo of feiten) MOET je direct \`google_search\` aanroepen. Zeg NOOIT dat je geen Google-zoekfunctie of internettoegang hebt — je beschikt wél over \`google_search\`.
+3. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
+4. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³ vs €/liter) en naam voordat je antwoordt.
+5. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
+6. **Adaptief redeneren**: Behandel snelle dagelijkse vragen (apparaten, weer, zoekopdrachten, prijzen, timers, agenda) direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live HA/sensor/zoek-data eerst hebt opgehaald).
 
 ### ANTWOORDSTIJL (DUBBEL KANAAL: MENSELIJKE SPRAAK + VISUEEL OVERZICHT):
 Geef altijd een natuurlijk, vlot antwoord zonder stijf taalgebruik. Gebruik daarbij twee gescheiden kanalen in je uiteindelijke antwoord:
@@ -1424,7 +1440,7 @@ Geef altijd een natuurlijk, vlot antwoord zonder stijf taalgebruik. Gebruik daar
    - Maak er vlotte, warme mensentaal van in 1 tot 3 korte zinnen (bijv. *"Het is buiten 15 graden met een dauwpunt van 5 graden en een zacht briesje, lekker aangenaam dus."* of *"De wasmachine draait nog op katoen en is over 32 minuten klaar. De droogkast staat momenteel uit."*).
 
 2. **Visueel Overzicht (\`<card>...</card>\`) — GEBRUIK WANNEER CIJFERS, STATUSSEN, TIJDEN, VERGELIJKINGEN OF MEERDERE GEGEVENS HELDERDER ZIJN IN 1 OOGOPSLAG**:
-   - Zodra je meerdere meetwaarden, apparaatstatussen (zoals wasmachine & droogkast), uurtarieven, vergelijkingen, berekeningen, schema's of overzichten toont, voeg dan een compact, geldig JSON-blok toe in \`<card>...</card>\` zodat de gebruiker zonder lezen in één oogopslag het antwoord ziet.
+   - Zodra je meerdere meetwaarden, apparaatstatussen (zoals wasmachine & droogkast), uurtarieven, brandstofprijzen, vergelijkingen, berekeningen, schema's of overzichten toont, voeg dan een compact, geldig JSON-blok toe in \`<card>...</card>\` zodat de gebruiker zonder lezen in één oogopslag het antwoord ziet.
    - Sla \`<card>\` over bij simpele éénzins-bevestigingen (zoals "Het licht staat aan").
    - Gebruik alleen de velden die echt relevant zijn voor de vraag (niet overvol maken!):
      \`\`\`json
@@ -1520,6 +1536,176 @@ function parseDualChannelResponse(rawText: string): ParsedDualChannel {
 // -------------------------------------------------------------
 // 10. Unified SOTA ReAct Loop with Automatic Model Failover, Parallel Tools & Self-Escalation
 // -------------------------------------------------------------
+
+/**
+ * SOTA Live Google Search Tool (3-Tier, Zero Extra API Key Required):
+ * 1. Native Google Gemini Search Grounding (`tools: [{ google_search: {} }]`) using the user's Gemini key
+ * 2. OpenRouter native Web Search plugin (`plugins: [{ id: 'web' }]`) for OpenRouter users
+ * 3. DuckDuckGo Instant Answer fallback
+ */
+async function executeGoogleSearchTool(
+    args: { query?: string; region?: string },
+    config: AIResolvedConfig,
+    language: string,
+    log: (msg: string) => void
+): Promise<any> {
+    const query = (args.query || '').trim();
+    if (!query) return { error: 'Geen zoekopdracht opgegeven.' };
+
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const defaultRegion = language.toLowerCase().includes('be') ? 'België' : language.toLowerCase().startsWith('nl') ? 'België / Nederland' : 'International';
+    const regionHint = (args.region || '').trim() || defaultRegion;
+
+    // Resolve Gemini API key (active provider or stored Gemini key)
+    const geminiKey = (
+        (config.provider === 'gemini' ? config.apiKey : '') ||
+        (typeof localStorage !== 'undefined' ? localStorage.getItem('butler.gemini_api_key') : '') ||
+        ((import.meta as any).env?.VITE_GEMINI_API_KEY || '')
+    ).trim();
+
+    // TIER 1: Native Google Gemini Google Search Grounding (real live Google Search + citations!)
+    if (geminiKey) {
+        const groundingModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+        const searchPrompt = `Zoek live op Google naar de meest actuele en geverifieerde feiten voor deze vraag.
+Datum vandaag: ${dateStr}. Regio/context: ${regionHint}.
+Geef een concreet, feitelijk en beknopt overzicht met exacte cijfers, datums en eventuele vergelijkingen (bv. gisteren / vandaag / morgen). Verzin geen cijfers als ze niet in de zoekresultaten staan.
+
+Zoekvraag: ${query}`;
+
+        for (const model of groundingModels) {
+            try {
+                log(`🌐 Google Search Grounding via ${model}: "${query}"`);
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+                const res = await fetchWithTimeout(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-goog-api-key': geminiKey
+                    },
+                    body: JSON.stringify({
+                        contents: [{ role: 'user', parts: [{ text: searchPrompt }] }],
+                        tools: [{ google_search: {} }]
+                    })
+                }, 22000);
+
+                if (res.ok) {
+                    const data = await res.json();
+                    const candidate = data?.candidates?.[0];
+                    const textParts = (candidate?.content?.parts || [])
+                        .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+                        .filter(Boolean);
+                    const answer = textParts.join('\n').trim();
+
+                    const meta = candidate?.groundingMetadata || {};
+                    const webQueries: string[] = Array.isArray(meta.webSearchQueries) ? meta.webSearchQueries : [];
+                    const rawChunks: any[] = Array.isArray(meta.groundingChunks) ? meta.groundingChunks : [];
+                    const seenUrls = new Set<string>();
+                    const sources: Array<{ title: string; url: string }> = [];
+                    for (const ch of rawChunks) {
+                        const uri = ch?.web?.uri;
+                        const title = ch?.web?.title || uri;
+                        if (uri && !seenUrls.has(uri)) {
+                            seenUrls.add(uri);
+                            sources.push({ title, url: uri });
+                            if (sources.length >= 5) break;
+                        }
+                    }
+
+                    if (answer) {
+                        log(`✅ Google Search voltooid via ${model} (${sources.length} bronnen)`);
+                        return {
+                            engine: `Google Search (Gemini Grounding • ${model})`,
+                            date: dateStr,
+                            query,
+                            search_queries_used: webQueries,
+                            answer,
+                            sources
+                        };
+                    }
+                } else {
+                    const errText = await res.text().catch(() => '');
+                    logger.warn(`[GoogleSearch] ${model} failed (${res.status}): ${errText.slice(0, 180)}`);
+                    if (res.status === 401 || res.status === 403) break;
+                }
+            } catch (err: any) {
+                logger.warn(`[GoogleSearch] ${model} error:`, err?.message || err);
+            }
+        }
+    }
+
+    // TIER 2: OpenRouter Built-in Live Web Search Plugin
+    if (config.provider === 'openrouter' && config.apiKey) {
+        try {
+            log(`🌐 OpenRouter Live Web Search: "${query}"`);
+            const res = await fetchWithTimeout(OPENROUTER_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${config.apiKey}`,
+                    'HTTP-Referer': 'https://butler.aiha.app',
+                    'X-Title': 'Butler AI App (Web Search)'
+                },
+                body: JSON.stringify({
+                    model: config.model,
+                    plugins: [{ id: 'web', max_results: 5 }],
+                    messages: [
+                        {
+                            role: 'user',
+                            content: `Datum vandaag: ${dateStr}. Regio: ${regionHint}. Zoek live op internet en geef concrete, actuele cijfers en bronnen voor: ${query}`
+                        }
+                    ],
+                    max_tokens: 1500
+                })
+            }, 22000);
+
+            if (res.ok) {
+                const data = await res.json();
+                const answer = data?.choices?.[0]?.message?.content?.trim();
+                const annotations: any[] = data?.choices?.[0]?.message?.annotations || [];
+                const sources = annotations
+                    .filter(a => a?.type === 'url_citation' && a?.url_citation?.url)
+                    .slice(0, 5)
+                    .map(a => ({ title: a.url_citation.title || a.url_citation.url, url: a.url_citation.url }));
+                if (answer) {
+                    return {
+                        engine: 'OpenRouter Web Search',
+                        date: dateStr,
+                        query,
+                        answer,
+                        sources
+                    };
+                }
+            }
+        } catch (err: any) {
+            logger.warn('[GoogleSearch] OpenRouter web plugin error:', err?.message || err);
+        }
+    }
+
+    // TIER 3: DuckDuckGo Instant Answer zero-key fallback
+    try {
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const ddgRes = await fetchWithTimeout(ddgUrl, {}, 8000);
+        if (ddgRes.ok) {
+            const ddg = await ddgRes.json();
+            const snippet = ddg?.AbstractText || ddg?.Answer || (ddg?.RelatedTopics?.[0]?.Text || '');
+            if (snippet) {
+                return {
+                    engine: 'DuckDuckGo Instant Answer',
+                    date: dateStr,
+                    query,
+                    answer: snippet,
+                    sources: ddg?.AbstractURL ? [{ title: ddg.AbstractSource || 'Bron', url: ddg.AbstractURL }] : []
+                };
+            }
+        }
+    } catch { }
+
+    return {
+        error: `Kon geen live zoekresultaten ophalen voor "${query}". Controleer je internetverbinding of Gemini API-sleutel.`
+    };
+}
+
 async function executeDeepReasonerTool(
     args: { task?: string; context?: string; depth?: 'medium' | 'high' },
     config: AIResolvedConfig,
@@ -1782,6 +1968,25 @@ export async function runClientReActOrchestrator(
                                 entity_id: 'weather.open_meteo',
                                 service: 'weather.get_forecast',
                                 data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'google_search') {
+                            toolResult = await executeGoogleSearchTool(
+                                fnArgs,
+                                config,
+                                options.language || 'nl-BE',
+                                log
+                            );
+                            actionsTaken.push({
+                                type: 'search',
+                                entity_id: 'google_search',
+                                service: 'google.search',
+                                data: {
+                                    query: fnArgs.query,
+                                    engine: toolResult?.engine,
+                                    sources: toolResult?.sources || []
+                                },
                                 result: toolResult?.error ? 'error' : 'success',
                                 executedLocally: true
                             });
