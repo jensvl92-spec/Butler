@@ -49,7 +49,23 @@ interface SettingsProps {
 }
 
 export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
-    const { activeConnection, entityStates, haDevices, haEntitiesRegistry, haSyncSource } = useApp();
+    const {
+        activeConnection,
+        entityStates,
+        haDevices,
+        haEntitiesRegistry,
+        haSyncSource,
+        haLastError,
+        primaryApiUrl,
+        fallbackApiUrl,
+        resolvedApiUrl,
+        saveFallbackApiUrl,
+        refreshHAFromServer
+    } = useApp();
+    const [fallbackUrlInput, setFallbackUrlInput] = useState<string>(fallbackApiUrl || '');
+    const [savingFallbackUrl, setSavingFallbackUrl] = useState<boolean>(false);
+    const [fallbackUrlNotice, setFallbackUrlNotice] = useState<string | null>(null);
+    useEffect(() => { setFallbackUrlInput(fallbackApiUrl || ''); }, [fallbackApiUrl]);
     const [floatingEnabled, setFloatingEnabled] = useState(false);
     const [hasPermission, setHasPermission] = useState(false);
     const [snoozeUntil, setSnoozeUntil] = useState<number | null>(null);
@@ -925,10 +941,28 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
                 const integrations = Array.from(integrationMap.values()).sort((a, b) => b.entities - a.entities);
                 const syncBadge =
-                    haSyncSource === 'websocket' ? { text: '🟢 WebSocket Live', bg: '#dcfce7', color: '#15803d' } :
-                    haSyncSource === 'rest' ? { text: '🔵 REST Fallback', bg: '#dbeafe', color: '#1d4ed8' } :
-                    haSyncSource === 'cache' ? { text: '🟡 Cache', bg: '#fef9c3', color: '#854d0e' } :
+                    haSyncSource === 'websocket' ? { text: '🟢 Live (WS)', bg: '#dcfce7', color: '#15803d' } :
+                    haSyncSource === 'rest' ? { text: '🔵 Live (REST)', bg: '#dbeafe', color: '#1d4ed8' } :
+                    haSyncSource === 'cache' ? { text: '🟠 Offline (cache)', bg: '#fef3c7', color: '#92400e' } :
                     { text: '⚪ Wachten...', bg: '#e5e7eb', color: '#374151' };
+
+                const handleSaveFallbackUrl = async () => {
+                    setSavingFallbackUrl(true);
+                    setFallbackUrlNotice(null);
+                    try {
+                        saveFallbackApiUrl(fallbackUrlInput);
+                        const res = await refreshHAFromServer();
+                        if (res.error) {
+                            setFallbackUrlNotice(`Opgeslagen, maar HA reageert nog niet: ${res.error}`);
+                        } else {
+                            setFallbackUrlNotice(`✅ Opgeslagen & live verbonden (${res.source === 'websocket' ? 'WS' : 'REST'})!`);
+                        }
+                    } catch (e: any) {
+                        setFallbackUrlNotice(`❌ ${e?.message || 'Opslaan mislukt'}`);
+                    } finally {
+                        setSavingFallbackUrl(false);
+                    }
+                };
 
                 return (
                     <div style={{
@@ -939,7 +973,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                         border: '1px solid rgba(59, 130, 246, 0.25)'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', gap: '8px' }}>
-                            <h3 style={{ margin: 0 }}>🔌 Home Assistant Integraties</h3>
+                            <h3 style={{ margin: 0 }}>🔌 Home Assistant Verbinding</h3>
                             <span style={{
                                 fontSize: '0.72rem',
                                 fontWeight: 600,
@@ -952,9 +986,85 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 {syncBadge.text}
                             </span>
                         </div>
-                        <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.4 }}>
-                            <strong>{entityCount}</strong> entiteiten • <strong>{haDevices?.length || 0}</strong> apparaten • <strong>{integrations.length}</strong> actieve integraties gevonden.
+                        <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '8px', lineHeight: 1.4 }}>
+                            <strong>{entityCount}</strong> entiteiten • <strong>{haDevices?.length || 0}</strong> apparaten • <strong>{integrations.length}</strong> integraties
+                            {resolvedApiUrl && (
+                                <>
+                                    <br />
+                                    <span style={{ fontSize: '0.74rem', opacity: 0.85 }}>Actieve URL: <code>{resolvedApiUrl}</code></span>
+                                </>
+                            )}
                         </p>
+                        {haSyncSource === 'cache' && haLastError && (
+                            <div style={{
+                                marginBottom: '10px',
+                                padding: '8px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(245, 158, 11, 0.14)',
+                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                fontSize: '0.75rem',
+                                color: '#fde68a'
+                            }}>
+                                ⚠️ {haLastError}
+                            </div>
+                        )}
+
+                        {/* Dual-URL Auto-Failover (Local Wi-Fi <-> Tailscale/External) */}
+                        <div style={{
+                            marginBottom: '12px',
+                            padding: '10px',
+                            borderRadius: '10px',
+                            background: 'rgba(255, 255, 255, 0.04)',
+                            border: '1px solid rgba(255, 255, 255, 0.08)'
+                        }}>
+                            <div style={{ fontSize: '0.76rem', fontWeight: 600, marginBottom: '4px' }}>
+                                🔄 2e URL voor Wi-Fi ↔ Tailscale auto-switch (optioneel)
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '8px', lineHeight: 1.35 }}>
+                                Hoofd-URL: <code>{primaryApiUrl || '—'}</code>. Vul hier je tweede adres in (bv. lokale Wi-Fi <code>http://192.168.x.x:8123</code> of externe Tailscale <code>https://...ts.net</code>), dan schakelt Butler automatisch om net zoals de Home Assistant app.
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input
+                                    type="url"
+                                    value={fallbackUrlInput}
+                                    onChange={(e) => setFallbackUrlInput(e.target.value)}
+                                    placeholder={/^http:\/\//i.test(primaryApiUrl) ? 'https://jouw-ha.tailxxxx.ts.net' : 'http://192.168.1.x:8123'}
+                                    style={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        padding: '7px 10px',
+                                        borderRadius: '8px',
+                                        border: '1px solid var(--border, rgba(255,255,255,0.14))',
+                                        background: 'rgba(0,0,0,0.2)',
+                                        color: 'var(--text-primary, #fff)',
+                                        fontSize: '0.78rem'
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    disabled={savingFallbackUrl}
+                                    onClick={handleSaveFallbackUrl}
+                                    style={{
+                                        padding: '7px 12px',
+                                        borderRadius: '8px',
+                                        border: 'none',
+                                        background: '#4f46e5',
+                                        color: '#ffffff',
+                                        fontSize: '0.76rem',
+                                        fontWeight: 600,
+                                        cursor: savingFallbackUrl ? 'wait' : 'pointer',
+                                        whiteSpace: 'nowrap'
+                                    }}
+                                >
+                                    {savingFallbackUrl ? 'Testen...' : 'Opslaan'}
+                                </button>
+                            </div>
+                            {fallbackUrlNotice && (
+                                <div style={{ fontSize: '0.72rem', marginTop: '6px', color: fallbackUrlNotice.startsWith('✅') ? '#6ee7b7' : '#fde68a' }}>
+                                    {fallbackUrlNotice}
+                                </div>
+                            )}
+                        </div>
                         {integrations.length > 0 ? (
                             <div style={{
                                 display: 'flex',

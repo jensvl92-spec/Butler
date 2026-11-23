@@ -4,7 +4,14 @@ import { HAConnection, Room, UIState, ChatMessage, Suggestion } from '../types'
 import { HAWebSocket } from '../utils/ha-websocket'
 import { Preferences } from '@capacitor/preferences'
 import { syncGoogleTokens } from '../utils/auth'
-import { buildHAUrl, sanitizeHAToken, fetchWithTimeout } from '../utils/home-assistant'
+import {
+  buildHAUrl,
+  sanitizeHAToken,
+  fetchWithTimeout,
+  getFallbackHAUrl,
+  setFallbackHAUrl,
+  probeBestHAUrl
+} from '../utils/home-assistant'
 import { clearPushTokenForConnection } from '../utils/pushNotifications'
 
 interface AppContextType {
@@ -21,6 +28,12 @@ interface AppContextType {
   haDevices: any[]
   haEntitiesRegistry: any[]
   haSyncSource: 'none' | 'cache' | 'rest' | 'websocket'
+  haLastError: string | null
+  haLastSyncedAt: number | null
+  primaryApiUrl: string
+  fallbackApiUrl: string
+  resolvedApiUrl: string
+  saveFallbackApiUrl: (rawUrl: string) => void
   refreshHAFromServer: () => Promise<{
     states: Record<string, any>
     areas: any[]
@@ -65,6 +78,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [haDevices, setHaDevices] = useState<any[]>([])
   const [haEntitiesRegistry, setHaEntitiesRegistry] = useState<any[]>([])
   const [haSyncSource, setHaSyncSource] = useState<'none' | 'cache' | 'rest' | 'websocket'>('none')
+  const [haLastError, setHaLastError] = useState<string | null>(null)
+  const [haLastSyncedAt, setHaLastSyncedAt] = useState<number | null>(null)
+  const [fallbackApiUrl, setFallbackApiUrlState] = useState<string>('')
+  const [resolvedApiUrl, setResolvedApiUrl] = useState<string>('')
   const [activeSuggestion, setActiveSuggestion] = useState<Suggestion | null>(null)
   const [shouldTriggerVoice, setShouldTriggerVoice] = useState(false)
 
@@ -147,8 +164,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [user?.id])
 
   const activeConnectionId = activeConnection?.id || null
-  const activeApiUrl = activeConnection?.api_url || ''
+  const primaryApiUrl = activeConnection?.api_url || ''
   const activeApiToken = activeConnection?.api_token || (activeConnection as any)?.token || ''
+
+  // Sync connection-scoped fallback URL whenever active connection changes
+  useEffect(() => {
+    if (!activeConnectionId) {
+      setFallbackApiUrlState('')
+      setResolvedApiUrl('')
+      setHaLastError(null)
+      setHaLastSyncedAt(null)
+      return
+    }
+    const savedFallback = getFallbackHAUrl(activeConnectionId)
+    setFallbackApiUrlState(savedFallback)
+    setResolvedApiUrl(primaryApiUrl)
+    setHaLastError(null)
+
+    if (savedFallback && activeApiToken) {
+      let cancelled = false
+      probeBestHAUrl(primaryApiUrl, savedFallback, activeApiToken, 4000).then(res => {
+        if (!cancelled && res.reachable && res.url) {
+          setResolvedApiUrl(res.url)
+        }
+      }).catch(() => {})
+      return () => { cancelled = true }
+    }
+  }, [activeConnectionId, primaryApiUrl, activeApiToken])
+
+  const saveFallbackApiUrl = useCallback((rawUrl: string) => {
+    if (!activeConnectionId) return
+    const saved = setFallbackHAUrl(activeConnectionId, rawUrl)
+    setFallbackApiUrlState(saved)
+    if (saved && activeApiToken) {
+      probeBestHAUrl(primaryApiUrl, saved, activeApiToken, 4500).then(res => {
+        if (res.reachable && res.url) {
+          setResolvedApiUrl(res.url)
+          setHaLastError(null)
+        }
+      }).catch(() => {})
+    } else {
+      setResolvedApiUrl(primaryApiUrl)
+    }
+  }, [activeConnectionId, primaryApiUrl, activeApiToken])
+
+  const activeApiUrl = resolvedApiUrl || primaryApiUrl
 
   // Active connection lifecycle: cache hydration, REST states + rich topology fallback, Rooms, and WebSocket
   useEffect(() => {
@@ -160,6 +220,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setHaDevices([])
       setHaEntitiesRegistry([])
       setHaSyncSource('none')
+      setHaLastError(null)
+      setHaLastSyncedAt(null)
       setActiveSuggestion(null)
       return
     }
@@ -315,7 +377,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let restTopologyInFlight = false
     let restPollTimer: ReturnType<typeof setInterval> | null = null
 
-    // 1. Fresh REST states fetch — fresh states MUST override stale cache!
+    // 1. Fresh REST states fetch — replaces full state map so deleted/ghost entities NEVER linger!
     const fetchStatesViaRest = async () => {
       if (!activeApiUrl || !activeApiToken) return
       try {
@@ -324,8 +386,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             Authorization: `Bearer ${sanitizeHAToken(activeApiToken)}`,
             'Content-Type': 'application/json'
           }
-        }, 18000)
-        if (isCancelled || !res.ok) return
+        }, 10000)
+        if (isCancelled) return
+        if (!res.ok) {
+          setHaLastError(`Home Assistant gaf HTTP ${res.status} op ${activeApiUrl}`)
+          return
+        }
         const states = await res.json()
         if (isCancelled || !Array.isArray(states) || states.length === 0) return
 
@@ -333,13 +399,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         states.forEach((s: any) => {
           if (s?.entity_id) statesObj[s.entity_id] = s
         })
-        setEntityStates(prev => ({ ...prev, ...statesObj }))
+        setEntityStates(statesObj)
+        setHaLastError(null)
+        setHaLastSyncedAt(Date.now())
         setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
         try {
           localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
         } catch { }
         scheduleInitialStateSnapshotSync(statesObj)
-      } catch { }
+      } catch (err: any) {
+        if (!isCancelled) {
+          setHaLastError(err?.message || `Kan ${activeApiUrl} niet bereiken`)
+          // If a fallback URL is configured, automatically probe and switch if reachable!
+          const fb = getFallbackHAUrl(activeConnectionId)
+          if (fb && fb !== activeApiUrl) {
+            probeBestHAUrl(primaryApiUrl, fb, activeApiToken, 4000).then(res => {
+              if (!isCancelled && res.reachable && res.url && res.url !== activeApiUrl) {
+                setResolvedApiUrl(res.url)
+                setHaLastError(null)
+              }
+            }).catch(() => {})
+          }
+        }
+      }
     }
     fetchStatesViaRest()
 
@@ -356,6 +438,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (rich.areas.length > 0) setHaAreas(rich.areas)
         if (rich.devices.length > 0) setHaDevices(rich.devices)
         if (rich.entities.length > 0) setHaEntitiesRegistry(rich.entities)
+        setHaLastError(null)
+        setHaLastSyncedAt(Date.now())
         setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
       } catch (err: any) {
         if (!isCancelled) {
@@ -385,9 +469,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const handleNetworkOrResume = () => {
       if (isCancelled) return
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      fetchStatesViaRest()
-      if (!wsRegistriesLoaded) {
-        runRestTopologyFallback()
+      const fb = getFallbackHAUrl(activeConnectionId)
+      if (fb) {
+        probeBestHAUrl(primaryApiUrl, fb, activeApiToken, 4000).then(res => {
+          if (!isCancelled && res.reachable && res.url && res.url !== activeApiUrl) {
+            setResolvedApiUrl(res.url)
+            return
+          }
+          if (!isCancelled) {
+            fetchStatesViaRest()
+            if (!wsRegistriesLoaded) runRestTopologyFallback()
+          }
+        }).catch(() => {
+          if (!isCancelled) fetchStatesViaRest()
+        })
+      } else {
+        fetchStatesViaRest()
+        if (!wsRegistriesLoaded) {
+          runRestTopologyFallback()
+        }
       }
     }
     if (typeof window !== 'undefined') {
@@ -491,6 +591,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               if (state?.entity_id) statesObj[state.entity_id] = state
             })
             setEntityStates(statesObj)
+            setHaLastError(null)
+            setHaLastSyncedAt(Date.now())
             setHaSyncSource('websocket')
             try {
               localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(statesObj))
@@ -517,6 +619,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (loadedEntities.length > 0) {
             wsRegistriesLoaded = true
             setHaEntitiesRegistry(loadedEntities)
+            setHaLastError(null)
+            setHaLastSyncedAt(Date.now())
             setHaSyncSource('websocket')
             logger.info(`✅ Loaded Registries via WS: ${loadedAreas.length} areas, ${loadedDevices.length} devices, ${loadedEntities.length} entities`)
           } else {
@@ -708,7 +812,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     source: 'rest' | 'websocket' | 'cache'
     error?: string
   }> => {
-    if (!activeConnectionId || !activeApiUrl || !activeApiToken) {
+    if (!activeConnectionId || !primaryApiUrl || !activeApiToken) {
       return { states: entityStates, areas: haAreas, devices: haDevices, entities: haEntitiesRegistry, source: 'cache', error: 'Geen actieve Home Assistant verbinding.' }
     }
 
@@ -723,10 +827,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (haWebSocket && haWebSocket.isConnected()) {
       try {
         const [stRes, arRes, dvRes, enRes] = await Promise.allSettled([
-          haWebSocket.sendMessage({ type: 'get_states' }, 15000),
-          haWebSocket.sendMessage({ type: 'config/area_registry/list' }, 15000),
-          haWebSocket.sendMessage({ type: 'config/device_registry/list' }, 15000),
-          haWebSocket.sendMessage({ type: 'config/entity_registry/list' }, 15000)
+          haWebSocket.sendMessage({ type: 'get_states' }, 10000),
+          haWebSocket.sendMessage({ type: 'config/area_registry/list' }, 10000),
+          haWebSocket.sendMessage({ type: 'config/device_registry/list' }, 10000),
+          haWebSocket.sendMessage({ type: 'config/entity_registry/list' }, 10000)
         ])
         if (stRes.status === 'fulfilled' && stRes.value?.success && Array.isArray(stRes.value.result)) {
           const map: Record<string, any> = {}
@@ -734,6 +838,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           nextStates = map
           setEntityStates(map)
           usedSource = 'websocket'
+          setHaLastError(null)
+          setHaLastSyncedAt(Date.now())
           try { localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(map)) } catch { }
         }
         if (arRes.status === 'fulfilled' && arRes.value?.success && Array.isArray(arRes.value.result)) {
@@ -752,6 +858,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setHaEntitiesRegistry(nextEntities)
           usedSource = 'websocket'
           setHaSyncSource('websocket')
+          setHaLastError(null)
+          setHaLastSyncedAt(Date.now())
           try {
             localStorage.setItem(`ha_registries_${activeConnectionId}`, JSON.stringify({
               areas: nextAreas, devices: nextDevices, entities: nextEntities, updatedAt: Date.now()
@@ -764,16 +872,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 2. Always fetch FRESH REST /api/states + parallel REST rich topology (works on both Wi-Fi HTTP & Tailscale HTTPS!)
+    // 1b. Resolve best reachable URL across Primary + optional Fallback URL (Wi-Fi <-> Tailscale!)
+    let targetUrl = activeApiUrl
+    const fbUrl = getFallbackHAUrl(activeConnectionId)
+    if (fbUrl) {
+      const probe = await probeBestHAUrl(primaryApiUrl, fbUrl, activeApiToken, 4500)
+      if (probe.reachable && probe.url) {
+        targetUrl = probe.url
+        if (probe.url !== activeApiUrl) {
+          setResolvedApiUrl(probe.url)
+        }
+      } else if (probe.error) {
+        lastErr = `${probe.error} (${primaryApiUrl} & ${fbUrl})`
+      }
+    }
+
+    // 2. Always fetch FRESH REST /api/states + parallel REST rich topology (with hard timeout on Android!)
     const [statesSettled, topoSettled] = await Promise.allSettled([
-      fetchWithTimeout(buildHAUrl('/api/states', activeApiUrl), {
+      fetchWithTimeout(buildHAUrl('/api/states', targetUrl), {
         headers: {
           Authorization: `Bearer ${sanitizeHAToken(activeApiToken)}`,
           'Content-Type': 'application/json'
         }
-      }, 15000),
+      }, 9000),
       import('../utils/ha-api').then(({ fetchRichHATopology }) =>
-        fetchRichHATopology(activeApiUrl, activeApiToken, activeConnectionId)
+        fetchRichHATopology(targetUrl, activeApiToken, activeConnectionId)
       )
     ])
 
@@ -785,12 +908,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         nextStates = map
         setEntityStates(map)
         usedSource = 'rest'
+        setHaLastError(null)
+        setHaLastSyncedAt(Date.now())
         setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
         try { localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(map)) } catch { }
       }
     } else {
       lastErr = statesSettled.status === 'rejected'
-        ? (statesSettled.reason?.message || 'Netwerkfout bij ophalen statussen')
+        ? (statesSettled.reason?.message || `Kan ${targetUrl} niet bereiken`)
         : `Home Assistant gaf HTTP ${statesSettled.value.status}`
     }
 
@@ -800,9 +925,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (rich.devices.length > 0) { nextDevices = rich.devices; setHaDevices(rich.devices) }
       if (rich.entities.length > 0) { nextEntities = rich.entities; setHaEntitiesRegistry(rich.entities) }
       usedSource = 'rest'
+      setHaLastError(null)
+      setHaLastSyncedAt(Date.now())
       setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
     } else if (!lastErr) {
       lastErr = topoSettled.reason?.message || 'Kon apparaat-topologie niet vernieuwen'
+    }
+
+    if (usedSource === 'cache' && lastErr) {
+      setHaLastError(lastErr)
     }
 
     return {
@@ -813,13 +944,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       source: usedSource,
       error: usedSource === 'cache' ? lastErr : undefined
     }
-  }, [activeConnectionId, activeApiUrl, activeApiToken, haWebSocket, entityStates, haAreas, haDevices, haEntitiesRegistry])
+  }, [activeConnectionId, primaryApiUrl, activeApiUrl, activeApiToken, haWebSocket, entityStates, haAreas, haDevices, haEntitiesRegistry])
+
+  const effectiveActiveConnection = useMemo<HAConnection | null>(() => {
+    if (!activeConnection) return null
+    if (!resolvedApiUrl || resolvedApiUrl === activeConnection.api_url) return activeConnection
+    return { ...activeConnection, api_url: resolvedApiUrl }
+  }, [activeConnection, resolvedApiUrl])
 
   const contextValue = useMemo<AppContextType>(() => ({
     user,
     loading,
     connections,
-    activeConnection,
+    activeConnection: effectiveActiveConnection,
     rooms,
     chatHistory,
     uiState,
@@ -829,6 +966,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     haDevices,
     haEntitiesRegistry,
     haSyncSource,
+    haLastError,
+    haLastSyncedAt,
+    primaryApiUrl,
+    fallbackApiUrl,
+    resolvedApiUrl: activeApiUrl,
+    saveFallbackApiUrl,
     refreshHAFromServer,
     activeSuggestion,
     setActiveSuggestion,
@@ -843,9 +986,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     shouldTriggerVoice,
     setShouldTriggerVoice,
   }), [
-    user, loading, connections, activeConnection, rooms, chatHistory,
+    user, loading, connections, effectiveActiveConnection, rooms, chatHistory,
     uiState, entityStates, haWebSocket, haAreas, haDevices, haEntitiesRegistry,
-    haSyncSource, refreshHAFromServer, activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
+    haSyncSource, haLastError, haLastSyncedAt, primaryApiUrl, fallbackApiUrl, activeApiUrl, saveFallbackApiUrl,
+    refreshHAFromServer, activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
     updateRoom, updateUIState, addChatMessage, shouldTriggerVoice
   ])
 

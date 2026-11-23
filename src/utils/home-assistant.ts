@@ -30,7 +30,8 @@ export function sanitizeHAToken(token?: string | null): string {
 }
 
 /**
- * Fetch wrapper with AbortController timeout.
+ * Fetch wrapper with hard timeout that works reliably on Android CapacitorHttp
+ * (CapacitorHttp ignores AbortController.signal on POST requests, so Promise.race enforces the deadline).
  */
 export async function fetchWithTimeout(
   url: string,
@@ -38,12 +39,121 @@ export async function fetchWithTimeout(
   timeoutMs = 15000
 ): Promise<Response> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { controller.abort() } catch { }
+      reject(new Error(`Timeout (${Math.round(timeoutMs / 1000)}s): Home Assistant reageert niet`))
+    }, timeoutMs)
+  })
+
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      timeoutPromise
+    ])
   } finally {
-    clearTimeout(timer)
+    if (timer) clearTimeout(timer)
   }
+}
+
+export function getFallbackHAUrl(connectionId?: string | null): string {
+  if (!connectionId || typeof localStorage === 'undefined') return ''
+  try {
+    return normalizeHAUrl(localStorage.getItem(`ha_fallback_url_${connectionId}`) || '')
+  } catch {
+    return ''
+  }
+}
+
+export function setFallbackHAUrl(connectionId: string, rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim()
+  if (!trimmed) {
+    try { localStorage.removeItem(`ha_fallback_url_${connectionId}`) } catch { }
+    return ''
+  }
+  const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+  const clean = normalizeHAUrl(withProto)
+  try { localStorage.setItem(`ha_fallback_url_${connectionId}`, clean) } catch { }
+  return clean
+}
+
+/**
+ * Probes primary + optional fallback URL (e.g. local Wi-Fi + Tailscale) in parallel
+ * and returns the first reachable Home Assistant URL.
+ */
+export async function probeBestHAUrl(
+  primaryUrl: string,
+  fallbackUrl: string,
+  token: string,
+  timeoutMs = 4500
+): Promise<{ url: string; reachable: boolean; error?: string }> {
+  const cleanPrimary = normalizeHAUrl(primaryUrl)
+  const cleanFallback = normalizeHAUrl(fallbackUrl)
+  const candidates = [cleanPrimary, cleanFallback].filter((u, idx, arr) => Boolean(u) && arr.indexOf(u) === idx)
+
+  if (candidates.length === 0) {
+    return { url: cleanPrimary, reachable: false, error: 'Geen Home Assistant URL ingesteld' }
+  }
+
+  const effectiveToken = sanitizeHAToken(token)
+  const probeOne = async (baseUrl: string): Promise<string> => {
+    const res = await fetchWithTimeout(
+      buildHAUrl('/api/', baseUrl),
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${effectiveToken}`,
+          'Content-Type': 'application/json'
+        }
+      },
+      timeoutMs
+    )
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`HTTP ${res.status} (ongeldige token)`)
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    return baseUrl
+  }
+
+  if (candidates.length === 1) {
+    try {
+      const okUrl = await probeOne(candidates[0])
+      return { url: okUrl, reachable: true }
+    } catch (err: any) {
+      return { url: candidates[0], reachable: false, error: err?.message || 'Niet bereikbaar' }
+    }
+  }
+
+  // ES2020-compatible first-fulfilled race (Wi-Fi at home OR Tailscale on 5G — fastest reachable wins!)
+  return await new Promise((resolve) => {
+    let settled = false
+    let failedCount = 0
+    let firstError = 'Geen van de Home Assistant URLs bereikbaar'
+
+    candidates.forEach((candidate) => {
+      probeOne(candidate)
+        .then((winner) => {
+          if (!settled) {
+            settled = true
+            resolve({ url: winner, reachable: true })
+          }
+        })
+        .catch((err: any) => {
+          if (failedCount === 0 && err?.message) {
+            firstError = err.message
+          }
+          failedCount++
+          if (!settled && failedCount >= candidates.length) {
+            settled = true
+            resolve({ url: cleanPrimary, reachable: false, error: firstError })
+          }
+        })
+    })
+  })
 }
 
 function getHeaders(token: string) {

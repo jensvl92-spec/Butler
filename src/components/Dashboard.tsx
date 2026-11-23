@@ -216,7 +216,7 @@ function formatHAStateLabel(state: string, attributes?: Record<string, any>, ent
 }
 
 export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
-    const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry, haSyncSource, refreshHAFromServer } = useApp()
+    const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry, haSyncSource, haLastError, refreshHAFromServer } = useApp()
 
     // State
     const [tiles, setTiles] = useState<DashboardTile[]>(DEFAULT_TILES)
@@ -1156,17 +1156,28 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             const isLooseGroup = (g: DeviceGroup) =>
                 g.id !== 'manual-group' && (
                     g.entities.length === 1 ||
+                    g.id.startsWith('cluster-') ||
+                    g.id.startsWith('orp-') ||
                     g.id.startsWith('grp-') ||
                     g.id.startsWith('live-') ||
                     g.id.startsWith('ent-') ||
                     g.id.startsWith('legacy-')
                 )
 
-            // Step 1: Merge any loose group whose name starts with an existing shorter device's name
-            // in the same room (e.g. "Patje Active map", "Patje Clean", "Patje Relocate" -> "Patje")
+            // Step 1: Merge any loose group whose name equals OR starts with an existing shorter device's name
+            // in the same room (e.g. "Patje" + "Patje" + "Patje Reset" + "Patje Total" -> 1 single "Patje"!)
+            // Prefer core control hosts (vacuum, climate, media, etc.) first, then shortest name.
+            const isCoreHost = (g: DeviceGroup) =>
+                ['vacuum', 'lawn_mower', 'climate', 'water_heater', 'media'].includes(g.primaryEntity?.type || '')
             const hostCandidates = [...tile.deviceGroups]
                 .filter(g => g.id !== 'manual-group')
-                .sort((a, b) => (a.name || '').trim().length - (b.name || '').trim().length)
+                .sort((a, b) => {
+                    const coreDiff = (isCoreHost(b) ? 1 : 0) - (isCoreHost(a) ? 1 : 0)
+                    if (coreDiff !== 0) return coreDiff
+                    const lenDiff = (a.name || '').trim().length - (b.name || '').trim().length
+                    if (lenDiff !== 0) return lenDiff
+                    return b.entities.length - a.entities.length
+                })
 
             const absorbedIds = new Set<string>()
 
@@ -1176,15 +1187,18 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 if (hName.length < 3 || GENERIC_FIRST_WORDS.has(hName)) return
                 const isHostEligible =
                     host.entities.length > 1 ||
-                    ['vacuum', 'lawn_mower', 'climate', 'water_heater', 'media'].includes(host.primaryEntity?.type || '') ||
+                    isCoreHost(host) ||
                     !hName.includes(' ')
                 if (!isHostEligible) return
 
                 tile.deviceGroups.forEach(g => {
                     if (g.id === host.id || absorbedIds.has(g.id) || !isLooseGroup(g)) return
                     const gLower = (g.name || '').trim().toLowerCase()
-                    if (gLower.startsWith(`${hName} `) || gLower.startsWith(`${hName}-`) || gLower.startsWith(`${hName}_`)) {
+                    const isExactMatch = gLower === hName
+                    const isPrefixMatch = gLower.startsWith(`${hName} `) || gLower.startsWith(`${hName}-`) || gLower.startsWith(`${hName}_`)
+                    if (isExactMatch || isPrefixMatch) {
                         host.entities.push(...g.entities)
+                        if (!host.platform && g.platform) host.platform = g.platform
                         absorbedIds.add(g.id)
                     }
                 })
@@ -1193,7 +1207,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             let working = tile.deviceGroups.filter(g => !absorbedIds.has(g.id))
 
             // Step 2: Consolidate 2+ loose groups sharing the same specific non-generic first word
-            // (e.g., "Patje Active map", "Patje Advanced mode", "Patje Clean", "Patje Relocate" -> "Patje"!)
+            // (e.g., "Patje Active map", "Patje Reset", "Patje Total" -> 1 single "Patje"!)
             const roomTokens = new Set(
                 (tile.roomName || '').toLowerCase().split(/[\s_-]+/).filter(Boolean)
             )
@@ -1202,7 +1216,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
             looseGroups.forEach(g => {
                 const words = (g.name || '').trim().split(/\s+/).filter(Boolean)
-                if (words.length < 2) return
+                if (words.length < 1) return
                 const firstClean = words[0].toLowerCase().replace(/[^a-z0-9]/g, '')
                 if (firstClean.length < 3 || GENERIC_FIRST_WORDS.has(firstClean) || roomTokens.has(firstClean)) return
                 if (!buckets.has(firstClean)) buckets.set(firstClean, [])
@@ -1246,8 +1260,15 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 ]
             }
 
-            // Re-score primaryEntity on every group so live available entities always lead!
+            // Deduplicate entities inside each group & re-score primaryEntity so live available entities always lead!
             working.forEach(g => {
+                const seenEids = new Set<string>()
+                g.entities = g.entities.filter(e => {
+                    const k = e.entityId || e.id
+                    if (seenEids.has(k)) return false
+                    seenEids.add(k)
+                    return true
+                })
                 g.entities.sort((a, b) => scorePrimaryEntity(b) - scorePrimaryEntity(a))
                 g.primaryEntity = g.entities[0]
             })
@@ -1290,7 +1311,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     // Automatic smart sync & self-healing:
     // 1. Waits cleanly for HA Device/Entity Registries (WS or Wi-Fi REST /api/template) so REST states never create flat 1-entity soup.
-    // 2. Automatically self-heals any previously ungrouped/fragmented caches (`live-*`, `grp-*`, `legacy-*`, repeated device prefixes like `Patje ...`).
+    // 2. Automatically self-heals any previously ungrouped/fragmented caches (`live-*`, `grp-*`, `cluster-*`, duplicate names like 2x `Patje`).
     useEffect(() => {
         if (!activeConnection?.id) return
         if (loadedConnectionIdRef.current !== activeConnection.id) return
@@ -1299,7 +1320,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const stateCount = Object.keys(entityStates || {}).length
         if (!hasRegistryData && stateCount === 0) return
 
-        const sig = `${activeConnection.id}:v33:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
+        const sig = `${activeConnection.id}:v34:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
         if (lastSyncedSigRef.current === sig) return
 
         const interactiveTypes = new Set([
@@ -1317,18 +1338,26 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         tiles.forEach(t => {
             if (t.roomIcon === 'not_found') hasUngroupedFallbackGroups = true
             const firstWordCounts = new Map<string, number>()
+            const exactNameCounts = new Map<string, number>()
             ;(t.deviceGroups || []).forEach(g => {
                 totalDevicesInTiles++
                 if (g.platform) hasAnyPlatformMeta = true
                 if (g.id.startsWith('live-') || g.id.startsWith('grp-') || g.id.startsWith('legacy-')) {
                     hasUngroupedFallbackGroups = true
                 }
-                if (g.entities.length === 1) {
-                    const fw = (g.name || '').trim().split(/\s+/)[0]?.toLowerCase() || ''
-                    if (fw.length >= 3 && (g.name || '').trim().includes(' ')) {
+                const normName = (g.name || '').trim().toLowerCase()
+                if (normName.length >= 3) {
+                    const ec = (exactNameCounts.get(normName) || 0) + 1
+                    exactNameCounts.set(normName, ec)
+                    if (ec >= 2) hasRepeatedPrefixFragmentation = true
+                }
+                const isLoose = g.entities.length === 1 || g.id.startsWith('cluster-') || g.id.startsWith('orp-')
+                if (isLoose) {
+                    const fw = normName.split(/\s+/)[0] || ''
+                    if (fw.length >= 3) {
                         const c = (firstWordCounts.get(fw) || 0) + 1
                         firstWordCounts.set(fw, c)
-                        if (c >= 3) hasRepeatedPrefixFragmentation = true
+                        if (c >= 2 && (g.id.startsWith('cluster-') || c >= 3)) hasRepeatedPrefixFragmentation = true
                     }
                 }
                 ;(g.entities || []).forEach(e => {
@@ -1408,7 +1437,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             )
 
             if (newTiles.length > 0 || devicesAddedCount > 0) {
-                lastSyncedSigRef.current = `${activeConnection?.id || ''}:v33:reg=${entitiesRegToUse.length}:dev=${devicesToUse.length}:area=${areasToUse.length}:st=${Object.keys(statesToUse).length}`
+                lastSyncedSigRef.current = `${activeConnection?.id || ''}:v34:reg=${entitiesRegToUse.length}:dev=${devicesToUse.length}:area=${areasToUse.length}:st=${Object.keys(statesToUse).length}`
                 setTiles(prev => mergeWithManualGroups(newTiles, prev))
 
                 if (fresh.error) {
@@ -2564,9 +2593,12 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 <div>
                     <h1>Home</h1>
                     <div className="connection-status">
-                        <span className={`status-dot ${activeConnection ? 'connected' : ''}`}></span>
+                        <span
+                            className={`status-dot ${activeConnection ? 'connected' : ''}`}
+                            style={activeConnection && haSyncSource === 'cache' ? { background: '#f59e0b', boxShadow: '0 0 8px rgba(245, 158, 11, 0.7)' } : undefined}
+                        ></span>
                         {activeConnection
-                            ? `${activeConnection.name} • ${availableEntities.length} entiteiten${isSyncingLayout ? ' • Synchroniseren...' : haSyncSource === 'websocket' ? ' • WS' : haSyncSource === 'rest' ? ' • Wi-Fi REST' : ''}`
+                            ? `${activeConnection.name} • ${availableEntities.length} entiteiten${isSyncingLayout ? ' • Synchroniseren...' : haSyncSource === 'websocket' ? ' • Live (WS)' : haSyncSource === 'rest' ? ' • Live (REST)' : haSyncSource === 'cache' ? ' • Offline (cache)' : ''}`
                             : 'Disconnected'}
                     </div>
                 </div>
@@ -2600,6 +2632,21 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                     </div>
                 )}
             </div>
+
+            {activeConnection && haSyncSource === 'cache' && haLastError && (
+                <div style={{
+                    marginBottom: '10px',
+                    padding: '9px 12px',
+                    borderRadius: '12px',
+                    background: 'rgba(245, 158, 11, 0.12)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                    color: '#fde68a',
+                    fontSize: '0.78rem',
+                    lineHeight: 1.4
+                }}>
+                    <strong>⚠️ Offline (oude cache):</strong> {haLastError}. Controleer Wi-Fi/Tailscale of stel een <strong>2e URL</strong> in via <strong>⚙️ Instellingen</strong>.
+                </div>
+            )}
 
             {/* Instant Grouped Device Search Results (tap any device to open its full Control Sheet!) */}
             {normalizedSearch.length >= 2 ? (

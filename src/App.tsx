@@ -30,7 +30,7 @@ export let sharedTextForTranslation: string | null = null
 export const clearSharedText = () => { sharedTextForTranslation = null }
 
 function App() {
-  const { user, loading, connections, activeConnection, setActiveConnection, deleteConnection, setShouldTriggerVoice } = useApp()
+  const { user, loading, connections, activeConnection, haSyncSource, haLastError, resolvedApiUrl, setActiveConnection, deleteConnection, setShouldTriggerVoice } = useApp()
   const [showConnectionModal, setShowConnectionModal] = useState(false)
   const [showConnectionDropdown, setShowConnectionDropdown] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -435,7 +435,10 @@ function App() {
 
         <div style={{ position: 'relative' }}>
           <div className="connection-capsule" onClick={() => setShowConnectionDropdown(!showConnectionDropdown)}>
-            <div className={`status-dot ${activeConnection ? '' : 'disconnected'}`} />
+            <div
+              className={`status-dot ${activeConnection ? '' : 'disconnected'}`}
+              style={activeConnection && haSyncSource === 'cache' ? { background: '#f59e0b', boxShadow: '0 0 8px rgba(245, 158, 11, 0.7)' } : undefined}
+            />
             <span className="name">{activeConnection ? activeConnection.name : 'Geen verbinding'}</span>
             <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>▼</span>
           </div>
@@ -444,31 +447,69 @@ function App() {
             <div style={{
               position: 'absolute', top: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)',
               background: 'var(--bg-elevated)', border: 'var(--glass-border)', borderRadius: '16px',
-              zIndex: 1000, minWidth: '220px', overflow: 'hidden', boxShadow: 'var(--shadow-lg)',
+              zIndex: 1000, minWidth: '250px', maxWidth: '310px', overflow: 'hidden', boxShadow: 'var(--shadow-lg)',
               backdropFilter: 'blur(24px)'
             }}>
               <div style={{ padding: '10px 14px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: 'var(--glass-border)' }}>
                 Home Assistant Verbindingen
               </div>
-              {connections.map(c => (
-                <div key={c.id} onClick={() => { userDisconnectedRef.current = false; setActiveConnection(c); setShowConnectionDropdown(false); }}
-                  style={{
-                    padding: '10px 14px', cursor: 'pointer', borderBottom: 'var(--glass-border)',
-                    fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    background: activeConnection?.id === c.id ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
-                    color: activeConnection?.id === c.id ? '#a5b4fc' : 'var(--text-primary)'
-                  }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div className="status-dot" />
-                    <span>{c.name}</span>
+              {connections.map(c => {
+                const isActive = activeConnection?.id === c.id
+                const isOfflineCache = isActive && haSyncSource === 'cache'
+                const statusLabel = !isActive
+                  ? ''
+                  : haSyncSource === 'websocket'
+                    ? 'Live (WS)'
+                    : haSyncSource === 'rest'
+                      ? 'Live (REST)'
+                      : haSyncSource === 'cache'
+                        ? 'Offline (cache)'
+                        : 'Verbinden...'
+                return (
+                  <div key={c.id} onClick={() => { userDisconnectedRef.current = false; setActiveConnection(c); setShowConnectionDropdown(false); }}
+                    style={{
+                      padding: '10px 14px', cursor: 'pointer', borderBottom: 'var(--glass-border)',
+                      fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px',
+                      background: isActive ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                      color: isActive ? '#a5b4fc' : 'var(--text-primary)'
+                    }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div
+                          className="status-dot"
+                          style={isOfflineCache ? { background: '#f59e0b', boxShadow: '0 0 8px rgba(245, 158, 11, 0.7)' } : undefined}
+                        />
+                        <span style={{ fontWeight: 600 }}>{c.name}</span>
+                        {statusLabel && (
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            background: isOfflineCache ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                            color: isOfflineCache ? '#fbbf24' : '#34d399',
+                            fontWeight: 600
+                          }}>
+                            {statusLabel}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {isActive && resolvedApiUrl ? resolvedApiUrl : c.api_url}
+                      </div>
+                      {isOfflineCache && haLastError && (
+                        <div style={{ fontSize: '0.68rem', color: '#fbbf24', lineHeight: 1.3 }}>
+                          ⚠️ {haLastError}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={(e) => handleDeleteConnection(e, c.id)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', fontSize: '0.9rem', flexShrink: 0 }}
+                      title="Verwijder">
+                      🗑️
+                    </button>
                   </div>
-                  <button onClick={(e) => handleDeleteConnection(e, c.id)}
-                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', fontSize: '0.9rem' }}
-                    title="Verwijder">
-                    🗑️
-                  </button>
-                </div>
-              ))}
+                )
+              })}
               <div onClick={() => { setShowConnectionModal(true); setShowConnectionDropdown(false); }}
                 style={{ padding: '10px 14px', cursor: 'pointer', background: 'rgba(255,255,255,0.03)', fontSize: '0.85rem', color: 'var(--accent-light)', textAlign: 'center', fontWeight: 600 }}>
                 + Nieuwe Verbinding Toevoegen
