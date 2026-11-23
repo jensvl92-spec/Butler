@@ -811,22 +811,84 @@ export async function searchYouTubeVideos(query: string, limit = 5) {
     const cleanQ = (query || '').trim();
     if (!cleanQ) return { error: 'Geen YouTube-zoekterm opgegeven.' };
 
+    // 1. Direct YouTube URL / video ID shortcut
+    const directIdMatch = cleanQ.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (directIdMatch?.[1]) {
+        const vid = directIdMatch[1];
+        return {
+            source: 'YouTube Direct',
+            query: cleanQ,
+            videos: [{ title: cleanQ, channel: '', video_id: vid, url: `https://www.youtube.com/watch?v=${vid}` }]
+        };
+    }
+
+    // 2. Authenticated YouTube Data API v3 (when Google is connected & YouTube API is enabled)
     const auth = await getValidProviderToken('google');
     if (auth.token) {
         try {
             const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=${Math.min(8, limit)}&q=${encodeURIComponent(cleanQ)}`;
             const data = await apiJson(url, auth.token);
-            const videos = (data.items || []).map((item: any) => ({
-                title: item.snippet?.title,
-                channel: item.snippet?.channelTitle,
-                video_id: item.id?.videoId,
-                url: `https://www.youtube.com/watch?v=${item.id?.videoId}`
-            }));
+            const videos = (data.items || [])
+                .filter((item: any) => item?.id?.videoId)
+                .map((item: any) => ({
+                    title: item.snippet?.title,
+                    channel: item.snippet?.channelTitle,
+                    video_id: item.id?.videoId,
+                    url: `https://www.youtube.com/watch?v=${item.id?.videoId}`
+                }));
             if (videos.length > 0) {
                 return { source: 'YouTube API', query: cleanQ, videos };
             }
         } catch { }
     }
+
+    // 3. Zero-API-key instant resolver via YouTube search page (works natively via CapacitorHttp on Android!)
+    try {
+        const res = await fetchWithTimeout(
+            `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQ)}`,
+            {
+                headers: {
+                    'Accept-Language': 'nl-BE,nl;q=0.9,en;q=0.8'
+                }
+            },
+            6000
+        );
+        if (res.ok) {
+            const html = await res.text();
+            const videos: Array<{ title: string; channel: string; video_id: string; url: string }> = [];
+            const seen = new Set<string>();
+            const rendererRegex = /"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"[\s\S]*?"title":\{"runs":\[\{"text":"((?:\\.|[^"\\])*)"\}\]/g;
+            let match: RegExpExecArray | null;
+            while ((match = rendererRegex.exec(html)) !== null && videos.length < Math.min(8, limit)) {
+                const videoId = match[1];
+                if (seen.has(videoId)) continue;
+                seen.add(videoId);
+                let title = match[2];
+                try { title = JSON.parse(`"${match[2]}"`); } catch { }
+                videos.push({
+                    title,
+                    channel: '',
+                    video_id: videoId,
+                    url: `https://www.youtube.com/watch?v=${videoId}`
+                });
+            }
+            if (videos.length === 0) {
+                const fallbackIdMatch = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+                if (fallbackIdMatch?.[1]) {
+                    const videoId = fallbackIdMatch[1];
+                    videos.push({
+                        title: cleanQ,
+                        channel: '',
+                        video_id: videoId,
+                        url: `https://www.youtube.com/watch?v=${videoId}`
+                    });
+                }
+            }
+            if (videos.length > 0) {
+                return { source: 'YouTube Search', query: cleanQ, videos };
+            }
+        }
+    } catch { }
 
     return {
         source: 'YouTube Link',

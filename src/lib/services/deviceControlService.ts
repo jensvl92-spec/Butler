@@ -8,7 +8,7 @@ interface DeviceControlPluginInterface {
     setVolume(opts: { stream?: string; percent?: number; direction?: string }): Promise<{ stream: string; percent: number }>;
     setRingerMode(opts: { mode: 'normal' | 'vibrate' | 'silent' }): Promise<{ mode: string; note?: string }>;
     dialNumber(opts: { phone: string }): Promise<{ opened: boolean; phone: string }>;
-    openApp(opts: { app: string; query?: string }): Promise<{ opened: boolean; app: string }>;
+    openApp(opts: { app: string; query?: string; videoId?: string }): Promise<{ opened: boolean; app: string; playing?: boolean; videoId?: string }>;
     getBatteryStatus(): Promise<{ percent: number; isCharging: boolean }>;
     setKeepScreenOn(opts: { enabled: boolean }): Promise<{ enabled: boolean }>;
 }
@@ -84,19 +84,28 @@ export async function setKeepScreenOn(enabled: boolean): Promise<void> {
     } catch { }
 }
 
-export async function openPhoneApp(app: string, query?: string) {
+export async function openPhoneApp(
+    app: string,
+    query?: string,
+    videoId?: string
+): Promise<{ success: boolean; opened?: boolean; playing?: boolean; app?: string; videoId?: string; error?: string }> {
     if (!Capacitor.isNativePlatform()) {
-        if (app.toLowerCase() === 'youtube' && query) {
-            window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank', 'noopener,noreferrer');
-            return { success: true, opened: true, app: 'youtube' };
+        if (app.toLowerCase() === 'youtube') {
+            const targetUrl = videoId
+                ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&autoplay=1`
+                : query
+                    ? `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
+                    : 'https://www.youtube.com';
+            window.open(targetUrl, '_blank', 'noopener,noreferrer');
+            return { success: true, opened: true, playing: Boolean(videoId), app: 'youtube', videoId };
         }
-        return { error: `App "${app}" openen is alleen beschikbaar op Android.` };
+        return { success: false, error: `App "${app}" openen is alleen beschikbaar op Android.` };
     }
     try {
-        const res = await DeviceControlPlugin.openApp({ app, query });
+        const res = await DeviceControlPlugin.openApp({ app, query, videoId });
         return { success: true, ...res };
     } catch (e: any) {
-        return { error: e?.message || `Kon app "${app}" niet openen.` };
+        return { success: false, error: e?.message || `Kon app "${app}" niet openen.` };
     }
 }
 

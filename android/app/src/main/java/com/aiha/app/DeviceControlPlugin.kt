@@ -1,5 +1,6 @@
 package com.aiha.app
 
+import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -9,6 +10,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.WindowManager
 import com.getcapacitor.JSObject
@@ -190,6 +192,7 @@ class DeviceControlPlugin : Plugin() {
     fun openApp(call: PluginCall) {
         val appName = (call.getString("app") ?: "").lowercase().trim()
         val query = (call.getString("query") ?: "").trim()
+        val rawVideoId = (call.getString("videoId") ?: "").trim()
         val pm = context.packageManager
 
         val packageMap = mapOf(
@@ -244,22 +247,75 @@ class DeviceControlPlugin : Plugin() {
             }
 
             if (appName == "spotify" && query.isNotEmpty()) {
-                val uri = Uri.parse("spotify:search:${Uri.encode(query)}")
-                val intent = Intent(Intent.ACTION_VIEW, uri).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-                activity.startActivity(intent)
+                var startedAutoPlay = false
+                try {
+                    val playIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                        setPackage("com.spotify.music")
+                        putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                        putExtra(SearchManager.QUERY, query)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    activity.startActivity(playIntent)
+                    startedAutoPlay = true
+                } catch (_: Exception) {
+                    val uri = Uri.parse("spotify:search:${Uri.encode(query)}")
+                    val intent = Intent(Intent.ACTION_VIEW, uri).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+                    activity.startActivity(intent)
+                }
                 val res = JSObject()
                 res.put("opened", true)
+                res.put("playing", startedAutoPlay)
                 res.put("app", "spotify")
                 call.resolve(res)
                 return
             }
 
-            if (appName == "youtube" && query.isNotEmpty()) {
-                val uri = Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")
-                val intent = Intent(Intent.ACTION_VIEW, uri).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-                activity.startActivity(intent)
+            if (appName == "youtube" && (rawVideoId.isNotEmpty() || query.isNotEmpty())) {
+                val regexMatch = Regex("(?:youtube\\.com/(?:watch\\?v=|shorts/|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})").find(query)
+                val effectiveVideoId = if (rawVideoId.isNotEmpty()) rawVideoId else (regexMatch?.groupValues?.getOrNull(1) ?: "")
+
+                if (effectiveVideoId.isNotEmpty()) {
+                    // Direct vnd.youtube:<id> launches the native YouTube player and IMMEDIATELY starts playback!
+                    try {
+                        val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$effectiveVideoId")).apply {
+                            setPackage("com.google.android.youtube")
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        activity.startActivity(appIntent)
+                    } catch (_: Exception) {
+                        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$effectiveVideoId")).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        activity.startActivity(webIntent)
+                    }
+                    val res = JSObject()
+                    res.put("opened", true)
+                    res.put("playing", true)
+                    res.put("videoId", effectiveVideoId)
+                    res.put("app", "youtube")
+                    call.resolve(res)
+                    return
+                }
+
+                // Fallback when no videoId was resolved: ask YouTube directly to auto-play top search match
+                var startedAutoPlay = false
+                try {
+                    val playIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                        setPackage("com.google.android.youtube")
+                        putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                        putExtra(SearchManager.QUERY, query)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    activity.startActivity(playIntent)
+                    startedAutoPlay = true
+                } catch (_: Exception) {
+                    val uri = Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")
+                    val intent = Intent(Intent.ACTION_VIEW, uri).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+                    activity.startActivity(intent)
+                }
                 val res = JSObject()
                 res.put("opened", true)
+                res.put("playing", startedAutoPlay)
                 res.put("app", "youtube")
                 call.resolve(res)
                 return

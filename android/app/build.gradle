@@ -8,8 +8,8 @@ android {
         applicationId "com.aiha.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 35
-        versionName "3.5"
+        versionCode 36
+        versionName "3.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     aaptOptions {

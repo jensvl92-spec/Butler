@@ -399,15 +399,15 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'control_media_services',
-            description: 'Bedient Spotify (status, afspelen/zoeken, pauze, volgende, vorige, volume — met automatische app-fallback als er geen actief Spotify Connect apparaat is) en zoekt of opent video\'s op YouTube.',
+            description: 'Bedient Spotify (status, afspelen/zoeken, pauze, volgende, vorige, volume — met automatische app-fallback als er geen actief Spotify Connect apparaat is) en start of zoekt video\'s op YouTube. Gebruik bij YouTube command="play" (of "open") om de beste video direct te starten en af te spelen in de YouTube-app; gebruik command="search" enkel als de gebruiker expliciet een keuzelijst vraagt.',
             parameters: {
                 type: 'object',
                 properties: {
                     service: { type: 'string', enum: ['spotify', 'youtube'], description: 'Mediadienst.' },
-                    command: { type: 'string', enum: ['status', 'play', 'pause', 'next', 'previous', 'volume', 'search', 'open'], description: 'Commando (Spotify: status/play/pause/next/previous/volume; YouTube: search/open).' },
+                    command: { type: 'string', enum: ['status', 'play', 'pause', 'next', 'previous', 'volume', 'search', 'open'], description: 'Commando (Spotify: status/play/pause/next/previous/volume; YouTube: play/open om direct af te spelen, search voor alleen een lijst).' },
                     query: { type: 'string', description: 'Nummer, artiest, playlist of video-zoekterm.' },
                     volume_percent: { type: 'number', description: 'Spotify volume 0-100 (bij command="volume").' },
-                    open_directly: { type: 'boolean', description: 'True om YouTube/Spotify direct op de telefoon te openen.' }
+                    open_directly: { type: 'boolean', description: 'True om YouTube/Spotify direct op de telefoon te openen en te starten.' }
                 },
                 required: ['service', 'command']
             }
@@ -2639,7 +2639,21 @@ export async function runClientReActOrchestrator(
                             } else if (act === 'battery') {
                                 toolResult = await getPhoneBatteryStatus();
                             } else if (act === 'open_app') {
-                                toolResult = await openPhoneApp(fnArgs.app_name || '', fnArgs.query);
+                                const targetApp = (fnArgs.app_name || '').trim();
+                                if (targetApp.toLowerCase() === 'youtube' && fnArgs.query) {
+                                    const ytSearch = await searchYouTubeVideos(fnArgs.query, 3).catch(() => null);
+                                    const topVid = ytSearch?.videos?.[0];
+                                    const appRes = await openPhoneApp('youtube', fnArgs.query, topVid?.video_id);
+                                    toolResult = {
+                                        ...appRes,
+                                        title: topVid?.title,
+                                        channel: topVid?.channel,
+                                        video_id: topVid?.video_id,
+                                        url: topVid?.url || `https://www.youtube.com/results?search_query=${encodeURIComponent(fnArgs.query)}`
+                                    };
+                                } else {
+                                    toolResult = await openPhoneApp(targetApp, fnArgs.query);
+                                }
                             } else if (act === 'open_url') {
                                 toolResult = await openExternalUrl(fnArgs.url || '');
                             } else {
@@ -2720,14 +2734,20 @@ export async function runClientReActOrchestrator(
                                     }
                                 }
                             } else {
-                                // YouTube
-                                if (fnArgs.command === 'open' || fnArgs.open_directly) {
-                                    const appRes = await openPhoneApp('youtube', fnArgs.query);
+                                // YouTube: resolve top video first, then immediately start playing it in the YouTube app!
+                                const shouldAutoPlay = fnArgs.command === 'play' || fnArgs.command === 'open' || Boolean(fnArgs.open_directly);
+                                if (shouldAutoPlay) {
                                     const searchRes = fnArgs.query ? await searchYouTubeVideos(fnArgs.query, 3).catch(() => null) : null;
+                                    const topVideo = searchRes?.videos?.[0];
+                                    const appRes = await openPhoneApp('youtube', fnArgs.query, topVideo?.video_id);
                                     toolResult = {
                                         ...appRes,
                                         ...(searchRes || {}),
-                                        url: searchRes?.videos?.[0]?.url || `https://www.youtube.com/results?search_query=${encodeURIComponent(fnArgs.query || '')}`
+                                        playing: Boolean(appRes?.playing || topVideo?.video_id),
+                                        title: topVideo?.title || fnArgs.query,
+                                        channel: topVideo?.channel,
+                                        video_id: topVideo?.video_id,
+                                        url: topVideo?.url || `https://www.youtube.com/results?search_query=${encodeURIComponent(fnArgs.query || '')}`
                                     };
                                 } else {
                                     toolResult = await searchYouTubeVideos(fnArgs.query || '', 5);
