@@ -32,6 +32,13 @@ serve(async (req) => {
     return new Response('Unauthorized: invalid or expired session token.', { status: 401 });
   }
 
+  if (!SPOTIFY_CLIENT_ID) {
+    return new Response(JSON.stringify({ error: 'SPOTIFY_CLIENT_ID secret is not configured in Supabase.' }), {
+      status: 500,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
+  }
+
   const state = await signOAuthState(data.user.id);
   const REDIRECT_URI = `${SUPABASE_URL}/functions/v1/auth-spotify-callback`;
 
@@ -43,8 +50,17 @@ serve(async (req) => {
     state,
   });
 
+  const authorizeUrl = `https://accounts.spotify.com/authorize?${params.toString()}`;
+
+  if (url.searchParams.get('format') === 'json') {
+    return new Response(JSON.stringify({ url: authorizeUrl }), {
+      status: 200,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
   return new Response(null, {
     status: 302,
-    headers: { 'Location': `https://accounts.spotify.com/authorize?${params.toString()}` },
+    headers: { ...CORS_HEADERS, 'Location': authorizeUrl },
   });
 });

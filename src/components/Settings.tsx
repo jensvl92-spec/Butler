@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { signOut, signInWithGoogle } from '../utils/auth';
 import { supabase } from '../lib/supabase';
@@ -870,20 +870,83 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                                 setLinkingProvider('spotify');
                                 setAccountNotice(null);
                                 try {
-                                    const sbUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+                                    const sbUrl = ((import.meta as any).env?.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+                                    const sbAnon = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
                                     const { data: sessionData } = await supabase.auth.getSession();
                                     const jwt = sessionData?.session?.access_token;
                                     if (!sbUrl || !jwt) {
                                         setAccountNotice('⚠️ Log eerst in met je account om Spotify te koppelen.');
-                                    } else {
-                                        const authUrl = `${sbUrl}/functions/v1/auth-spotify-init?access_token=${encodeURIComponent(jwt)}`;
-                                        if (Capacitor.isNativePlatform()) {
-                                            await Browser.open({ url: authUrl });
-                                        } else {
-                                            window.open(authUrl, '_blank', 'noopener,noreferrer');
-                                        }
-                                        setAccountNotice('✅ Spotify-koppelscherm geopend.');
+                                        return;
                                     }
+
+                                    const initEndpoint = `${sbUrl}/functions/v1/auth-spotify-init`;
+                                    const authHeaders: Record<string, string> = {
+                                        Authorization: `Bearer ${jwt}`,
+                                        ...(sbAnon ? { apikey: sbAnon } : {})
+                                    };
+
+                                    let spotifyAuthUrl = '';
+
+                                    if (Capacitor.isNativePlatform()) {
+                                        // Call auth-spotify-init with Bearer JWT header (passes Supabase verify_jwt=true gateway!)
+                                        // and capture the 302 Location redirect directly without opening an unauthenticated URL in Chrome.
+                                        const res = await CapacitorHttp.get({
+                                            url: initEndpoint,
+                                            headers: authHeaders,
+                                            disableRedirects: true,
+                                            connectTimeout: 10000,
+                                            readTimeout: 10000
+                                        });
+
+                                        const hdrs = res.headers || {};
+                                        const locHeader = hdrs.Location || hdrs.location || Object.entries(hdrs).find(([k]) => k.toLowerCase() === 'location')?.[1] || '';
+                                        const jsonUrl = typeof res.data === 'object' && res.data?.url ? String(res.data.url) : '';
+                                        const finalUrl = typeof res.url === 'string' && res.url.startsWith('https://accounts.spotify.com/') ? res.url : '';
+                                        spotifyAuthUrl = String(locHeader || jsonUrl || finalUrl || '').trim();
+
+                                        if (!spotifyAuthUrl) {
+                                            const errDetail = typeof res.data === 'object'
+                                                ? (res.data?.error || res.data?.message || JSON.stringify(res.data))
+                                                : String(res.data || `HTTP ${res.status}`);
+                                            throw new Error(`Kon Spotify-login niet starten (${res.status}): ${errDetail}`);
+                                        }
+                                    } else {
+                                        const res = await fetch(`${initEndpoint}?format=json`, {
+                                            method: 'GET',
+                                            headers: authHeaders,
+                                            redirect: 'manual'
+                                        });
+                                        const locHeader = res.headers.get('location') || '';
+                                        if (locHeader) {
+                                            spotifyAuthUrl = locHeader;
+                                        } else if (res.ok) {
+                                            const body = await res.json().catch(() => null);
+                                            spotifyAuthUrl = body?.url || '';
+                                        } else {
+                                            const txt = await res.text().catch(() => '');
+                                            throw new Error(`HTTP ${res.status}: ${txt}`);
+                                        }
+                                    }
+
+                                    if (!spotifyAuthUrl.startsWith('https://accounts.spotify.com/')) {
+                                        throw new Error(`Ongeldige Spotify URL ontvangen: ${spotifyAuthUrl.slice(0, 80)}`);
+                                    }
+
+                                    const parsedSpotify = new URL(spotifyAuthUrl);
+                                    if (!parsedSpotify.searchParams.get('client_id')) {
+                                        throw new Error('SPOTIFY_CLIENT_ID ontbreekt in je Supabase Edge Function secrets.');
+                                    }
+
+                                    if (Capacitor.isNativePlatform()) {
+                                        const finishListener = await Browser.addListener('browserFinished', () => {
+                                            refreshConnectedAccounts();
+                                            finishListener.remove().catch(() => {});
+                                        });
+                                        await Browser.open({ url: spotifyAuthUrl });
+                                    } else {
+                                        window.open(spotifyAuthUrl, '_blank', 'noopener,noreferrer');
+                                    }
+                                    setAccountNotice('✅ Spotify-inlogscherm geopend. Sluit na akkoord het venster om terug te keren naar Butler.');
                                 } catch (e: any) {
                                     setAccountNotice(`❌ Fout bij Spotify koppelen: ${e?.message || e}`);
                                 } finally {
