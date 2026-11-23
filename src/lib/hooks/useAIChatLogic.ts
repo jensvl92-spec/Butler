@@ -226,7 +226,12 @@ export function useAIChatLogic() {
             if (
                 action.result === 'success' ||
                 action.executedLocally ||
-                ['weather', 'navigation', 'energy', 'info', 'query', 'history', 'logbook', 'camera', 'todo', 'calendar', 'automation', 'search'].includes(action.type) ||
+                [
+                    'weather', 'navigation', 'energy', 'info', 'query', 'history', 'logbook',
+                    'camera', 'todo', 'calendar', 'automation', 'search', 'visual_card',
+                    'deep_reasoning', 'proactive_worker', 'phone_control', 'cooking',
+                    'google_docs', 'google_sheets', 'gmail', 'spotify', 'youtube', 'communicate'
+                ].includes(action.type) ||
                 (typeof action.entity_id === 'string' && (
                     action.entity_id.startsWith('weather.open_meteo') ||
                     action.entity_id.startsWith('device.navigation') ||

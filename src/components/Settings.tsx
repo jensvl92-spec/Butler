@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { registerPlugin } from '@capacitor/core';
-import { signOut } from '../utils/auth';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Browser } from '@capacitor/browser';
+import { signOut, signInWithGoogle } from '../utils/auth';
 import { supabase } from '../lib/supabase';
 import { useApp } from '../lib/AppContext';
 import {
@@ -15,6 +16,10 @@ import {
     supportsReasoningEffort
 } from '../lib/services/modelRegistry';
 import { PROACTIVE_WORKERS, triggerProactiveWorker, ProactiveWorkerId } from '../lib/services/proactiveWorkers';
+import {
+    getConnectedAccountsStatus,
+    ConnectedAccountStatus
+} from '../lib/services/googleWorkspaceService';
 import {
     GEMINI_TTS_VOICES,
     DEEPGRAM_TTS_VOICES_NL,
@@ -75,6 +80,22 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     const [runningWorker, setRunningWorker] = useState<ProactiveWorkerId | null>(null);
     const [workerStatus, setWorkerStatus] = useState<Record<string, { ok: boolean; msg: string }>>({});
 
+    // Connected Personal Assistant Accounts (Google Workspace & Spotify)
+    const emptyAccount: ConnectedAccountStatus = { connected: false, expired: false, hasRefreshToken: false, expiresAt: null };
+    const [connectedAccounts, setConnectedAccounts] = useState<{ google: ConnectedAccountStatus; spotify: ConnectedAccountStatus }>({
+        google: emptyAccount,
+        spotify: emptyAccount
+    });
+    const [linkingProvider, setLinkingProvider] = useState<'google' | 'spotify' | null>(null);
+    const [accountNotice, setAccountNotice] = useState<string | null>(null);
+
+    const refreshConnectedAccounts = async () => {
+        try {
+            const status = await getConnectedAccountsStatus();
+            setConnectedAccounts(status);
+        } catch { }
+    };
+
     useEffect(() => {
         const savedEnabled = localStorage.getItem('floatingButton.enabled') === 'true';
         const savedSnooze = localStorage.getItem('floatingButton.snoozeUntil');
@@ -115,9 +136,13 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         }
 
         checkPermission();
+        refreshConnectedAccounts();
 
         const onVisChange = () => {
-            if (document.visibilityState === 'visible') checkPermission();
+            if (document.visibilityState === 'visible') {
+                checkPermission();
+                refreshConnectedAccounts();
+            }
         };
         document.addEventListener('visibilitychange', onVisChange);
 
@@ -676,6 +701,202 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                     }}>
                         {testResult.message}
                     </div>
+                )}
+            </div>
+
+            {/* Connected Accounts Section (Google Workspace & Spotify) */}
+            <div style={{
+                marginBottom: '24px',
+                padding: '16px',
+                background: 'rgba(16, 185, 129, 0.07)',
+                borderRadius: '12px',
+                border: '1px solid rgba(16, 185, 129, 0.25)'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        🔗 Gekoppelde Accounts
+                    </h3>
+                    <button
+                        type="button"
+                        onClick={refreshConnectedAccounts}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#6ee7b7',
+                            fontSize: '0.75rem',
+                            cursor: 'pointer',
+                            textDecoration: 'underline'
+                        }}
+                    >
+                        ↻ Vernieuw status
+                    </button>
+                </div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: '1.4' }}>
+                    Koppel Google voor Agenda, Docs, Sheets, Tasks, Gmail en YouTube — en Spotify voor directe muziekbediening.
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {/* Google Workspace Row */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '10px',
+                        padding: '10px 12px',
+                        borderRadius: '10px',
+                        background: 'rgba(255,255,255,0.04)',
+                        border: '1px solid rgba(255,255,255,0.09)'
+                    }}>
+                        <div>
+                            <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary, #ffffff)' }}>
+                                📆 Google Workspace
+                            </div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary, #9ca3af)' }}>
+                                Agenda, Docs, Sheets, Tasks, Gmail & YouTube
+                            </div>
+                            <span style={{
+                                display: 'inline-block',
+                                marginTop: '4px',
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                padding: '2px 7px',
+                                borderRadius: '999px',
+                                background: connectedAccounts.google.connected
+                                    ? (connectedAccounts.google.expired ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)')
+                                    : 'rgba(148, 163, 184, 0.16)',
+                                color: connectedAccounts.google.connected
+                                    ? (connectedAccounts.google.expired ? '#fbbf24' : '#34d399')
+                                    : '#cbd5e1'
+                            }}>
+                                {connectedAccounts.google.connected
+                                    ? (connectedAccounts.google.expired ? '🟡 Verlopen — tik om te vernieuwen' : '🟢 Verbonden')
+                                    : '⚪ Niet gekoppeld'}
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            disabled={linkingProvider !== null}
+                            onClick={async () => {
+                                setLinkingProvider('google');
+                                setAccountNotice(null);
+                                try {
+                                    const { error } = await signInWithGoogle();
+                                    if (error) {
+                                        setAccountNotice(`❌ Google koppelen mislukt: ${error.message}`);
+                                    } else {
+                                        setAccountNotice('✅ Google-inlogscherm geopend. Na toestemming wordt de koppeling automatisch actief.');
+                                    }
+                                } catch (e: any) {
+                                    setAccountNotice(`❌ Fout bij Google koppelen: ${e?.message || e}`);
+                                } finally {
+                                    setLinkingProvider(null);
+                                }
+                            }}
+                            style={{
+                                padding: '8px 12px',
+                                borderRadius: '8px',
+                                border: 'none',
+                                background: '#4f46e5',
+                                color: '#ffffff',
+                                fontWeight: 700,
+                                fontSize: '0.78rem',
+                                cursor: linkingProvider ? 'wait' : 'pointer',
+                                whiteSpace: 'nowrap'
+                            }}
+                        >
+                            {linkingProvider === 'google'
+                                ? '⏳ ...'
+                                : (connectedAccounts.google.connected ? '↻ Vernieuw Google' : '🔗 Koppel Google')}
+                        </button>
+                    </div>
+
+                    {/* Spotify Row */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '10px',
+                        padding: '10px 12px',
+                        borderRadius: '10px',
+                        background: 'rgba(255,255,255,0.04)',
+                        border: '1px solid rgba(255,255,255,0.09)'
+                    }}>
+                        <div>
+                            <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-primary, #ffffff)' }}>
+                                🎵 Spotify
+                            </div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary, #9ca3af)' }}>
+                                Afspelen, pauzeren, nummers kiezen & volume
+                            </div>
+                            <span style={{
+                                display: 'inline-block',
+                                marginTop: '4px',
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                padding: '2px 7px',
+                                borderRadius: '999px',
+                                background: connectedAccounts.spotify.connected
+                                    ? (connectedAccounts.spotify.expired ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)')
+                                    : 'rgba(148, 163, 184, 0.16)',
+                                color: connectedAccounts.spotify.connected
+                                    ? (connectedAccounts.spotify.expired ? '#fbbf24' : '#34d399')
+                                    : '#cbd5e1'
+                            }}>
+                                {connectedAccounts.spotify.connected
+                                    ? (connectedAccounts.spotify.expired ? '🟡 Verlopen — tik om te vernieuwen' : '🟢 Verbonden')
+                                    : '⚪ Niet gekoppeld (app-fallback actief)'}
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            disabled={linkingProvider !== null}
+                            onClick={async () => {
+                                setLinkingProvider('spotify');
+                                setAccountNotice(null);
+                                try {
+                                    const sbUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+                                    const { data: sessionData } = await supabase.auth.getSession();
+                                    const jwt = sessionData?.session?.access_token;
+                                    if (!sbUrl || !jwt) {
+                                        setAccountNotice('⚠️ Log eerst in met je account om Spotify te koppelen.');
+                                    } else {
+                                        const authUrl = `${sbUrl}/functions/v1/auth-spotify-init?access_token=${encodeURIComponent(jwt)}`;
+                                        if (Capacitor.isNativePlatform()) {
+                                            await Browser.open({ url: authUrl });
+                                        } else {
+                                            window.open(authUrl, '_blank', 'noopener,noreferrer');
+                                        }
+                                        setAccountNotice('✅ Spotify-koppelscherm geopend.');
+                                    }
+                                } catch (e: any) {
+                                    setAccountNotice(`❌ Fout bij Spotify koppelen: ${e?.message || e}`);
+                                } finally {
+                                    setLinkingProvider(null);
+                                }
+                            }}
+                            style={{
+                                padding: '8px 12px',
+                                borderRadius: '8px',
+                                border: 'none',
+                                background: '#16a34a',
+                                color: '#ffffff',
+                                fontWeight: 700,
+                                fontSize: '0.78rem',
+                                cursor: linkingProvider ? 'wait' : 'pointer',
+                                whiteSpace: 'nowrap'
+                            }}
+                        >
+                            {linkingProvider === 'spotify'
+                                ? '⏳ ...'
+                                : (connectedAccounts.spotify.connected ? '↻ Vernieuw Spotify' : '🎵 Koppel Spotify')}
+                        </button>
+                    </div>
+                </div>
+
+                {accountNotice && (
+                    <p style={{ margin: '10px 0 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        {accountNotice}
+                    </p>
                 )}
             </div>
 

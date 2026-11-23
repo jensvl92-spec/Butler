@@ -5,6 +5,7 @@ import { useAIChatLogic } from '../lib/hooks/useAIChatLogic'
 import { useDeepgramVoice } from '../lib/hooks/useDeepgramVoice'
 import { supabase } from '../lib/supabase'
 import { saveHAAutomation, manageHATodoItem } from '../utils/ha-api'
+import { startNativeTimer, openExternalUrl, openTurnByTurnNavigation } from '../lib/services/deviceControlService'
 
 // @ts-ignore
 import { logger } from '../utils/logger'
@@ -197,6 +198,8 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
   const [activatingAutomations, setActivatingAutomations] = useState<Record<string, boolean>>({})
   const [copiedYaml, setCopiedYaml] = useState<string | null>(null)
   const [expandedYaml, setExpandedYaml] = useState<Record<string, boolean>>({})
+  const [expandedIngredients, setExpandedIngredients] = useState<Record<string, boolean>>({})
+  const [startedTimers, setStartedTimers] = useState<Record<string, boolean>>({})
   const chatEndRef = useRef<HTMLDivElement>(null)
 
   const { isListening, isStarting, isFinalizing, partialTranscript, startListening, stopListening, error: voiceError, isWhisper } = useDeepgramVoice({
@@ -885,6 +888,310 @@ export function AIChat({ disableGlobalVoiceListeners = false }: AIChatProps = {}
                               }}
                             >
                               🧠 Adaptief geëscaleerd → {a.data.model_used || 'Deep Reasoner'} ({depthLabel})
+                            </div>
+                          );
+                        }
+
+                        // G1. Interactive Step-by-Step Cooking Assistant Card
+                        if (a.type === 'cooking' && a.data?.active && a.data?.current_step) {
+                          const ck = a.data;
+                          const stepNum = Number(ck.step_number) || 1;
+                          const totalSteps = Math.max(1, Number(ck.total_steps) || 1);
+                          const pct = Math.min(100, Math.round((stepNum / totalSteps) * 100));
+                          const cardKey = `${msg.id || i}_${ck.recipe_id || 'recipe'}_${stepNum}`;
+                          const showIng = !!expandedIngredients[cardKey];
+                          const timerMins = Number(ck.suggested_timer_minutes) || 0;
+                          const timerStarted = !!startedTimers[cardKey];
+
+                          return (
+                            <div
+                              key={i}
+                              className="chat-widget-card"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '10px',
+                                padding: '14px',
+                                borderRadius: '14px',
+                                background: 'linear-gradient(145deg, rgba(245, 158, 11, 0.14), rgba(15, 23, 42, 0.9))',
+                                border: '1px solid rgba(245, 158, 11, 0.35)'
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#fde68a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span>🍳</span>
+                                  <span>{ck.title}</span>
+                                </div>
+                                <span style={{
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  padding: '3px 8px',
+                                  borderRadius: '999px',
+                                  background: 'rgba(245, 158, 11, 0.22)',
+                                  color: '#fbbf24',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  Stap {stepNum} / {totalSteps}
+                                </span>
+                              </div>
+
+                              {/* Progress Bar */}
+                              <div style={{ height: '5px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                                <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, #f59e0b, #fbbf24)', borderRadius: '999px', transition: 'width 0.3s ease' }} />
+                              </div>
+
+                              {/* Current Step Instruction */}
+                              <div style={{ fontSize: '0.9rem', lineHeight: 1.48, color: '#f8fafc', fontWeight: 500 }}>
+                                {ck.current_step}
+                              </div>
+
+                              {ck.tip && (
+                                <div style={{ fontSize: '0.76rem', color: '#fde68a', background: 'rgba(245, 158, 11, 0.1)', padding: '6px 9px', borderRadius: '8px' }}>
+                                  👨‍🍳 Tip: {ck.tip}
+                                </div>
+                              )}
+
+                              {/* Primary Cooking Navigation & Timer Buttons */}
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
+                                <button
+                                  type="button"
+                                  disabled={ck.is_first_step || loading}
+                                  onClick={() => sendMessage('Vorige stap')}
+                                  style={{
+                                    padding: '7px 11px',
+                                    borderRadius: '9px',
+                                    border: '1px solid rgba(255,255,255,0.14)',
+                                    background: 'rgba(255,255,255,0.06)',
+                                    color: ck.is_first_step ? 'rgba(255,255,255,0.35)' : '#f8fafc',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 600,
+                                    cursor: ck.is_first_step ? 'not-allowed' : 'pointer'
+                                  }}
+                                >
+                                  ⬅ Vorige
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={loading}
+                                  onClick={() => sendMessage(ck.is_last_step ? 'Kookmodus afronden, ik ben klaar' : 'Volgende stap')}
+                                  style={{
+                                    flex: 1,
+                                    minWidth: '120px',
+                                    padding: '7px 12px',
+                                    borderRadius: '9px',
+                                    border: 'none',
+                                    background: ck.is_last_step ? 'linear-gradient(135deg, #10b981, #059669)' : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                                    color: '#0f172a',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 800,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  {ck.is_last_step ? '✅ Gerecht Afronden' : 'Volgende stap ➡'}
+                                </button>
+                                {timerMins > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await startNativeTimer(timerMins * 60, `${ck.title} (stap ${stepNum})`);
+                                      setStartedTimers(prev => ({ ...prev, [cardKey]: true }));
+                                    }}
+                                    style={{
+                                      padding: '7px 11px',
+                                      borderRadius: '9px',
+                                      border: '1px solid rgba(56, 189, 248, 0.4)',
+                                      background: timerStarted ? 'rgba(16, 185, 129, 0.2)' : 'rgba(56, 189, 248, 0.16)',
+                                      color: timerStarted ? '#6ee7b7' : '#7dd3fc',
+                                      fontSize: '0.78rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {timerStarted ? `✅ Timer ${timerMins}m loopt` : `⏱️ Timer ${timerMins} min`}
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Secondary Row: Ingredients Toggle + Send to Shopping List */}
+                              {Array.isArray(ck.ingredients) && ck.ingredients.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px', paddingTop: '2px' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedIngredients(prev => ({ ...prev, [cardKey]: !prev[cardKey] }))}
+                                    style={{
+                                      padding: '5px 10px',
+                                      borderRadius: '8px',
+                                      border: '1px solid rgba(255,255,255,0.12)',
+                                      background: 'rgba(255,255,255,0.04)',
+                                      color: '#cbd5e1',
+                                      fontSize: '0.74rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {showIng ? '▲ Verberg ingrediënten' : `📋 Ingrediënten (${ck.servings} pers.)`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={loading}
+                                    onClick={() => sendMessage(`Zet alle ingrediënten voor "${ck.title}" (${ck.servings} personen) op mijn boodschappenlijst.`)}
+                                    style={{
+                                      padding: '5px 10px',
+                                      borderRadius: '8px',
+                                      border: '1px solid rgba(16, 185, 129, 0.35)',
+                                      background: 'rgba(16, 185, 129, 0.12)',
+                                      color: '#6ee7b7',
+                                      fontSize: '0.74rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    🛒 Op boodschappenlijst
+                                  </button>
+                                </div>
+                              )}
+
+                              {showIng && Array.isArray(ck.ingredients) && (
+                                <ul style={{ margin: '2px 0 0 0', paddingLeft: '18px', fontSize: '0.78rem', color: '#e2e8f0', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                  {ck.ingredients.map((ing: string, idx: number) => (
+                                    <li key={idx}>{ing}</li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        // G2. Navigation & OSRM Route Card
+                        if (a.type === 'navigation' && a.data?.found) {
+                          const nav = a.data;
+                          const dist = nav.distance_km ?? nav.estimated_distance_km;
+                          const mins = nav.duration_minutes ?? nav.estimated_duration_minutes;
+                          return (
+                            <div
+                              key={i}
+                              className="chat-widget-card"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '9px',
+                                padding: '12px 14px',
+                                borderRadius: '14px',
+                                background: 'linear-gradient(145deg, rgba(59, 130, 246, 0.16), rgba(15, 23, 42, 0.88))',
+                                border: '1px solid rgba(59, 130, 246, 0.35)'
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#93c5fd' }}>
+                                  🗺️ Route & Reistijd
+                                </div>
+                                {nav.eta_arrival_time && (
+                                  <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#34d399' }}>
+                                    Aankomst ~{nav.eta_arrival_time}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'baseline' }}>
+                                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f8fafc' }}>{mins} min</span>
+                                <span style={{ fontSize: '0.88rem', color: '#cbd5e1', fontWeight: 600 }}>{dist} km</span>
+                              </div>
+                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => openTurnByTurnNavigation(nav.destination, nav.mode || 'driving')}
+                                  style={{
+                                    padding: '7px 12px',
+                                    borderRadius: '9px',
+                                    border: 'none',
+                                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                                    color: '#ffffff',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  🧭 Start Navigatie
+                                </button>
+                                {(nav.maps_url || nav.url) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openExternalUrl(nav.maps_url || nav.url)}
+                                    style={{
+                                      padding: '7px 11px',
+                                      borderRadius: '9px',
+                                      border: '1px solid rgba(148, 163, 184, 0.3)',
+                                      background: 'rgba(255,255,255,0.05)',
+                                      color: '#e2e8f0',
+                                      fontSize: '0.78rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    🔗 Open in Maps
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // G3. Direct Open-Link Action Chip for Google Docs / Sheets / YouTube / Calendar / WhatsApp
+                        if (
+                          ['google_docs', 'google_sheets', 'youtube', 'calendar', 'communicate'].includes(a.type) &&
+                          (a.data?.url || a.data?.videos?.[0]?.url) &&
+                          a.result !== 'error'
+                        ) {
+                          const targetUrl = a.data?.url || a.data?.videos?.[0]?.url;
+                          const labelMap: Record<string, string> = {
+                            google_docs: `📄 Open "${a.data?.title || 'Google Doc'}"`,
+                            google_sheets: `📊 Open "${a.data?.title || 'Google Sheet'}"`,
+                            youtube: `▶️ Open op YouTube`,
+                            calendar: `📅 Bekijk in Google Calendar`,
+                            communicate: `💬 Open WhatsApp`
+                          };
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => openExternalUrl(targetUrl)}
+                              className="action-badge"
+                              style={{
+                                alignSelf: 'flex-start',
+                                cursor: 'pointer',
+                                background: 'rgba(59, 130, 246, 0.16)',
+                                color: '#93c5fd',
+                                border: '1px solid rgba(59, 130, 246, 0.38)',
+                                fontWeight: 600
+                              }}
+                            >
+                              {labelMap[a.type] || '🔗 Openen'} ↗
+                            </button>
+                          );
+                        }
+
+                        // G4. Friendly Phone Hardware Control Badge
+                        if (a.type === 'phone_control') {
+                          const isErr = a.result === 'error';
+                          let label = a.service || 'phone_control';
+                          if (!isErr && a.data) {
+                            if (a.service === 'phone.flashlight') label = a.data.enabled ? '🔦 Zaklamp AAN' : '🔦 Zaklamp UIT';
+                            else if (a.service === 'phone.volume') label = `🔊 Volume (${a.data.stream || 'media'}): ${a.data.percent ?? ''}%`;
+                            else if (a.service === 'phone.ringer_mode') label = `🔕 Modus: ${a.data.mode}`;
+                            else if (a.service === 'phone.battery') label = `🔋 Batterij: ${a.data.percent}%${a.data.isCharging ? ' ⚡' : ''}`;
+                            else if (a.service === 'phone.open_app') label = `📱 App geopend: ${a.data.app}`;
+                          }
+                          return (
+                            <div
+                              key={i}
+                              className="action-badge"
+                              style={{
+                                alignSelf: 'flex-start',
+                                ...(isErr
+                                  ? { background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.35)' }
+                                  : { background: 'rgba(16, 185, 129, 0.14)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.32)' })
+                              }}
+                            >
+                              {isErr ? `❌ ${a.data?.error || label}` : label}
                             </div>
                           );
                         }

@@ -3,6 +3,7 @@ package com.aiha.app;
 import com.getcapacitor.BridgeActivity;
 import com.aiha.app.FloatingButtonPlugin;
 import com.aiha.app.TimerPlugin;
+import com.aiha.app.DeviceControlPlugin;
 import android.content.Intent;
 import android.os.Bundle;
 
@@ -13,6 +14,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(FloatingButtonPlugin.class);
         registerPlugin(TimerPlugin.class);
+        registerPlugin(DeviceControlPlugin.class);
         super.onCreate(savedInstanceState);
         checkVoiceIntent(getIntent());
     }

@@ -36,6 +36,32 @@ import {
     supportsReasoningEffort
 } from './modelRegistry';
 import { triggerProactiveWorker, ProactiveWorkerId } from './proactiveWorkers';
+import {
+    setPhoneFlashlight,
+    setPhoneVolume,
+    setPhoneRingerMode,
+    getPhoneBatteryStatus,
+    openPhoneApp,
+    openTurnByTurnNavigation,
+    openExternalUrl,
+    communicateWithContact
+} from './deviceControlService';
+import {
+    executeCookingAssistant,
+    getActiveRecipeSession
+} from './cookingService';
+import {
+    listGoogleCalendarEvents,
+    createGoogleCalendarEvent,
+    updateGoogleCalendarEvent,
+    deleteGoogleCalendarEvent,
+    manageGoogleDocs,
+    manageGoogleSheets,
+    manageGoogleTasks,
+    manageGmail,
+    controlSpotify,
+    searchYouTubeVideos
+} from './googleWorkspaceService';
 
 export {
     GOOGLE_GEMINI_API_URL,
@@ -204,13 +230,17 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'manage_todo_list',
-            description: 'Beheert to-do lijsten en boodschappenlijsten in Home Assistant (bekijken, toevoegen, afvinken, verwijderen).',
+            description: 'Beheert to-do lijsten en boodschappenlijsten in zowel Home Assistant (todo.*) als Google Tasks (bekijken, enkel item of hele ingrediëntenlijst in één keer toevoegen, afvinken, verwijderen).',
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['list', 'add', 'complete', 'remove'], description: 'De actie op de lijst.' },
-                    item: { type: 'string', description: 'Naam van het item (vereist bij add/complete/remove).' },
-                    list_entity_id: { type: 'string', description: 'Optionele todo entity_id; indien leeg wordt de eerste lijst gekozen.' }
+                    action: { type: 'string', enum: ['list', 'add', 'add_many', 'complete', 'remove', 'list_lists'], description: 'De actie op de lijst (gebruik add_many voor meerdere boodschappen/ingrediënten tegelijk).' },
+                    source: { type: 'string', enum: ['auto', 'ha', 'google'], description: 'Doelsysteem: auto (standaard: HA todo indien beschikbaar, anders Google Tasks), ha (Home Assistant), of google (Google Tasks).' },
+                    item: { type: 'string', description: 'Naam van één item (vereist bij add/complete/remove).' },
+                    items: { type: 'array', items: { type: 'string' }, description: 'Lijst van items (vereist bij add_many, bv. alle ingrediënten van een recept).' },
+                    list_entity_id: { type: 'string', description: 'Optionele Home Assistant todo entity_id (bv. todo.shopping_list).' },
+                    list_id: { type: 'string', description: 'Optionele Google Tasks lijst-ID (standaard @default).' },
+                    due_date: { type: 'string', description: 'Optionele vervaldatum ISO (voor Google Tasks).' }
                 },
                 required: ['action']
             }
@@ -219,14 +249,184 @@ const ORCHESTRATOR_TOOLS = [
     {
         type: 'function',
         function: {
-            name: 'get_calendar_events',
-            description: 'Haalt geplande afspraken en ophaaldagen op uit alle gekoppelde Home Assistant kalenders (of één specifieke kalender).',
+            name: 'manage_calendar',
+            description: 'Beheert agenda en afspraken over zowel Home Assistant kalenders als Google Calendar: afspraken bekijken (combineert beide bronnen), of nieuwe afspraken aanmaken, aanpassen en verwijderen in Google Calendar.',
             parameters: {
                 type: 'object',
                 properties: {
-                    calendar_entity_id: { type: 'string', description: 'Optionele kalender entity_id; indien leeg worden alle kalenders doorzocht.' },
-                    days_ahead: { type: 'number', description: 'Aantal dagen vooruit (standaard 7).' }
-                }
+                    action: { type: 'string', enum: ['list', 'create', 'update', 'delete'], description: 'Actie: list (bekijk HA + Google Calendar), create, update of delete (Google Calendar).' },
+                    days_ahead: { type: 'number', description: 'Aantal dagen vooruit bij action="list" (standaard 7, max 90).' },
+                    calendar_entity_id: { type: 'string', description: 'Optionele specifieke Home Assistant kalender entity_id bij action="list".' },
+                    summary: { type: 'string', description: 'Titel van de afspraak (bij create/update).' },
+                    start_time: { type: 'string', description: 'Lokale starttijd in ISO-formaat zonder Z, bv. "2026-11-24T14:30:00" (bij create/update).' },
+                    duration_minutes: { type: 'number', description: 'Duur in minuten (standaard 60, bij create/update).' },
+                    location: { type: 'string', description: 'Optionele locatie van de afspraak.' },
+                    description: { type: 'string', description: 'Optionele notities/omschrijving.' },
+                    event_id: { type: 'string', description: 'Google Calendar event_id (vereist bij update/delete; haal eerst op met action="list").' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'control_phone',
+            description: 'Bedient hardware, systeeminstellingen en apps rechtstreeks op de Android-telefoon van de gebruiker: zaklamp (aan/uit/toggle), mediavolume/belvolume/alarmvolume, geluidsmodus (normaal/trillen/stil), batterijstatus uitlezen, apps openen (Spotify, YouTube, Maps, WhatsApp, Docs, Sheets, Instellingen, Wi-Fi, Bluetooth) of een web-URL openen.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['flashlight', 'volume', 'ringer_mode', 'battery', 'open_app', 'open_url'],
+                        description: 'Welke telefoonfunctie je wilt uitvoeren.'
+                    },
+                    flashlight_mode: { type: 'string', enum: ['on', 'off', 'toggle'], description: 'Bij action="flashlight": on, off of toggle.' },
+                    volume_stream: { type: 'string', enum: ['media', 'ring', 'alarm', 'notification', 'call'], description: 'Bij action="volume": welk geluidskanaal (standaard media).' },
+                    volume_percent: { type: 'number', description: 'Bij action="volume": exact percentage 0-100.' },
+                    volume_direction: { type: 'string', enum: ['up', 'down', 'mute'], description: 'Bij action="volume": relatief harder, zachter of dempen.' },
+                    ringer_mode: { type: 'string', enum: ['normal', 'vibrate', 'silent'], description: 'Bij action="ringer_mode": normaal, trillen of stil.' },
+                    app_name: { type: 'string', description: 'Bij action="open_app": bv. spotify, youtube, maps, whatsapp, gmail, calendar, docs, sheets, drive, waze, settings, wifi, bluetooth.' },
+                    query: { type: 'string', description: 'Optionele zoekterm bij open_app (bv. voor YouTube, Spotify of Maps).' },
+                    url: { type: 'string', description: 'Bij action="open_url": de te openen https:// URL.' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'cooking_assistant',
+            description: 'Interactieve stap-voor-stap kookassistent met blijvende kooksessie, automatisch scherm-aan houden, porties herschalen en ingebouwde kooktimers. Gebruik start_recipe zodra de gebruiker een gerecht stap voor stap wil koken; gebruik next_step/previous_step/repeat_step/goto_step/scale_servings/list_ingredients/finish_recipe tijdens het koken.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['start_recipe', 'next_step', 'previous_step', 'goto_step', 'repeat_step', 'get_status', 'list_ingredients', 'scale_servings', 'finish_recipe'],
+                        description: 'Kookactie.'
+                    },
+                    title: { type: 'string', description: 'Naam van het gerecht (vereist bij start_recipe).' },
+                    servings: { type: 'number', description: 'Aantal personen (bij start_recipe of scale_servings).' },
+                    prep_time: { type: 'string', description: 'Optionele voorbereidingstijd (bv. "15 min").' },
+                    cook_time: { type: 'string', description: 'Optionele kooktijd (bv. "25 min").' },
+                    ingredients: { type: 'array', items: { type: 'string' }, description: 'Volledige ingrediëntenlijst met hoeveelheden (vereist bij start_recipe).' },
+                    steps: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                instruction: { type: 'string', description: 'Duidelijke, beknopte kookinstructie voor deze stap.' },
+                                timer_minutes: { type: 'number', description: 'Optionele kook-/baktijd in minuten voor deze stap.' },
+                                tip: { type: 'string', description: 'Optionele korte chef-tip.' }
+                            },
+                            required: ['instruction']
+                        },
+                        description: 'Stappenlijst voor het recept (vereist bij start_recipe; maak heldere, korte spreekbare stappen).'
+                    },
+                    step_number: { type: 'number', description: 'Doelstap (1-gebaseerd, bij goto_step).' },
+                    source_url: { type: 'string', description: 'Optionele bron-URL van het recept.' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'manage_google_docs',
+            description: 'Zoekt, leest, maakt aan en bewerkt Google Docs-documenten (tekst toevoegen of zoeken & vervangen).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['list', 'read', 'create', 'append', 'replace_text'], description: 'Actie op Google Docs.' },
+                    document_id: { type: 'string', description: 'Google Docs ID (optioneel als title/query gegeven is).' },
+                    query: { type: 'string', description: 'Zoekterm om documenten te vinden.' },
+                    title: { type: 'string', description: 'Titel van het document (bij create of zoeken).' },
+                    content: { type: 'string', description: 'Tekstinhoud (bij create of append).' },
+                    find_text: { type: 'string', description: 'Te zoeken tekst (bij replace_text).' },
+                    replace_with: { type: 'string', description: 'Vervangende tekst (bij replace_text).' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'manage_google_sheets',
+            description: 'Zoekt, leest, maakt aan en bewerkt Google Sheets-spreadsheets (rijen toevoegen of celbereik bijwerken; herkent automatisch Blad1/Sheet1).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['list', 'read', 'create', 'append_rows', 'update_range'], description: 'Actie op Google Sheets.' },
+                    spreadsheet_id: { type: 'string', description: 'Google Spreadsheet ID (optioneel als title/query gegeven is).' },
+                    query: { type: 'string', description: 'Zoekterm voor spreadsheetnaam.' },
+                    title: { type: 'string', description: 'Naam van nieuwe of te zoeken spreadsheet.' },
+                    range: { type: 'string', description: 'Optioneel bereik zoals "Blad1!A1:D10" (leeg = automatisch eerste tabblad).' },
+                    values: {
+                        type: 'array',
+                        items: { type: 'array', items: { type: 'string' } },
+                        description: '2D array van rijen/cellen (bv. [["Datum","Item","Bedrag"],["2026-11-23","Boodschappen","45,50"]]).'
+                    }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'manage_email',
+            description: 'Beheert Gmail van de gebruiker: ongelezen e-mails ophalen, zoeken, volledige e-mail lezen of een e-mail versturen.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: { type: 'string', enum: ['list_unread', 'search', 'read', 'send'], description: 'Gmail actie.' },
+                    query: { type: 'string', description: 'Gmail zoekterm (bij search, bv. "from:bol.com" of "factuur").' },
+                    message_id: { type: 'string', description: 'E-mail ID (bij read).' },
+                    to: { type: 'string', description: 'Ontvanger e-mailadres (bij send).' },
+                    subject: { type: 'string', description: 'Onderwerp (bij send).' },
+                    body: { type: 'string', description: 'Berichttekst (bij send).' },
+                    limit: { type: 'number', description: 'Max aantal e-mails (standaard 5).' }
+                },
+                required: ['action']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'control_media_services',
+            description: 'Bedient Spotify (status, afspelen/zoeken, pauze, volgende, vorige, volume — met automatische app-fallback als er geen actief Spotify Connect apparaat is) en zoekt of opent video\'s op YouTube.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    service: { type: 'string', enum: ['spotify', 'youtube'], description: 'Mediadienst.' },
+                    command: { type: 'string', enum: ['status', 'play', 'pause', 'next', 'previous', 'volume', 'search', 'open'], description: 'Commando (Spotify: status/play/pause/next/previous/volume; YouTube: search/open).' },
+                    query: { type: 'string', description: 'Nummer, artiest, playlist of video-zoekterm.' },
+                    volume_percent: { type: 'number', description: 'Spotify volume 0-100 (bij command="volume").' },
+                    open_directly: { type: 'boolean', description: 'True om YouTube/Spotify direct op de telefoon te openen.' }
+                },
+                required: ['service', 'command']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'communicate_with_contact',
+            description: 'Zoekt automatisch een contact op in het telefoonboek van de gebruiker en opent WhatsApp, SMS, Line of de telefoondialer met het vooraf ingevulde nummer/bericht.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    channel: { type: 'string', enum: ['whatsapp', 'sms', 'call', 'line'], description: 'Kanaal: whatsapp, sms, call (belt via dialer) of line.' },
+                    contact_name: { type: 'string', description: 'Naam van het contact om op te zoeken (bv. "Mama", "Jan").' },
+                    phone: { type: 'string', description: 'Optioneel direct telefoonnummer.' },
+                    message: { type: 'string', description: 'Berichttekst (voor whatsapp, sms of line).' }
+                },
+                required: ['channel']
             }
         }
     },
@@ -269,12 +469,14 @@ const ORCHESTRATOR_TOOLS = [
         type: 'function',
         function: {
             name: 'get_navigation_eta',
-            description: 'Berekent afstand, geschatte reistijd en Google Maps-routelink naar een bestemming.',
+            description: 'Berekent echte wegafstand en reistijd via OSRM wegennet-routing (auto, fiets, te voet) inclusief aankomsttijd en Google Maps routelink. Kan optioneel ook direct turn-by-turn navigatie op de telefoon starten.',
             parameters: {
                 type: 'object',
                 properties: {
                     destination: { type: 'string', description: 'Bestemming (adres, stad of POI).' },
-                    mode: { type: 'string', enum: ['driving', 'walking', 'bicycling'], description: 'Vervoersmiddel (standaard driving).' }
+                    origin: { type: 'string', description: 'Optioneel vertrekpunt (indien leeg wordt de live GPS-locatie gebruikt).' },
+                    mode: { type: 'string', enum: ['driving', 'walking', 'bicycling'], description: 'Vervoersmiddel (standaard driving).' },
+                    start_navigation: { type: 'boolean', description: 'Zet op true als de gebruiker expliciet vraagt om direct te navigeren / Google Maps te starten.' }
                 },
                 required: ['destination']
             }
@@ -662,6 +864,25 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+async function geocodePlace(query: string): Promise<{ lat: number; lon: number; displayName: string } | null> {
+    try {
+        const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+        const geoRes = await fetchWithTimeout(geoUrl, {}, 8000);
+        if (!geoRes.ok) return null;
+        const geoData = await geoRes.json();
+        if (Array.isArray(geoData) && geoData.length > 0) {
+            return {
+                lat: parseFloat(geoData[0].lat),
+                lon: parseFloat(geoData[0].lon),
+                displayName: geoData[0].display_name
+            };
+        }
+    } catch (e: any) {
+        logger.warn('[ClientOrchestrator] Geocode error:', e?.message);
+    }
+    return null;
+}
+
 async function executeNavigationTool(args: any, userLocation?: { lat: number; lon: number } | null): Promise<any> {
     const dest = (args.destination || '').trim();
     if (!dest) return { error: 'Geen bestemming opgegeven.' };
@@ -669,47 +890,90 @@ async function executeNavigationTool(args: any, userLocation?: { lat: number; lo
     const mode: 'driving' | 'walking' | 'bicycling' =
         ['driving', 'walking', 'bicycling'].includes(args.mode) ? args.mode : 'driving';
 
-    const originLat = userLocation?.lat ?? 50.8503;
-    const originLon = userLocation?.lon ?? 4.3517;
+    const customOrigin = (args.origin || '').trim();
+    const mapsUrl = customOrigin
+        ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(customOrigin)}&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
+        : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`;
 
-    try {
-        const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`;
-        const geoRes = await fetchWithTimeout(geoUrl, {}, 8000);
-        if (geoRes.ok) {
-            const geoData = await geoRes.json();
-            if (Array.isArray(geoData) && geoData.length > 0) {
-                const destLat = parseFloat(geoData[0].lat);
-                const destLon = parseFloat(geoData[0].lon);
-                const straightKm = haversineKm(originLat, originLon, destLat, destLon);
-                // Apply realistic road-factor (1.28x) and mode-specific average speeds
-                const roadKm = straightKm * 1.28;
-                const speedKmh = mode === 'walking' ? 5 : mode === 'bicycling' ? 16 : 55;
-                const estMinutes = Math.max(1, Math.round((roadKm / speedKmh) * 60));
+    let originLat = userLocation?.lat ?? 50.8503;
+    let originLon = userLocation?.lon ?? 4.3517;
+    let originLabel = userLocation ? 'Huidige locatie' : 'Brussel (standaard)';
+    let usedFallbackOrigin = !userLocation;
 
-                return {
-                    found: true,
-                    destination: geoData[0].display_name,
-                    mode,
-                    used_fallback_origin: !userLocation,
-                    estimated_distance_km: Number(roadKm.toFixed(1)),
-                    estimated_duration_minutes: estMinutes,
-                    maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
-                };
-            }
-            return {
-                found: false,
-                error: `Bestemming "${dest}" niet gevonden via OpenStreetMap geocoding.`,
-                maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
-            };
+    if (customOrigin) {
+        const origGeo = await geocodePlace(customOrigin);
+        if (origGeo) {
+            originLat = origGeo.lat;
+            originLon = origGeo.lon;
+            originLabel = origGeo.displayName;
+            usedFallbackOrigin = false;
         }
-    } catch (e: any) {
-        logger.warn('[ClientOrchestrator] Navigation geocode error:', e?.message);
     }
 
+    let navigationLaunched = false;
+    if (args.start_navigation === true) {
+        const navRes = await openTurnByTurnNavigation(dest, mode);
+        navigationLaunched = !!navRes.success;
+    }
+
+    const destGeo = await geocodePlace(dest);
+    if (!destGeo) {
+        return {
+            found: false,
+            navigation_launched: navigationLaunched,
+            error: `Bestemming "${dest}" niet gevonden via OpenStreetMap geocoding.`,
+            url: mapsUrl,
+            maps_url: mapsUrl
+        };
+    }
+
+    // Real road routing via OSRM (zero API key, exact road distance & driving/bike/foot duration)
+    let distanceKm: number | null = null;
+    let durationMin: number | null = null;
+    let routingEngine = 'OSRM (echte wegennet-route)';
+
+    try {
+        const osrmProfile = mode === 'walking' ? 'foot' : mode === 'bicycling' ? 'bike' : 'driving';
+        const osrmUrl = `https://router.project-osrm.org/route/v1/${osrmProfile}/${originLon},${originLat};${destGeo.lon},${destGeo.lat}?overview=false`;
+        const osrmRes = await fetchWithTimeout(osrmUrl, {}, 9000);
+        if (osrmRes.ok) {
+            const osrmData = await osrmRes.json();
+            const route = osrmData?.routes?.[0];
+            if (route && Number.isFinite(route.distance) && Number.isFinite(route.duration)) {
+                distanceKm = Number((route.distance / 1000).toFixed(1));
+                durationMin = Math.max(1, Math.round(route.duration / 60));
+            }
+        }
+    } catch (e: any) {
+        logger.warn('[ClientOrchestrator] OSRM routing fallback triggered:', e?.message);
+    }
+
+    // Graceful Haversine fallback if OSRM is temporarily unreachable
+    if (distanceKm === null || durationMin === null) {
+        const straightKm = haversineKm(originLat, originLon, destGeo.lat, destGeo.lon);
+        const roadKm = straightKm * 1.28;
+        const speedKmh = mode === 'walking' ? 5 : mode === 'bicycling' ? 16 : 60;
+        distanceKm = Number(roadKm.toFixed(1));
+        durationMin = Math.max(1, Math.round((roadKm / speedKmh) * 60));
+        routingEngine = 'Schatting (fallback)';
+    }
+
+    const etaDate = new Date(Date.now() + durationMin * 60 * 1000);
+    const etaTime = etaDate.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+
     return {
-        found: false,
-        error: `Kon geen route berekenen naar "${dest}".`,
-        maps_url: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=${mode}`
+        found: true,
+        routing_engine: routingEngine,
+        origin: originLabel,
+        destination: destGeo.displayName,
+        mode,
+        used_fallback_origin: usedFallbackOrigin,
+        distance_km: distanceKm,
+        duration_minutes: durationMin,
+        eta_arrival_time: etaTime,
+        navigation_launched: navigationLaunched,
+        url: mapsUrl,
+        maps_url: mapsUrl
     };
 }
 
@@ -1409,13 +1673,18 @@ function buildSystemPrompt(options: ClientOrchestratorOptions): string {
         ? `Coördinaten: ${location.lat.toFixed(4)}, ${location.lon.toFixed(4)}`
         : 'Locatie: Thuisbasis (geen live GPS)';
 
-    return `Je bent Butler, een intelligente, snelle en betrouwbare persoonlijke AI-assistent voor Home Assistant en het dagelijks leven.
+    const activeRecipe = getActiveRecipeSession();
+    const activeRecipeSection = activeRecipe
+        ? `\n### ACTIEVE KOOKSESSIE (scherm blijft aan):\n- Gerecht: "${activeRecipe.title}" (${activeRecipe.servings} pers.)\n- Huidige stap: ${activeRecipe.currentStepIndex + 1} van ${activeRecipe.steps.length}: ${activeRecipe.steps[activeRecipe.currentStepIndex]?.instruction || ''}\n- Gebruik \`cooking_assistant\` (next_step, previous_step, repeat_step, goto_step, scale_servings, list_ingredients, finish_recipe) bij vervolgvragen zoals "volgende stap", "terug", "herhaal", "voor 4 personen" of "klaar".\n`
+        : '';
+
+    return `Je bent Butler, een intelligente, snelle en betrouwbare persoonlijke AI-assistent voor zowel Home Assistant als het hele dagelijks leven (telefoon, agenda, documenten, boodschappen, navigatie, koken, media en live internet).
 
 ### CONTEXT:
 - Datum & Tijd: ${dateStr}, ${timeStr}
 - Locatie: ${locationContext}
 - Voorkeurstaal: ${language} (Antwoord in de taal van de gebruiker; standaard Nederlands)
-
+${activeRecipeSection}
 ${ctx.topologySummary}
 ### RELEVANTE ENTITEITEN (${ctx.matchedCount} uit ${devices.length} — gebruik \`search_home_entities\` voor overige apparaten):
 ${ctx.relevantEntitiesSection}
@@ -1424,12 +1693,21 @@ ${ctx.relevantEntitiesSection}
 ${storedMems}
 
 ### RICHTLIJNEN:
-1. Gebruik altijd tools om actuele data (weer, Google Search, energieprijzen, sensoren, historiek, logboek, agenda, to-do, camera) op te halen — verzin nooit waarden.
-2. **Live Google Search (\`google_search\`)**: Voor elke vraag over actuele publieke informatie buiten Home Assistant (zoals Belgische/Nederlandse brandstof- en dieselprijzen vandaag/morgen/gisteren, nieuws, verkeer, openingsuren, sportuitslagen, koersen, productinfo of feiten) MOET je direct \`google_search\` aanroepen. Zeg NOOIT dat je geen Google-zoekfunctie of internettoegang hebt — je beschikt wél over \`google_search\`.
-3. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
-4. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³ vs €/liter) en naam voordat je antwoordt.
-5. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
-6. **Adaptief redeneren**: Behandel snelle dagelijkse vragen (apparaten, weer, zoekopdrachten, prijzen, timers, agenda) direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live HA/sensor/zoek-data eerst hebt opgehaald).
+1. Gebruik altijd je tools om actuele data op te halen of acties uit te voeren — verzin nooit waarden en beweer nooit dat een functie ontbreekt wanneer je er een tool voor hebt.
+2. **Live Google Search (\`google_search\`)**: Voor elke vraag over actuele publieke informatie buiten Home Assistant (zoals Belgische/Nederlandse brandstof- en dieselprijzen vandaag/morgen/gisteren, nieuws, verkeer, openingsuren, sportuitslagen, koersen, authentieke recepten of feiten) MOET je direct \`google_search\` aanroepen.
+3. **Telefoon & Hardware (\`control_phone\`, \`set_timer_or_alarm\`, \`communicate_with_contact\`)**: Je kunt op de Android-telefoon direct de zaklamp aan/uit/toggelen, het volume of de geluidsmodus (normaal/trillen/stil) wijzigen, de batterijstatus uitlezen, apps openen (Spotify, YouTube, Maps, WhatsApp, Docs, Sheets, Instellingen, Wi-Fi, Bluetooth), wekkers/timers zetten en contacten bellen of berichten voorbereiden via WhatsApp/SMS.
+4. **Agenda, Taken, Documenten, Mail & Media**:
+   - \`manage_calendar\` leest zowel Home Assistant-kalenders als Google Calendar tegelijk, en kan afspraken aanmaken/aanpassen/verwijderen in Google Calendar.
+   - \`manage_todo_list\` ondersteunt Home Assistant boodschappenlijsten én Google Tasks, inclusief \`action="add_many"\` om alle ingrediënten van een recept in één keer toe te voegen.
+   - \`manage_google_docs\` & \`manage_google_sheets\` kunnen documenten en spreadsheets opzoeken, lezen, nieuw aanmaken en bewerken.
+   - \`manage_email\` leest en zoekt Gmail; **veiligheid**: verstuur met \`action="send"\` alleen een e-mail als de gebruiker expliciet ontvanger, onderwerp/inhoud en verzendopdracht gaf (vraag anders kort bevestiging).
+   - \`control_media_services\` bedient Spotify en zoekt/opent YouTube.
+   - \`get_navigation_eta\` berekent echte wegennet-routes via OSRM en kan met \`start_navigation=true\` direct Google Maps navigatie starten.
+5. **Stap-voor-stap Koken (\`cooking_assistant\`)**: Wanneer de gebruiker een gerecht wil maken of stap-voor-stap begeleiding vraagt, roep \`cooking_assistant\` aan met \`action="start_recipe"\` (met volledige ingrediëntenlijst en heldere, korte spreekbare stappen inclusief \`timer_minutes\` waar van toepassing). Geef bij elke stap alleen de actuele stap rustig door (niet alle 8 stappen in één keer oplezen!) zodat de gebruiker hands-free met "volgende stap" of de knoppen op het scherm kan koken.
+6. Roep gerust meerdere tools tegelijk aan in één beurt wanneer dat sneller is (ze worden parallel uitgevoerd).
+7. Controleer bij prijzen, eenheden en sensoren altijd de daadwerkelijke eenheid (€/kWh vs €/m³ vs €/liter) en naam voordat je antwoordt.
+8. Voor een camera-snapshot analyseer je het meegestuurde beeld nauwkeurig en beschrijf je wat je ziet.
+9. **Adaptief redeneren**: Behandel snelle dagelijkse vragen direct zelf. Alleen bij complexe vragen (meerstaps-optimalisatie, complexe automatiseringen, programmeren, wiskunde/logica, diepe analyse of hoog-risico advies) roep je \`consult_deep_reasoner\` aan met alle relevante context (nadat je eventuele live data eerst hebt opgehaald).
 
 ### ANTWOORDSTIJL (DUBBEL KANAAL: MENSELIJKE SPRAAK + VISUEEL OVERZICHT):
 Geef altijd een natuurlijk, vlot antwoord zonder stijf taalgebruik. Gebruik daarbij twee gescheiden kanalen in je uiteindelijke antwoord:
@@ -2087,10 +2365,70 @@ export async function runClientReActOrchestrator(
                                 });
                             }
                         } else if (fnName === 'manage_todo_list') {
-                            if (!options.haUrl || !options.haToken) {
-                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                            const source: 'auto' | 'ha' | 'google' = fnArgs.source || 'auto';
+                            const hasHATodo = Boolean(
+                                options.haUrl &&
+                                options.haToken &&
+                                (fnArgs.list_entity_id || options.devices.some(d => d.entity_id.startsWith('todo.')))
+                            );
+                            const useGoogle = source === 'google' || fnArgs.action === 'list_lists' || (source === 'auto' && !hasHATodo);
+
+                            if (useGoogle) {
+                                toolResult = await manageGoogleTasks({
+                                    action: fnArgs.action,
+                                    list_id: fnArgs.list_id,
+                                    item: fnArgs.item,
+                                    items: fnArgs.items,
+                                    due_date: fnArgs.due_date
+                                });
+                                // Normalize pending_items for Todo UI widget compatibility
+                                if (Array.isArray(toolResult?.tasks)) {
+                                    toolResult.pending_items = toolResult.tasks.map((t: any) => ({ summary: t.title, id: t.id }));
+                                    toolResult.list_entity_id = 'Google Tasks';
+                                } else if (Array.isArray(toolResult?.items)) {
+                                    toolResult.pending_items = toolResult.items.map((title: string) => ({ summary: title }));
+                                    toolResult.list_entity_id = 'Google Tasks';
+                                }
+                            } else if (!options.haUrl || !options.haToken) {
+                                toolResult = { error: 'Geen actieve Home Assistant verbinding en Google Tasks niet geselecteerd.' };
                             } else if (fnArgs.action === 'list') {
-                                toolResult = await fetchHATodoItems(options.haUrl, options.haToken, fnArgs.list_entity_id);
+                                const haRes: any = await fetchHATodoItems(options.haUrl, options.haToken, fnArgs.list_entity_id);
+                                if (source === 'auto') {
+                                    const gRes: any = await manageGoogleTasks({ action: 'list', list_id: fnArgs.list_id }).catch(() => null);
+                                    if (gRes && Array.isArray(gRes.tasks) && gRes.tasks.length > 0) {
+                                        toolResult = {
+                                            ...haRes,
+                                            google_tasks: gRes.tasks
+                                        };
+                                    } else {
+                                        toolResult = haRes;
+                                    }
+                                } else {
+                                    toolResult = haRes;
+                                }
+                            } else if (fnArgs.action === 'add_many' && Array.isArray(fnArgs.items) && fnArgs.items.length > 0) {
+                                let targetList = fnArgs.list_entity_id;
+                                if (!targetList) {
+                                    const discovered = await fetchHATodoItems(options.haUrl, options.haToken);
+                                    targetList = (discovered as any)?.list_entity_id || 'todo.shopping_list';
+                                }
+                                const addedItems: string[] = [];
+                                for (const rawItem of fnArgs.items.slice(0, 30)) {
+                                    const clean = String(rawItem || '').trim();
+                                    if (!clean) continue;
+                                    await manageHATodoItem(options.haUrl, options.haToken, 'add', {
+                                        listEntityId: targetList,
+                                        item: clean
+                                    });
+                                    addedItems.push(clean);
+                                }
+                                toolResult = {
+                                    success: true,
+                                    action: 'add_many',
+                                    list_entity_id: targetList,
+                                    added_count: addedItems.length,
+                                    pending_items: addedItems.map(summary => ({ summary }))
+                                };
                             } else {
                                 let targetList = fnArgs.list_entity_id;
                                 if (!targetList) {
@@ -2104,22 +2442,204 @@ export async function runClientReActOrchestrator(
                             }
                             actionsTaken.push({
                                 type: 'todo',
-                                entity_id: toolResult?.list_entity_id || fnArgs.list_entity_id || 'todo.shopping_list',
+                                entity_id: toolResult?.list_entity_id || fnArgs.list_entity_id || (useGoogle ? 'Google Tasks' : 'todo.shopping_list'),
                                 service: `todo.${fnArgs.action}`,
                                 data: toolResult,
                                 result: toolResult?.error ? 'error' : 'success',
                                 executedLocally: true
                             });
-                        } else if (fnName === 'get_calendar_events') {
-                            if (!options.haUrl || !options.haToken) {
-                                toolResult = { error: 'Geen actieve Home Assistant verbinding.' };
+                        } else if (fnName === 'manage_calendar' || fnName === 'get_calendar_events') {
+                            const calAction = fnName === 'get_calendar_events' ? 'list' : (fnArgs.action || 'list');
+                            if (calAction === 'list') {
+                                const days = fnArgs.days_ahead || 7;
+                                const [haRes, gRes] = await Promise.all([
+                                    options.haUrl && options.haToken
+                                        ? fetchHACalendarEvents(options.haUrl, options.haToken, fnArgs.calendar_entity_id, days).catch((e: any) => ({ error: e?.message, events: [] }))
+                                        : Promise.resolve({ events: [] } as any),
+                                    fnArgs.calendar_entity_id
+                                        ? Promise.resolve({ events: [] } as any)
+                                        : listGoogleCalendarEvents(days, 25).catch((e: any) => ({ error: e?.message, events: [] }))
+                                ]);
+                                const haEvents = Array.isArray(haRes?.events) ? haRes.events : [];
+                                const gEvents = Array.isArray(gRes?.events) ? gRes.events : [];
+                                const merged = [...gEvents, ...haEvents].sort((a: any, b: any) => {
+                                    const ta = new Date(a?.start || 0).getTime() || 0;
+                                    const tb = new Date(b?.start || 0).getTime() || 0;
+                                    return ta - tb;
+                                });
+                                const sources: string[] = [];
+                                if (gEvents.length > 0 || (!gRes?.error && !fnArgs.calendar_entity_id)) sources.push('Google Calendar');
+                                if (haEvents.length > 0 || (options.haUrl && options.haToken && !haRes?.error)) sources.push('Home Assistant');
+
+                                if (merged.length === 0 && gRes?.needs_oauth && (!options.haUrl || !options.haToken)) {
+                                    toolResult = { error: gRes.error, needs_oauth: true, events: [] };
+                                } else {
+                                    toolResult = {
+                                        sources,
+                                        days_ahead: days,
+                                        total_events: merged.length,
+                                        events: merged.slice(0, 30),
+                                        google_calendar_note: gRes?.needs_oauth ? gRes.error : undefined
+                                    };
+                                }
+                            } else if (calAction === 'create') {
+                                toolResult = await createGoogleCalendarEvent({
+                                    summary: fnArgs.summary || 'Afspraak',
+                                    start_time: fnArgs.start_time,
+                                    duration_minutes: fnArgs.duration_minutes,
+                                    location: fnArgs.location,
+                                    description: fnArgs.description
+                                });
+                            } else if (calAction === 'update') {
+                                toolResult = await updateGoogleCalendarEvent({
+                                    event_id: fnArgs.event_id,
+                                    summary: fnArgs.summary,
+                                    start_time: fnArgs.start_time,
+                                    duration_minutes: fnArgs.duration_minutes,
+                                    location: fnArgs.location,
+                                    description: fnArgs.description
+                                });
+                            } else if (calAction === 'delete') {
+                                toolResult = await deleteGoogleCalendarEvent(fnArgs.event_id);
                             } else {
-                                toolResult = await fetchHACalendarEvents(options.haUrl, options.haToken, fnArgs.calendar_entity_id, fnArgs.days_ahead || 7);
+                                toolResult = { error: `Onbekende agenda-actie: ${calAction}` };
                             }
                             actionsTaken.push({
                                 type: 'calendar',
-                                entity_id: toolResult?.calendar_entity_id || fnArgs.calendar_entity_id || 'calendar',
-                                service: 'calendar.get_events',
+                                entity_id: fnArgs.calendar_entity_id || 'calendar.unified',
+                                service: `calendar.${calAction}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'control_phone') {
+                            const act = fnArgs.action;
+                            if (act === 'flashlight') {
+                                toolResult = await setPhoneFlashlight(fnArgs.flashlight_mode || 'toggle');
+                            } else if (act === 'volume') {
+                                toolResult = await setPhoneVolume({
+                                    stream: fnArgs.volume_stream || 'media',
+                                    percent: fnArgs.volume_percent,
+                                    direction: fnArgs.volume_direction
+                                });
+                            } else if (act === 'ringer_mode') {
+                                toolResult = await setPhoneRingerMode(fnArgs.ringer_mode || 'vibrate');
+                            } else if (act === 'battery') {
+                                toolResult = await getPhoneBatteryStatus();
+                            } else if (act === 'open_app') {
+                                toolResult = await openPhoneApp(fnArgs.app_name || '', fnArgs.query);
+                            } else if (act === 'open_url') {
+                                toolResult = await openExternalUrl(fnArgs.url || '');
+                            } else {
+                                toolResult = { error: `Onbekende telefoonactie: ${act}` };
+                            }
+                            actionsTaken.push({
+                                type: 'phone_control',
+                                entity_id: `phone.${act || 'control'}`,
+                                service: `phone.${act || 'control'}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'cooking_assistant') {
+                            toolResult = executeCookingAssistant(fnArgs);
+                            actionsTaken.push({
+                                type: 'cooking',
+                                entity_id: toolResult?.recipe_id || 'cooking.session',
+                                service: `cooking.${fnArgs.action}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'manage_google_docs') {
+                            toolResult = await manageGoogleDocs(fnArgs);
+                            actionsTaken.push({
+                                type: 'google_docs',
+                                entity_id: toolResult?.id || 'google.docs',
+                                service: `docs.${fnArgs.action}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'manage_google_sheets') {
+                            toolResult = await manageGoogleSheets(fnArgs);
+                            actionsTaken.push({
+                                type: 'google_sheets',
+                                entity_id: toolResult?.id || 'google.sheets',
+                                service: `sheets.${fnArgs.action}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'manage_email') {
+                            toolResult = await manageGmail(fnArgs);
+                            actionsTaken.push({
+                                type: 'gmail',
+                                entity_id: toolResult?.id || 'gmail',
+                                service: `gmail.${fnArgs.action}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'control_media_services') {
+                            if (fnArgs.service === 'spotify') {
+                                const cmd = (['status', 'play', 'pause', 'next', 'previous', 'volume'].includes(fnArgs.command)
+                                    ? fnArgs.command
+                                    : 'play') as 'status' | 'play' | 'pause' | 'next' | 'previous' | 'volume';
+                                if (fnArgs.open_directly) {
+                                    toolResult = await openPhoneApp('spotify', fnArgs.query);
+                                } else {
+                                    toolResult = await controlSpotify({
+                                        command: cmd,
+                                        query: fnArgs.query,
+                                        volume_percent: fnArgs.volume_percent
+                                    });
+                                    // Smart fallback: if no active Spotify Connect device or Spotify OAuth isn't linked yet, open Spotify app directly!
+                                    if ((toolResult?.no_active_device || toolResult?.needs_oauth) && cmd === 'play' && fnArgs.query) {
+                                        const appRes = await openPhoneApp('spotify', fnArgs.query);
+                                        if (appRes.success) {
+                                            toolResult = {
+                                                success: true,
+                                                opened_app_fallback: true,
+                                                query: fnArgs.query,
+                                                message: `Spotify-app direct geopend voor "${fnArgs.query}".`
+                                            };
+                                        }
+                                    }
+                                }
+                            } else {
+                                // YouTube
+                                if (fnArgs.command === 'open' || fnArgs.open_directly) {
+                                    const appRes = await openPhoneApp('youtube', fnArgs.query);
+                                    const searchRes = fnArgs.query ? await searchYouTubeVideos(fnArgs.query, 3).catch(() => null) : null;
+                                    toolResult = {
+                                        ...appRes,
+                                        ...(searchRes || {}),
+                                        url: searchRes?.videos?.[0]?.url || `https://www.youtube.com/results?search_query=${encodeURIComponent(fnArgs.query || '')}`
+                                    };
+                                } else {
+                                    toolResult = await searchYouTubeVideos(fnArgs.query || '', 5);
+                                }
+                            }
+                            actionsTaken.push({
+                                type: fnArgs.service === 'spotify' ? 'spotify' : 'youtube',
+                                entity_id: `media.${fnArgs.service}`,
+                                service: `${fnArgs.service}.${fnArgs.command}`,
+                                data: toolResult,
+                                result: toolResult?.error ? 'error' : 'success',
+                                executedLocally: true
+                            });
+                        } else if (fnName === 'communicate_with_contact') {
+                            toolResult = await communicateWithContact({
+                                channel: fnArgs.channel || 'whatsapp',
+                                contact_name: fnArgs.contact_name,
+                                phone: fnArgs.phone,
+                                message: fnArgs.message
+                            });
+                            actionsTaken.push({
+                                type: 'communicate',
+                                entity_id: `contact.${fnArgs.channel || 'whatsapp'}`,
+                                service: `communicate.${fnArgs.channel || 'whatsapp'}`,
                                 data: toolResult,
                                 result: toolResult?.error ? 'error' : 'success',
                                 executedLocally: true
