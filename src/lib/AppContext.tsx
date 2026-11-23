@@ -239,11 +239,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const serialized = JSON.stringify(topologyObj)
         localStorage.setItem(`ha_topology_${activeConnectionId}`, serialized)
         localStorage.setItem('ha_topology_latest', serialized)
+        localStorage.setItem(`ha_registries_${activeConnectionId}`, JSON.stringify({
+          areas: loadedAreas,
+          devices: loadedDevices,
+          entities: loadedEntities,
+          updatedAt: Date.now()
+        }))
       } catch { }
     }
 
-    // 0. Instant hydration from connection-scoped local cache
+    // 0. Instant hydration from connection-scoped local cache (states + registries for instant grouped layout!)
     try {
+      const cachedRegRaw = localStorage.getItem(`ha_registries_${activeConnectionId}`)
+      if (cachedRegRaw) {
+        const parsedReg = JSON.parse(cachedRegRaw)
+        if (parsedReg && Array.isArray(parsedReg.entities) && parsedReg.entities.length > 0) {
+          if (Array.isArray(parsedReg.areas)) setHaAreas(parsedReg.areas)
+          if (Array.isArray(parsedReg.devices)) setHaDevices(parsedReg.devices)
+          setHaEntitiesRegistry(parsedReg.entities)
+        }
+      }
+
       const cachedStatesRaw = localStorage.getItem(`ha_entity_states_${activeConnectionId}`)
       if (cachedStatesRaw) {
         const parsed = JSON.parse(cachedStatesRaw)
@@ -281,6 +297,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     } catch { }
 
+    // Detect Android/WebView mixed-content scenario: https://localhost page connecting to local Wi-Fi http:// HA!
+    // CapacitorHttp bypasses mixed-content for REST fetch(), whereas Chromium blocks ws:// from an https:// origin.
+    const isMixedContentWs =
+      typeof window !== 'undefined' &&
+      window.location.protocol === 'https:' &&
+      /^http:\/\//i.test((activeApiUrl || '').trim())
+
+    let restTopologyInFlight = false
+    let restPollTimer: ReturnType<typeof setInterval> | null = null
+
     // 1. Fresh REST states fetch — fresh states MUST override stale cache!
     const fetchStatesViaRest = async () => {
       if (!activeApiUrl || !activeApiToken) return
@@ -309,9 +335,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     fetchStatesViaRest()
 
-    // 1b. Automatic REST /api/template rich topology fallback (runs if WS hasn't delivered registries within 4.5s)
+    // 1b. Automatic REST /api/template rich topology fallback
+    // Runs IMMEDIATELY (0ms) on local Wi-Fi http:// (where ws:// is blocked by HTTPS WebView),
+    // or after 2.5s if WebSocket hasn't delivered registries yet (e.g. Tailscale slow handshake).
     const runRestTopologyFallback = async () => {
-      if (isCancelled || wsRegistriesLoaded || !activeApiUrl || !activeApiToken) return
+      if (isCancelled || wsRegistriesLoaded || restTopologyInFlight || !activeApiUrl || !activeApiToken) return
+      restTopologyInFlight = true
       try {
         const { fetchRichHATopology } = await import('../utils/ha-api')
         const rich = await fetchRichHATopology(activeApiUrl, activeApiToken, activeConnectionId)
@@ -324,14 +353,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!isCancelled) {
           console.warn('⚠️ REST rich topology fallback skipped:', err?.message || err)
         }
+      } finally {
+        restTopologyInFlight = false
       }
     }
 
-    restTopologyTimer = setTimeout(() => {
-      if (!wsRegistriesLoaded && !isCancelled) {
+    if (isMixedContentWs) {
+      // Local Wi-Fi HTTP inside HTTPS WebView -> run REST rich topology IMMEDIATELY & poll states gently!
+      runRestTopologyFallback()
+      restPollTimer = setInterval(() => {
+        if (!isCancelled && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+          fetchStatesViaRest()
+        }
+      }, 10000)
+    } else {
+      restTopologyTimer = setTimeout(() => {
+        if (!wsRegistriesLoaded && !isCancelled) {
+          runRestTopologyFallback()
+        }
+      }, 2500)
+    }
+
+    const handleNetworkOrResume = () => {
+      if (isCancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      fetchStatesViaRest()
+      if (!wsRegistriesLoaded) {
         runRestTopologyFallback()
       }
-    }, 4500)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleNetworkOrResume)
+      document.addEventListener('visibilitychange', handleNetworkOrResume)
+    }
 
     // 2. Load Supabase rooms
     const loadRooms = async () => {
@@ -349,8 +403,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     loadRooms()
 
-    // 3. Initialize WebSocket (with strict cancellation guard against React StrictMode / fast switches)
+    // 3. Initialize WebSocket (skipped cleanly when HTTPS WebView -> http:// Wi-Fi mixed-content would block ws://)
     const initWebSocket = async () => {
+      if (isMixedContentWs) {
+        console.log('ℹ️ Local HTTP HA on HTTPS WebView detected — using CapacitorHttp REST mode + live polling')
+        return
+      }
       const { logger } = await import('../utils/logger')
       if (isCancelled) return
 
@@ -506,6 +564,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       isCancelled = true
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleNetworkOrResume)
+        document.removeEventListener('visibilitychange', handleNetworkOrResume)
+      }
       if (syncTimer) {
         clearTimeout(syncTimer)
         syncTimer = null
@@ -513,6 +575,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (restTopologyTimer) {
         clearTimeout(restTopologyTimer)
         restTopologyTimer = null
+      }
+      if (restPollTimer) {
+        clearInterval(restPollTimer)
+        restPollTimer = null
       }
       if (initialSyncTimer) {
         clearTimeout(initialSyncTimer)
@@ -593,6 +659,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem(`ha_entity_states_${id}`)
       localStorage.removeItem(`dashboard_tiles_${id}`)
       localStorage.removeItem(`ha_topology_${id}`)
+      localStorage.removeItem(`ha_registries_${id}`)
     } catch { }
     setConnections(prev => prev.filter(c => c.id !== id))
     setActiveConnection(prev => (prev?.id === id ? null : prev))

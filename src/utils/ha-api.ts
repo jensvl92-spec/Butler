@@ -140,9 +140,10 @@ export async function fetchSmartHASync(url: string, token: string, connectionId?
 }
 
 /**
- * Rich REST Fallback via /api/template:
- * Retrieves Areas, Devices (name, manufacturer, model, area_id, platform) and Entity Registry metadata
- * (device_id, area_id, platform/integration domain) even when WebSocket registry calls time out or fail.
+ * Rich REST Fallback via /api/template (2-Stage, 100% HA-version proof):
+ * Stage 1 fetches Areas, Devices (name, manufacturer, model, area_id) and Entity->Device mapping
+ * using ONLY universal HA Jinja functions (so it NEVER fails on HTTP 400 over local Wi-Fi).
+ * Stage 2 optionally enriches integration `platform` names in a separate guarded call.
  */
 export async function fetchRichHATopology(url: string, token: string, connectionId?: string): Promise<{
     areas: HAArea[];
@@ -150,66 +151,45 @@ export async function fetchRichHATopology(url: string, token: string, connection
     entities: HAEntityRegistryEntry[];
     topology: { floors: any[]; areas: Array<{ id: string; name: string; entities: string[] }>; orphans: string[] };
 }> {
-    logger.info(`fetchRichHATopology: Requesting full areas/devices/integrations via REST template from ${url}`);
+    logger.info(`fetchRichHATopology: Requesting core areas/devices/entities via REST template from ${url}`);
 
-    const template = `
+    // Stage 1: Ultra-safe, compact core template (only universal HA built-ins: areas, area_name, area_entities, device_id, area_id, device_attr)
+    const coreTemplate = `
     {% set out_areas = namespace(items=[]) %}
     {% for aid in areas() %}
       {% set out_areas.items = out_areas.items + [{
-        "area_id": aid,
-        "name": area_name(aid),
-        "entities": area_entities(aid)
+        "id": aid,
+        "nm": area_name(aid),
+        "es": area_entities(aid) | list
       }] %}
     {% endfor %}
 
     {% set out_devices = namespace(seen=[], items=[]) %}
     {% set out_entities = namespace(items=[]) %}
     {% set out_orphans = namespace(items=[]) %}
-    {% set has_ce = (config_entry_id is defined and config_entry_attr is defined) %}
 
     {% for s in states %}
       {% set eid = s.entity_id %}
       {% set did = device_id(eid) %}
       {% set aid = area_id(eid) %}
-      {% set plat = '' %}
-      {% if has_ce %}
-        {% set cid = config_entry_id(eid) %}
-        {% if cid %}
-          {% set plat = config_entry_attr(cid, 'domain') or '' %}
-        {% endif %}
-      {% endif %}
-      {% if not plat and did %}
-        {% set idents = device_attr(did, 'identifiers') %}
-        {% if idents %}
-          {% set ident_list = idents | list %}
-          {% if ident_list | length > 0 and ident_list[0] | length > 0 %}
-            {% set plat = ident_list[0][0] %}
-          {% endif %}
-        {% endif %}
-      {% endif %}
 
       {% if did and did not in out_devices.seen %}
         {% set out_devices.seen = out_devices.seen + [did] %}
         {% set out_devices.items = out_devices.items + [{
           "id": did,
-          "area_id": device_attr(did, 'area_id'),
-          "name": device_attr(did, 'name'),
-          "name_by_user": device_attr(did, 'name_by_user'),
-          "manufacturer": device_attr(did, 'manufacturer'),
-          "model": device_attr(did, 'model'),
-          "platform": plat
+          "ar": device_attr(did, 'area_id'),
+          "nm": device_attr(did, 'name'),
+          "nu": device_attr(did, 'name_by_user'),
+          "mf": device_attr(did, 'manufacturer'),
+          "md": device_attr(did, 'model')
         }] %}
       {% endif %}
 
       {% set out_entities.items = out_entities.items + [{
-        "entity_id": eid,
-        "device_id": did,
-        "area_id": aid,
-        "disabled_by": none,
-        "config_entry_id": none,
-        "name": s.attributes.friendly_name | default(none),
-        "original_name": s.attributes.friendly_name | default(eid),
-        "platform": plat
+        "e": eid,
+        "d": did,
+        "a": aid,
+        "n": s.name
       }] %}
 
       {% if aid == none %}
@@ -228,26 +208,113 @@ export async function fetchRichHATopology(url: string, token: string, connection
     const response = await fetchWithTimeout(getUrl('/api/template', url), {
         method: 'POST',
         headers: getHeaders(token),
-        body: JSON.stringify({ template })
+        body: JSON.stringify({ template: coreTemplate })
     }, 25000);
 
     if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        logger.error(`fetchRichHATopology: Failed ${response.status}`, errorText);
+        logger.error(`fetchRichHATopology: Core template failed ${response.status}`, errorText);
         throw new Error(`Failed to fetch rich topology (${response.status})`);
     }
 
     const text = await response.text();
     const parsed = JSON.parse(text);
+
+    // Stage 2: Best-effort platform/integration enrichment (never allowed to break Stage 1 device grouping!)
+    const platformByDevice = new Map<string, string>();
+    const platformByEntity = new Map<string, string>();
+    try {
+        const platTemplate = `
+        {% set dp = namespace(items={}) %}
+        {% set ep = namespace(items={}) %}
+        {% set has_ce = (config_entry_id is defined and config_entry_attr is defined) %}
+        {% for s in states %}
+          {% set eid = s.entity_id %}
+          {% set did = device_id(eid) %}
+          {% set plat = '' %}
+          {% if has_ce %}
+            {% set cid = config_entry_id(eid) %}
+            {% if cid is string %}
+              {% set plat = config_entry_attr(cid, 'domain') or '' %}
+            {% endif %}
+          {% endif %}
+          {% if not plat and did %}
+            {% set idents = device_attr(did, 'identifiers') %}
+            {% if idents %}
+              {% for pair in idents %}
+                {% if not plat and pair is iterable and pair is not string %}
+                  {% set pair_list = pair | list %}
+                  {% if pair_list | length > 0 %}
+                    {% set plat = pair_list[0] | string %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endif %}
+          {% if plat %}
+            {% if did %}{% set dp.items = dict(dp.items, **{did: plat}) %}{% endif %}
+            {% set ep.items = dict(ep.items, **{eid: plat}) %}
+          {% endif %}
+        {% endfor %}
+        {{ {"dp": dp.items, "ep": ep.items} | to_json }}
+        `;
+        const platRes = await fetchWithTimeout(getUrl('/api/template', url), {
+            method: 'POST',
+            headers: getHeaders(token),
+            body: JSON.stringify({ template: platTemplate })
+        }, 15000);
+        if (platRes.ok) {
+            const platData = JSON.parse(await platRes.text());
+            if (platData?.dp && typeof platData.dp === 'object') {
+                Object.entries(platData.dp).forEach(([k, v]) => {
+                    if (v) platformByDevice.set(k, String(v));
+                });
+            }
+            if (platData?.ep && typeof platData.ep === 'object') {
+                Object.entries(platData.ep).forEach(([k, v]) => {
+                    if (v) platformByEntity.set(k, String(v));
+                });
+            }
+        }
+    } catch (platErr: any) {
+        logger.warn('fetchRichHATopology: Optional platform enrichment skipped:', platErr?.message || platErr);
+    }
+
     const areasList: HAArea[] = Array.isArray(parsed.areas)
-        ? parsed.areas.map((a: any) => ({ area_id: a.area_id, name: a.name }))
+        ? parsed.areas.map((a: any) => ({ area_id: a.id || a.area_id, name: a.nm || a.name || a.id }))
         : [];
-    const devicesList = Array.isArray(parsed.devices) ? parsed.devices : [];
-    const entitiesList: HAEntityRegistryEntry[] = Array.isArray(parsed.entities) ? parsed.entities : [];
+    const devicesList: Array<HADeviceRegistryEntry & { platform?: string; identifiers?: any[] }> = Array.isArray(parsed.devices)
+        ? parsed.devices.map((d: any) => ({
+            id: d.id,
+            area_id: d.ar ?? d.area_id ?? null,
+            name: d.nm ?? d.name ?? null,
+            name_by_user: d.nu ?? d.name_by_user ?? null,
+            manufacturer: d.mf ?? d.manufacturer ?? null,
+            model: d.md ?? d.model ?? null,
+            platform: platformByDevice.get(d.id) || d.platform || undefined
+        }))
+        : [];
+    const entitiesList: HAEntityRegistryEntry[] = Array.isArray(parsed.entities)
+        ? parsed.entities.map((e: any) => {
+            const eid = e.e || e.entity_id;
+            const did = e.d ?? e.device_id ?? null;
+            return {
+                entity_id: eid,
+                device_id: did,
+                area_id: e.a ?? e.area_id ?? null,
+                disabled_by: null,
+                config_entry_id: null,
+                name: e.n ?? e.name ?? null,
+                original_name: e.n ?? e.original_name ?? eid,
+                platform: platformByEntity.get(eid) || (did ? platformByDevice.get(did) : '') || e.platform || ''
+            };
+        })
+        : [];
+
     const topology = {
         floors: [],
         areas: Array.isArray(parsed.areas)
-            ? parsed.areas.map((a: any) => ({ id: a.area_id, name: a.name, entities: a.entities || [] }))
+            ? parsed.areas.map((a: any) => ({ id: a.id || a.area_id, name: a.nm || a.name || a.id, entities: a.es || a.entities || [] }))
             : [],
         orphans: Array.isArray(parsed.orphans) ? parsed.orphans : []
     };
@@ -256,11 +323,17 @@ export async function fetchRichHATopology(url: string, token: string, connection
         const serialized = JSON.stringify(topology);
         if (connectionId) {
             localStorage.setItem(`ha_topology_${connectionId}`, serialized);
+            localStorage.setItem(`ha_registries_${connectionId}`, JSON.stringify({
+                areas: areasList,
+                devices: devicesList,
+                entities: entitiesList,
+                updatedAt: Date.now()
+            }));
         }
         localStorage.setItem('ha_topology_latest', serialized);
     } catch { }
 
-    logger.info(`✅ fetchRichHATopology: ${areasList.length} areas, ${devicesList.length} devices, ${entitiesList.length} entities`);
+    logger.info(`✅ fetchRichHATopology: ${areasList.length} areas, ${devicesList.length} devices, ${entitiesList.length} entities (${platformByDevice.size} device platforms)`);
     return { areas: areasList, devices: devicesList, entities: entitiesList, topology };
 }
 
@@ -275,19 +348,39 @@ export async function processHASync(
 ) {
     logger.info('processHASync: Starting Sync...', { connectionId, apiUrl });
     let topology: { areas: any[], orphans: any[] } = { areas: [], orphans: [] }
+    let richDevicesById = new Map<string, any>()
+    let richEntitiesById = new Map<string, any>()
     let useFallback = false
 
     try {
-        topology = await fetchSmartHASync(apiUrl, apiToken, connectionId)
-        logger.info('processHASync: Topology fetched', { areaCount: topology.areas?.length, orphanCount: topology.orphans?.length });
+        const rich = await fetchRichHATopology(apiUrl, apiToken, connectionId)
+        topology = rich.topology
+        rich.devices.forEach(d => { if (d?.id) richDevicesById.set(d.id, d) })
+        rich.entities.forEach(e => { if (e?.entity_id) richEntitiesById.set(e.entity_id, e) })
+        logger.info('processHASync: Rich topology fetched', {
+            areaCount: topology.areas?.length,
+            deviceCount: rich.devices.length,
+            entityCount: rich.entities.length
+        });
 
         if ((!topology.areas || topology.areas.length === 0) && (!topology.orphans || topology.orphans.length === 0)) {
-            logger.warn('processHASync: Topology empty, switching to Fallback Mode');
+            logger.warn('processHASync: Rich topology empty, trying basic Smart Sync');
+            topology = await fetchSmartHASync(apiUrl, apiToken, connectionId)
+        }
+        if ((!topology.areas || topology.areas.length === 0) && (!topology.orphans || topology.orphans.length === 0)) {
             useFallback = true
         }
     } catch (err) {
-        logger.error('processHASync: Smart Sync Failed, switching to Fallback Mode', err);
-        useFallback = true
+        logger.warn('processHASync: Rich topology failed, trying basic Smart Sync fallback', err);
+        try {
+            topology = await fetchSmartHASync(apiUrl, apiToken, connectionId)
+            if ((!topology.areas || topology.areas.length === 0) && (!topology.orphans || topology.orphans.length === 0)) {
+                useFallback = true
+            }
+        } catch (err2) {
+            logger.error('processHASync: Smart Sync Failed, switching to Fallback Mode', err2);
+            useFallback = true
+        }
     }
 
     // 2. Fetch States (for details)
@@ -305,10 +398,10 @@ export async function processHASync(
     logger.info(`processHASync: Received ${states.length} states`);
     const stateMap = new Map(states.map(s => [s.entity_id, s]))
 
-    // 3. Build Tiles matching Dashboard.tsx DashboardTile / DeviceGroup schema
+    // 3. Build Tiles matching Dashboard.tsx DashboardTile / DeviceGroup schema (GROUPED BY DEVICE!)
     const tiles: any[] = []
 
-    const IGNORED_SYSTEM_DOMAINS = new Set(['sun', 'zone', 'tts', 'stt', 'conversation', 'persistent_notification'])
+    const IGNORED_SYSTEM_DOMAINS = new Set(['sun', 'zone', 'update', 'tts', 'stt', 'conversation', 'persistent_notification'])
 
     const getDeviceType = (domain: string): string | null => {
         if (IGNORED_SYSTEM_DOMAINS.has(domain)) return null
@@ -401,39 +494,62 @@ export async function processHASync(
         return icons[domain] || '📦'
     }
 
-    const toDeviceGroup = (entityId: string, areaId?: string): any | null => {
-        const stateObj = stateMap.get(entityId)
-        if (!stateObj) return null
-        const domain = entityId.split('.')[0]
-        const type = getDeviceType(domain)
-        if (!type) return null
-
-        const dev = {
-            id: `dev-${entityId.replace(/\./g, '-')}`,
-            type,
-            name: stateObj.attributes?.friendly_name || entityId,
-            icon: getIcon(domain),
-            entityId,
-            deviceId: `grp-${entityId.replace(/\./g, '-')}`
-        }
-
-        return {
-            id: `grp-${entityId.replace(/\./g, '-')}`,
-            name: dev.name,
-            areaId,
-            primaryEntity: dev,
-            entities: [dev]
-        }
-    }
-
     const processEntityList = (entityIds: string[] | undefined | null, areaId?: string): any[] => {
         if (!Array.isArray(entityIds)) return []
-        const groups: any[] = []
+        const byDeviceId = new Map<string, any>()
+        const ungrouped: any[] = []
+
         for (const entityId of entityIds) {
-            const grp = toDeviceGroup(entityId, areaId)
-            if (grp) groups.push(grp)
+            const stateObj = stateMap.get(entityId)
+            if (!stateObj) continue
+            const domain = entityId.split('.')[0]
+            const type = getDeviceType(domain)
+            if (!type) continue
+
+            const reg = richEntitiesById.get(entityId)
+            const devId = reg?.device_id || null
+            const haDev = devId ? richDevicesById.get(devId) : null
+            const friendlyName = reg?.name || stateObj.attributes?.friendly_name || entityId
+            const resolvedPlatform = reg?.platform || haDev?.platform || undefined
+
+            const roomEnt = {
+                id: `ent-${entityId}`,
+                type,
+                name: friendlyName,
+                icon: getIcon(domain),
+                entityId,
+                deviceId: devId || undefined,
+                platform: resolvedPlatform
+            }
+
+            if (devId) {
+                if (!byDeviceId.has(devId)) {
+                    byDeviceId.set(devId, {
+                        id: devId,
+                        name: haDev?.name_by_user || haDev?.name || friendlyName,
+                        manufacturer: haDev?.manufacturer || undefined,
+                        model: haDev?.model || undefined,
+                        platform: resolvedPlatform,
+                        areaId: haDev?.area_id || areaId,
+                        primaryEntity: roomEnt,
+                        entities: []
+                    })
+                }
+                const grp = byDeviceId.get(devId)!
+                grp.entities.push(roomEnt)
+            } else {
+                ungrouped.push({
+                    id: `orp-${entityId}`,
+                    name: friendlyName,
+                    platform: resolvedPlatform,
+                    areaId,
+                    primaryEntity: roomEnt,
+                    entities: [roomEnt]
+                })
+            }
         }
-        return groups
+
+        return [...Array.from(byDeviceId.values()), ...ungrouped]
     }
 
     if (useFallback) {
@@ -455,7 +571,7 @@ export async function processHASync(
         for (const area of (topology.areas || [])) {
             if (!area?.name) continue
 
-            const tileId = `room-${area.id}`
+            const tileId = area.id
             const deviceGroups = processEntityList(area.entities, area.id)
 
             tiles.push({
@@ -475,7 +591,7 @@ export async function processHASync(
 
             for (const grp of orphanGroups) {
                 const dev = grp.primaryEntity
-                const searchStr = `${dev.entityId} ${dev.name}`.toLowerCase()
+                const searchStr = `${dev.entityId} ${grp.name}`.toLowerCase()
                 let matched = false
 
                 for (const tile of tiles) {
@@ -498,10 +614,10 @@ export async function processHASync(
 
             if (unassignedGroups.length > 0) {
                 tiles.push({
-                    id: 'room-unassigned',
+                    id: 'unassigned',
                     type: 'room',
                     roomId: 'unassigned',
-                    roomName: 'Niet-toegewezen apparaten',
+                    roomName: 'Overige Apparaten',
                     roomIcon: '📦',
                     order: tiles.length,
                     deviceGroups: unassignedGroups
