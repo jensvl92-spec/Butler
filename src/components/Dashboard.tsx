@@ -146,6 +146,7 @@ function getApplianceIcon(name: string, fallbackIcon: string): string {
     if (n.includes('laadpaal') || n.includes('charger') || n.includes('wallbox') || n.includes('ev ')) return '🔋'
     if (n.includes('zonnepanelen') || n.includes('solar') || n.includes('omvormer') || n.includes('inverter')) return '☀️'
     if (n.includes('warmtepomp') || n.includes('airco') || n.includes('hvac')) return '🌡️'
+    if (n.includes('printer') || n.includes('brother') || n.includes('epson') || n.includes('laserjet') || n.includes('officejet') || n.includes('deskjet') || n.includes('pixma') || n.includes('toner')) return '🖨️'
     return fallbackIcon
 }
 
@@ -790,18 +791,22 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
         const isDiagEntity = (entityId: string, entityCategory?: string) => {
             const domain = (entityId || '').split('.')[0].toLowerCase()
+            const lower = (entityId || '').toLowerCase()
             // Never bury interactive controls (like program/cycle selects, switches, buttons, numbers)
             // inside read-only diagnostics just because HA marked them entity_category="config"!
             if (INTERACTIVE_CONTROL_DOMAINS.has(domain)) {
                 if (entityCategory === 'diagnostic') {
                     // Only rare diagnostic-only buttons like "identify" / "reboot" stay in diagnostics
-                    const lower = entityId.toLowerCase()
                     return lower.includes('_identify') || lower.includes('_reboot') || lower.includes('_restart')
                 }
                 return false
             }
+            // User-relevant consumables (printer toner/ink/cartridge/drum, dishwasher salt/rinse aid, filter life)
+            // are marked "diagnostic" by HA integrations (IPP/Brother/HP) but should be visible when tapping the device!
+            if (/(?:^|_)(toner|ink|inkt|cartridge|drum|salt|rinse_aid|filter_life)(?:_|$)/.test(lower)) {
+                return false
+            }
             if (entityCategory === 'diagnostic' || entityCategory === 'config') return true
-            const lower = entityId.toLowerCase()
             return (
                 lower.includes('_battery') ||
                 lower.includes('_firmware') ||
@@ -1141,7 +1146,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const stateCount = Object.keys(entityStates || {}).length
         if (!hasRegistryData && stateCount === 0) return
 
-        const sig = `${activeConnection.id}:v31:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
+        const sig = `${activeConnection.id}:v32:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
         if (lastSyncedSigRef.current === sig) return
 
         const interactiveTypes = new Set([
@@ -1165,9 +1170,12 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                 }
                 ;(g.entities || []).forEach(e => {
                     if (e.entityId) existingEntityIds.add(e.entityId)
-                    if (e.isDiagnostic && interactiveTypes.has(e.type)) {
+                    if (e.isDiagnostic) {
                         const eidLower = (e.entityId || '').toLowerCase()
-                        if (!eidLower.includes('_identify') && !eidLower.includes('_reboot') && !eidLower.includes('_restart')) {
+                        if (interactiveTypes.has(e.type) && !eidLower.includes('_identify') && !eidLower.includes('_reboot') && !eidLower.includes('_restart')) {
+                            hasMisclassifiedInteractiveDiag = true
+                        }
+                        if (/(?:^|_)(toner|ink|inkt|cartridge|drum|salt|rinse_aid|filter_life)(?:_|$)/.test(eidLower)) {
                             hasMisclassifiedInteractiveDiag = true
                         }
                     }
@@ -1341,19 +1349,17 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const humUnit = hum?.ha?.attributes?.unit_of_measurement || ''
 
         const sortedVisibleGroups = [...tile.deviceGroups]
-            .filter(g => {
-                const primary = g.primaryEntity || g.entities[0]
-                if (!primary) return false
-                if (primary.isDiagnostic && g.entities.every(e => e.isDiagnostic)) return false
-                return true
-            })
+            .filter(g => Boolean(g.primaryEntity || g.entities[0]))
             .sort((a, b) => {
+                const allDiagA = a.entities.every(e => e.isDiagnostic) ? 1 : 0
+                const allDiagB = b.entities.every(e => e.isDiagnostic) ? 1 : 0
+                if (allDiagA !== allDiagB) return allDiagA - allDiagB
                 const typeA = a.primaryEntity?.type || 'sensor'
                 const typeB = b.primaryEntity?.type || 'sensor'
                 const priA = getDevicePriority(typeA)
                 const priB = getDevicePriority(typeB)
                 if (priA !== priB) return priA - priB
-                // Multi-entity appliances (washer, dryer, dishwasher, etc.) appear before lone sensors
+                // Multi-entity appliances (washer, dryer, dishwasher, printer, etc.) appear before lone sensors
                 const multiA = a.entities.length > 1 ? 0 : 1
                 const multiB = b.entities.length > 1 ? 0 : 1
                 if (multiA !== multiB) return multiA - multiB

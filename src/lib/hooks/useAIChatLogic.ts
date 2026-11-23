@@ -749,6 +749,8 @@ export function useAIChatLogic() {
                 return {
                     entity_id: s.entity_id,
                     ...s,
+                    device_id: reg?.device_id || undefined,
+                    entity_category: reg?.entity_category || undefined,
                     device_name: deviceName,
                     manufacturer: dev?.manufacturer || undefined,
                     model: dev?.model || undefined,

@@ -1244,7 +1244,7 @@ async function executeEnergyPricesTool(
 // -------------------------------------------------------------
 // 7. Entity Lookup & Search Tools
 // -------------------------------------------------------------
-// Bilingual NL <-> EN smart-home search expansion (only expands search recall, never hides anything)
+// Bilingual NL <-> EN smart-home & diagnostic search expansion (only expands recall, never hides anything)
 const ENTITY_SEARCH_SYNONYMS: Record<string, string[]> = {
     wasmachine: ['washer', 'washing', 'was'],
     washer: ['wasmachine', 'washing'],
@@ -1269,26 +1269,71 @@ const ENTITY_SEARCH_SYNONYMS: Record<string, string[]> = {
     lamp: ['light', 'licht'],
     lampen: ['light', 'licht'],
     licht: ['light', 'lamp'],
-    lichten: ['light', 'lamp']
+    lichten: ['light', 'lamp'],
+    printer: ['ipp', 'brother', 'hp', 'epson', 'canon', 'toner', 'ink', 'inkt', 'cartridge', 'drum', 'page'],
+    toner: ['ink', 'inkt', 'cartridge', 'drum', 'marker', 'printer', 'ipp', 'brother', 'hp', 'epson', 'canon'],
+    inkt: ['ink', 'toner', 'cartridge', 'marker', 'printer', 'ipp', 'brother', 'hp', 'epson', 'canon'],
+    ink: ['inkt', 'toner', 'cartridge', 'marker', 'printer', 'ipp'],
+    cartridge: ['toner', 'ink', 'inkt', 'printer', 'marker'],
+    drum: ['toner', 'printer', 'brother'],
+    batterij: ['battery', 'accu', 'charge', 'soc'],
+    battery: ['batterij', 'accu'],
+    accu: ['battery', 'batterij', 'soc'],
+    signaal: ['signal', 'rssi', 'linkquality', 'wifi', 'lqi'],
+    wifi: ['wi-fi', 'rssi', 'signal', 'ssid', 'ip'],
+    firmware: ['software', 'version', 'versie', 'update'],
+    teller: ['counter', 'pages', 'page_count', 'total'],
+    filter: ['filter_life', 'hepa'],
+    zout: ['salt', 'dishwasher', 'vaatwasser'],
+    glansspoelmiddel: ['rinse_aid', 'dishwasher', 'vaatwasser'],
+    diagnostiek: ['diagnostic', 'battery', 'signal', 'rssi', 'firmware', 'uptime', 'toner', 'ink', 'error'],
+    verbruik: ['power', 'energy', 'watt', 'kwh', 'consumption'],
+    stroom: ['power', 'energy', 'electricity', 'watt', 'kwh']
 };
+
+const SYNONYM_KEYS = Object.keys(ENTITY_SEARCH_SYNONYMS);
 
 function expandSearchTerms(rawQuery: string): string[] {
     const clean = (rawQuery || '').toLowerCase().trim();
     if (!clean) return [];
-    const tokens = clean.split(/\s+/).filter(Boolean);
+    const tokens = clean
+        .replace(/[^\p{L}\p{N}\s_-]/gu, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
     const expanded = new Set<string>([clean, ...tokens]);
-    for (const t of tokens) {
-        const syns = ENTITY_SEARCH_SYNONYMS[t];
-        if (syns) syns.forEach(s => expanded.add(s));
-    }
-    if (ENTITY_SEARCH_SYNONYMS[clean]) {
-        ENTITY_SEARCH_SYNONYMS[clean].forEach(s => expanded.add(s));
-    }
+    const expandToken = (tok: string) => {
+        if (ENTITY_SEARCH_SYNONYMS[tok]) {
+            ENTITY_SEARCH_SYNONYMS[tok].forEach(s => expanded.add(s));
+        }
+        // Dutch compound-word root matching: e.g. "tonerniveau" -> "toner", "batterijniveau" -> "batterij", "printerstatus" -> "printer"
+        if (tok.length >= 5) {
+            for (const key of SYNONYM_KEYS) {
+                if (key.length >= 4 && tok.includes(key)) {
+                    expanded.add(key);
+                    ENTITY_SEARCH_SYNONYMS[key].forEach(s => expanded.add(s));
+                }
+            }
+        }
+    };
+    for (const t of tokens) expandToken(t);
+    expandToken(clean);
     return Array.from(expanded);
 }
 
 function buildDeviceSearchHaystack(d: any): string {
-    return `${d.entity_id || ''} ${d.attributes?.friendly_name || ''} ${d.device_name || ''} ${d.area_name || ''} ${d.manufacturer || ''} ${d.model || ''} ${d.platform || ''}`.toLowerCase();
+    const attrs = d.attributes || {};
+    const attrKeys = typeof attrs === 'object' ? Object.keys(attrs).slice(0, 25).join(' ') : '';
+    const extraAttrHints = [
+        attrs.friendly_name,
+        attrs.device_class,
+        attrs.icon,
+        attrs.marker_type,
+        attrs.source,
+        attrs.info,
+        attrs.model,
+        attrs.manufacturer
+    ].filter(Boolean).join(' ');
+    return `${d.entity_id || ''} ${d.device_name || ''} ${d.area_name || ''} ${d.manufacturer || ''} ${d.model || ''} ${d.platform || ''} ${d.entity_category || ''} ${extraAttrHints} ${attrKeys}`.toLowerCase();
 }
 
 async function executeGetEntityStateTool(
@@ -1470,7 +1515,7 @@ async function executeSearchEntitiesTool(
 
     const searchTerms = expandSearchTerms(query);
 
-    const matches = allDevices.filter(d => {
+    const directMatches = allDevices.filter(d => {
         const eid = (d.entity_id || '').toLowerCase();
         const hay = buildDeviceSearchHaystack(d);
         const dDomain = eid.split('.')[0];
@@ -1485,7 +1530,29 @@ async function executeSearchEntitiesTool(
         }
         if (searchTerms.length > 0 && !searchTerms.some(t => hay.includes(t))) return false;
         return true;
-    }).slice(0, 60);
+    });
+
+    // Sibling expansion: when a search matches a device (e.g. printer status, dryer, router),
+    // automatically include ALL sibling entities of that device (including ALL diagnostic & config sensors!)
+    const matchedDeviceIds = new Set<string>();
+    const seenEntityIds = new Set<string>();
+    const combinedMatches: any[] = [];
+    for (const m of directMatches) {
+        if (!seenEntityIds.has(m.entity_id)) {
+            seenEntityIds.add(m.entity_id);
+            combinedMatches.push(m);
+        }
+        if (m.device_id) matchedDeviceIds.add(m.device_id);
+    }
+    if (!domain && matchedDeviceIds.size > 0 && matchedDeviceIds.size <= 8) {
+        for (const d of allDevices) {
+            if (d.device_id && matchedDeviceIds.has(d.device_id) && !seenEntityIds.has(d.entity_id)) {
+                seenEntityIds.add(d.entity_id);
+                combinedMatches.push(d);
+            }
+        }
+    }
+    const matches = combinedMatches.slice(0, 80);
 
     if (matches.length === 0) {
         return {
@@ -1493,6 +1560,22 @@ async function executeSearchEntitiesTool(
             available_integrations: integrationsSummary.map(i => i.integration)
         };
     }
+
+    const extractCompactAttributes = (attrs: any) => {
+        if (!attrs || typeof attrs !== 'object') return undefined;
+        const skipKeys = new Set(['friendly_name', 'unit_of_measurement', 'options', 'supported_features', 'supported_color_modes', 'entity_picture', 'icon', 'state_class']);
+        const out: Record<string, any> = {};
+        let count = 0;
+        for (const [k, v] of Object.entries(attrs)) {
+            if (skipKeys.has(k) || v === null || v === undefined) continue;
+            if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+                out[k] = typeof v === 'string' ? v.slice(0, 120) : v;
+                count++;
+                if (count >= 8) break;
+            }
+        }
+        return count > 0 ? out : undefined;
+    };
 
     return {
         found_count: matches.length,
@@ -1502,9 +1585,12 @@ async function executeSearchEntitiesTool(
             device_name: m.device_name || undefined,
             area_name: m.area_name || undefined,
             integration: m.platform || undefined,
+            entity_category: m.entity_category || undefined,
+            device_class: m.attributes?.device_class || undefined,
             state: m.state,
             unit: m.attributes?.unit_of_measurement || undefined,
-            options: Array.isArray(m.attributes?.options) ? m.attributes.options : undefined
+            options: Array.isArray(m.attributes?.options) ? m.attributes.options : undefined,
+            attributes: extractCompactAttributes(m.attributes)
         }))
     };
 }
@@ -1579,16 +1665,17 @@ function selectInitialContextEntities(
         };
     }
 
-    // Tokenize cleanly (strip punctuation, filter stop-words, and expand NL<->EN appliance synonyms)
+    // Tokenize cleanly (strip punctuation, filter stop-words, and expand NL<->EN + compound-word roots!)
     const lowerMsg = userMessage.toLowerCase();
     const rawTokens = lowerMsg
         .replace(/[^\p{L}\p{N}\s_-]/gu, ' ')
         .split(/\s+/)
         .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
-    const expandedTokens = new Set<string>(rawTokens);
+    const expandedTokens = new Set<string>();
     for (const t of rawTokens) {
-        const syns = ENTITY_SEARCH_SYNONYMS[t];
-        if (syns) syns.forEach(s => expandedTokens.add(s));
+        expandSearchTerms(t).forEach(s => {
+            if (s.length >= 2 && !STOP_WORDS.has(s)) expandedTokens.add(s);
+        });
     }
     const tokens = Array.from(expandedTokens);
 
@@ -1616,7 +1703,7 @@ function selectInitialContextEntities(
             if (uom && uom.includes(w)) score += 8;
         }
 
-        // Bilingual domain hints (boost, NEVER hide!)
+        // Bilingual domain & diagnostic hints (boost, NEVER hide!)
         if (/licht|lamp|spot|light|dim/i.test(lowerMsg) && eid.startsWith('light.')) score += 6;
         if (/thermostaat|verwarm|temperatuur|graden|airco|climate|heat|temp/i.test(lowerMsg) && (eid.startsWith('climate.') || eid.includes('temperature'))) score += 6;
         if (/stroom|elektriciteit|energie|prijs|tarief|gas|spot|kwh|price|energy/i.test(lowerMsg) && (eid.includes('price') || eid.includes('prijs') || eid.includes('energy') || eid.includes('gas') || eid.includes('nordpool') || eid.includes('epex'))) score += 12;
@@ -1625,17 +1712,41 @@ function selectInitialContextEntities(
         if (/agenda|kalender|afval|calendar/i.test(lowerMsg) && eid.startsWith('calendar.')) score += 12;
         if (/rolluik|gordijn|screen|cover|poort|garage/i.test(lowerMsg) && eid.startsWith('cover.')) score += 8;
         if (/muziek|radio|tv|sonos|speaker|volume|media/i.test(lowerMsg) && eid.startsWith('media_player.')) score += 8;
+        if (/printer|toner|inkt|ink|cartridge|drum/i.test(lowerMsg) && /printer|toner|ink|cartridge|drum|ipp|brother|epson|canon|hp_/.test(hay)) score += 18;
+        if (/batterij|battery|accu|signaal|rssi|wifi|firmware|diagnost/i.test(lowerMsg) && d.entity_category === 'diagnostic') score += 8;
 
         return { device: d, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    let selected = scored.filter(s => s.score > 0).slice(0, 22).map(s => s.device);
+    const initialTop = scored.filter(s => s.score > 0).slice(0, 22).map(s => s.device);
+
+    // Also pull sibling entities (including diagnostic toner/battery/status sensors) of the top 2 matched physical devices!
+    const selected: any[] = [...initialTop];
+    const selectedIds = new Set<string>(selected.map(d => d.entity_id));
+    const topDeviceIds = new Set<string>();
+    for (const d of initialTop.slice(0, 4)) {
+        if ((d as any).device_id) {
+            topDeviceIds.add((d as any).device_id);
+            if (topDeviceIds.size >= 2) break;
+        }
+    }
+    if (topDeviceIds.size > 0) {
+        for (const d of devices as any[]) {
+            if (selected.length >= 30) break;
+            if (d.device_id && topDeviceIds.has(d.device_id) && !selectedIds.has(d.entity_id)) {
+                selectedIds.add(d.entity_id);
+                selected.push(d);
+            }
+        }
+    }
 
     if (selected.length === 0) {
-        selected = devices
-            .filter(d => d.state === 'on' || /^(climate|alarm_control_panel|lock)\./.test(d.entity_id))
-            .slice(0, 12);
+        selected.push(
+            ...devices
+                .filter(d => d.state === 'on' || /^(climate|alarm_control_panel|lock)\./.test(d.entity_id))
+                .slice(0, 12)
+        );
     }
 
     const relevantDevicesText = selected.map((d: any) => {
@@ -1644,11 +1755,12 @@ function selectInitialContextEntities(
             ? `${d.device_name} — ${name}`
             : name;
         const areaTag = d.area_name ? ` [${d.area_name}]` : '';
+        const catTag = d.entity_category === 'diagnostic' ? ' [diag]' : '';
         const uom = d.attributes?.unit_of_measurement ? ` ${d.attributes.unit_of_measurement}` : '';
         const opts = Array.isArray(d.attributes?.options) && d.attributes.options.length > 0
             ? ` (opties: ${d.attributes.options.slice(0, 20).join(', ')})`
             : '';
-        return `- ${d.entity_id} (${devLabel}${areaTag}): ${d.state}${uom}${opts}`;
+        return `- ${d.entity_id} (${devLabel}${areaTag}${catTag}): ${d.state}${uom}${opts}`;
     }).join('\n');
 
     return {
@@ -1686,14 +1798,14 @@ function buildSystemPrompt(options: ClientOrchestratorOptions): string {
 - Voorkeurstaal: ${language} (Antwoord in de taal van de gebruiker; standaard Nederlands)
 ${activeRecipeSection}
 ${ctx.topologySummary}
-### RELEVANTE ENTITEITEN (${ctx.matchedCount} uit ${devices.length} — gebruik \`search_home_entities\` voor overige apparaten):
+### RELEVANTE ENTITEITEN (${ctx.matchedCount} uit ${devices.length} — gebruik \`search_home_entities\` voor overige apparaten & diagnostiek):
 ${ctx.relevantEntitiesSection}
 
 ### PERSOONLIJK GEHEUGEN:
 ${storedMems}
 
 ### RICHTLIJNEN:
-1. Gebruik altijd je tools om actuele data op te halen of acties uit te voeren — verzin nooit waarden en beweer nooit dat een functie ontbreekt wanneer je er een tool voor hebt.
+1. Gebruik altijd je tools om actuele data op te halen of acties uit te voeren — verzin nooit waarden en beweer nooit dat een functie of sensor ontbreekt zonder eerst \`search_home_entities\` (en eventueel zonder filters voor een volledige apparaatinventaris) te raadplegen. Je hebt toegang tot ALLE Home Assistant-data inclusief diagnostische sensoren (zoals printer-toner/inkt, batterijpercentages, signaalsterkte, firmware, tellers en attributen).
 2. **Live Google Search (\`google_search\`)**: Voor elke vraag over actuele publieke informatie buiten Home Assistant (zoals Belgische/Nederlandse brandstof- en dieselprijzen vandaag/morgen/gisteren, nieuws, verkeer, openingsuren, sportuitslagen, koersen, authentieke recepten of feiten) MOET je direct \`google_search\` aanroepen.
 3. **Telefoon & Hardware (\`control_phone\`, \`set_timer_or_alarm\`, \`communicate_with_contact\`)**: Je kunt op de Android-telefoon direct de zaklamp aan/uit/toggelen, het volume of de geluidsmodus (normaal/trillen/stil) wijzigen, de batterijstatus uitlezen, apps openen (Spotify, YouTube, Maps, WhatsApp, Docs, Sheets, Instellingen, Wi-Fi, Bluetooth), wekkers/timers zetten en contacten bellen of berichten voorbereiden via WhatsApp/SMS.
 4. **Agenda, Taken, Documenten, Mail & Media**:
