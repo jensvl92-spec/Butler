@@ -21,6 +21,14 @@ interface AppContextType {
   haDevices: any[]
   haEntitiesRegistry: any[]
   haSyncSource: 'none' | 'cache' | 'rest' | 'websocket'
+  refreshHAFromServer: () => Promise<{
+    states: Record<string, any>
+    areas: any[]
+    devices: any[]
+    entities: any[]
+    source: 'rest' | 'websocket' | 'cache'
+    error?: string
+  }>
 
   activeSuggestion: Suggestion | null
   setActiveSuggestion: (suggestion: Suggestion | null) => void
@@ -692,6 +700,121 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setChatHistory(prev => [...prev, msg])
   }, [])
 
+  const refreshHAFromServer = useCallback(async (): Promise<{
+    states: Record<string, any>
+    areas: any[]
+    devices: any[]
+    entities: any[]
+    source: 'rest' | 'websocket' | 'cache'
+    error?: string
+  }> => {
+    if (!activeConnectionId || !activeApiUrl || !activeApiToken) {
+      return { states: entityStates, areas: haAreas, devices: haDevices, entities: haEntitiesRegistry, source: 'cache', error: 'Geen actieve Home Assistant verbinding.' }
+    }
+
+    let nextStates: Record<string, any> = entityStates
+    let nextAreas: any[] = haAreas
+    let nextDevices: any[] = haDevices
+    let nextEntities: any[] = haEntitiesRegistry
+    let usedSource: 'rest' | 'websocket' | 'cache' = 'cache'
+    let lastErr: string | undefined
+
+    // 1. Prefer live WebSocket if currently connected
+    if (haWebSocket && haWebSocket.isConnected()) {
+      try {
+        const [stRes, arRes, dvRes, enRes] = await Promise.allSettled([
+          haWebSocket.sendMessage({ type: 'get_states' }, 15000),
+          haWebSocket.sendMessage({ type: 'config/area_registry/list' }, 15000),
+          haWebSocket.sendMessage({ type: 'config/device_registry/list' }, 15000),
+          haWebSocket.sendMessage({ type: 'config/entity_registry/list' }, 15000)
+        ])
+        if (stRes.status === 'fulfilled' && stRes.value?.success && Array.isArray(stRes.value.result)) {
+          const map: Record<string, any> = {}
+          stRes.value.result.forEach((s: any) => { if (s?.entity_id) map[s.entity_id] = s })
+          nextStates = map
+          setEntityStates(map)
+          usedSource = 'websocket'
+          try { localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(map)) } catch { }
+        }
+        if (arRes.status === 'fulfilled' && arRes.value?.success && Array.isArray(arRes.value.result)) {
+          nextAreas = arRes.value.result
+          setHaAreas(nextAreas)
+        }
+        if (dvRes.status === 'fulfilled' && dvRes.value?.success && Array.isArray(dvRes.value.result)) {
+          nextDevices = dvRes.value.result.map((d: any) => {
+            const identPlatform = Array.isArray(d?.identifiers) && Array.isArray(d.identifiers[0]) ? d.identifiers[0][0] : undefined
+            return { ...d, platform: d?.platform || identPlatform || undefined }
+          })
+          setHaDevices(nextDevices)
+        }
+        if (enRes.status === 'fulfilled' && enRes.value?.success && Array.isArray(enRes.value.result) && enRes.value.result.length > 0) {
+          nextEntities = enRes.value.result
+          setHaEntitiesRegistry(nextEntities)
+          usedSource = 'websocket'
+          setHaSyncSource('websocket')
+          try {
+            localStorage.setItem(`ha_registries_${activeConnectionId}`, JSON.stringify({
+              areas: nextAreas, devices: nextDevices, entities: nextEntities, updatedAt: Date.now()
+            }))
+          } catch { }
+          return { states: nextStates, areas: nextAreas, devices: nextDevices, entities: nextEntities, source: 'websocket' }
+        }
+      } catch (wsErr: any) {
+        lastErr = wsErr?.message || String(wsErr)
+      }
+    }
+
+    // 2. Always fetch FRESH REST /api/states + parallel REST rich topology (works on both Wi-Fi HTTP & Tailscale HTTPS!)
+    const [statesSettled, topoSettled] = await Promise.allSettled([
+      fetchWithTimeout(buildHAUrl('/api/states', activeApiUrl), {
+        headers: {
+          Authorization: `Bearer ${sanitizeHAToken(activeApiToken)}`,
+          'Content-Type': 'application/json'
+        }
+      }, 15000),
+      import('../utils/ha-api').then(({ fetchRichHATopology }) =>
+        fetchRichHATopology(activeApiUrl, activeApiToken, activeConnectionId)
+      )
+    ])
+
+    if (statesSettled.status === 'fulfilled' && statesSettled.value.ok) {
+      const arr = await statesSettled.value.json().catch(() => null)
+      if (Array.isArray(arr) && arr.length > 0) {
+        const map: Record<string, any> = {}
+        arr.forEach((s: any) => { if (s?.entity_id) map[s.entity_id] = s })
+        nextStates = map
+        setEntityStates(map)
+        usedSource = 'rest'
+        setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
+        try { localStorage.setItem(`ha_entity_states_${activeConnectionId}`, JSON.stringify(map)) } catch { }
+      }
+    } else {
+      lastErr = statesSettled.status === 'rejected'
+        ? (statesSettled.reason?.message || 'Netwerkfout bij ophalen statussen')
+        : `Home Assistant gaf HTTP ${statesSettled.value.status}`
+    }
+
+    if (topoSettled.status === 'fulfilled') {
+      const rich = topoSettled.value
+      if (rich.areas.length > 0) { nextAreas = rich.areas; setHaAreas(rich.areas) }
+      if (rich.devices.length > 0) { nextDevices = rich.devices; setHaDevices(rich.devices) }
+      if (rich.entities.length > 0) { nextEntities = rich.entities; setHaEntitiesRegistry(rich.entities) }
+      usedSource = 'rest'
+      setHaSyncSource(prev => (prev === 'websocket' ? 'websocket' : 'rest'))
+    } else if (!lastErr) {
+      lastErr = topoSettled.reason?.message || 'Kon apparaat-topologie niet vernieuwen'
+    }
+
+    return {
+      states: nextStates,
+      areas: nextAreas,
+      devices: nextDevices,
+      entities: nextEntities,
+      source: usedSource,
+      error: usedSource === 'cache' ? lastErr : undefined
+    }
+  }, [activeConnectionId, activeApiUrl, activeApiToken, haWebSocket, entityStates, haAreas, haDevices, haEntitiesRegistry])
+
   const contextValue = useMemo<AppContextType>(() => ({
     user,
     loading,
@@ -706,6 +829,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     haDevices,
     haEntitiesRegistry,
     haSyncSource,
+    refreshHAFromServer,
     activeSuggestion,
     setActiveSuggestion,
     setActiveConnection,
@@ -721,7 +845,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }), [
     user, loading, connections, activeConnection, rooms, chatHistory,
     uiState, entityStates, haWebSocket, haAreas, haDevices, haEntitiesRegistry,
-    haSyncSource, activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
+    haSyncSource, refreshHAFromServer, activeSuggestion, addConnection, deleteConnection, addRoom, deleteRoom,
     updateRoom, updateUIState, addChatMessage, shouldTriggerVoice
   ])
 

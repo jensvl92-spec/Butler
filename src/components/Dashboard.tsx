@@ -147,6 +147,7 @@ function getApplianceIcon(name: string, fallbackIcon: string): string {
     if (n.includes('zonnepanelen') || n.includes('solar') || n.includes('omvormer') || n.includes('inverter')) return '☀️'
     if (n.includes('warmtepomp') || n.includes('airco') || n.includes('hvac')) return '🌡️'
     if (n.includes('printer') || n.includes('brother') || n.includes('epson') || n.includes('laserjet') || n.includes('officejet') || n.includes('deskjet') || n.includes('pixma') || n.includes('toner')) return '🖨️'
+    if (n.includes('stofzuiger') || n.includes('vacuum') || n.includes('roborock') || n.includes('deebot') || n.includes('ecovacs') || n.includes('roomba') || n.includes('dreame')) return '🤖'
     return fallbackIcon
 }
 
@@ -198,6 +199,11 @@ function formatHAStateLabel(state: string, attributes?: Record<string, any>, ent
     if (lower === 'running' || lower === 'active') return 'Bezig'
     if (lower === 'paused') return 'Gepauzeerd'
     if (lower === 'finished' || lower === 'complete' || lower === 'completed') return 'Klaar'
+    if (lower === 'docked') return 'Gedockt'
+    if (lower === 'cleaning') return 'Stofzuigen'
+    if (lower === 'returning') return 'Naar basis'
+    if (lower === 'charging') return 'Opladen'
+    if (lower === 'error') return 'Storing'
 
     let formatted = s.replace(/_/g, ' ')
     if (attributes?.unit_of_measurement) {
@@ -210,7 +216,7 @@ function formatHAStateLabel(state: string, attributes?: Record<string, any>, ent
 }
 
 export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
-    const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry, haSyncSource } = useApp()
+    const { activeConnection, entityStates, haWebSocket, rooms, haAreas, haDevices, haEntitiesRegistry, haSyncSource, refreshHAFromServer } = useApp()
 
     // State
     const [tiles, setTiles] = useState<DashboardTile[]>(DEFAULT_TILES)
@@ -531,6 +537,26 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         }
     }
 
+    const handleVacuumAction = async (entityId: string, service: string, extraData?: Record<string, any>) => {
+        if (!entityId || !activeConnection) return
+        try {
+            await callHAService('vacuum', service, { entity_id: entityId, ...(extraData || {}) }, activeConnection.api_url, activeConnection.api_token)
+            const labels: Record<string, string> = {
+                start: '🤖 Stofzuigen gestart',
+                pause: '⏸️ Gepauzeerd',
+                stop: '⏹️ Gestopt',
+                return_to_base: '🏠 Terug naar laadstation',
+                locate: '📍 Robot laat zich horen',
+                set_fan_speed: `💨 Zuigkracht: ${extraData?.fan_speed || ''}`
+            }
+            setToastMsg(labels[service] || `🤖 ${service.replace(/_/g, ' ')}`)
+            setTimeout(() => setToastMsg(null), 2200)
+        } catch (error: any) {
+            setToastMsg(`❌ ${error.message || 'Robotstofzuiger actie mislukt'}`)
+            setTimeout(() => setToastMsg(null), 3000)
+        }
+    }
+
     // --- Layout Management ---
 
     const handleAddRoom = () => {
@@ -821,26 +847,29 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
         const scorePrimaryEntity = (e: RoomDevice) => {
             const eid = (e.entityId || '').toLowerCase()
-            if (e.isDiagnostic) return -10
-            if (eid.startsWith('light.')) return 20
-            if (eid.startsWith('climate.')) return 19
-            if (eid.startsWith('cover.')) return 18
-            if (eid.startsWith('switch.')) return 17
-            if (eid.startsWith('lock.')) return 16
-            if (eid.startsWith('fan.') || eid.startsWith('vacuum.') || eid.startsWith('water_heater.')) return 15
-            if (eid.startsWith('media_player.')) return 14
-            // Appliance status/program/remaining sensors (e.g. washing machine, dryer, dishwasher)
-            if (eid.startsWith('sensor.')) {
-                if (/operation_state|machine_state|status|state|phase|program|programma|remaining|resterend|progress|cycle/.test(eid)) return 12
-                if (/power|watt|energy|temp/.test(eid)) return 6
-                return 4
+            const st = String(statesMap[e.entityId || '']?.state ?? '').toLowerCase()
+            const unavailablePenalty = (!st || st === 'unavailable' || st === 'unknown') ? -25 : 0
+            if (e.isDiagnostic) return -10 + unavailablePenalty
+            let base = 1
+            if (eid.startsWith('vacuum.') || eid.startsWith('lawn_mower.')) base = 22
+            else if (eid.startsWith('light.')) base = 20
+            else if (eid.startsWith('climate.') || eid.startsWith('water_heater.')) base = 19
+            else if (eid.startsWith('cover.')) base = 18
+            else if (eid.startsWith('switch.')) base = 17
+            else if (eid.startsWith('lock.')) base = 16
+            else if (eid.startsWith('fan.') || eid.startsWith('humidifier.')) base = 15
+            else if (eid.startsWith('media_player.')) base = 14
+            else if (eid.startsWith('sensor.')) {
+                if (/operation_state|machine_state|status|state|phase|program|programma|remaining|resterend|progress|cycle/.test(eid)) base = 12
+                else if (/power|watt|energy|temp/.test(eid)) base = 6
+                else base = 4
+            } else if (eid.startsWith('binary_sensor.')) {
+                if (/door|deur|window|raam|running|active|motion|occupancy/.test(eid)) base = 8
+                else base = 3
+            } else if (eid.startsWith('select.') || eid.startsWith('button.') || eid.startsWith('number.')) {
+                base = 7
             }
-            if (eid.startsWith('binary_sensor.')) {
-                if (/door|deur|window|raam|running|active|motion|occupancy/.test(eid)) return 8
-                return 3
-            }
-            if (eid.startsWith('select.') || eid.startsWith('button.') || eid.startsWith('number.')) return 7
-            return 1
+            return base + unavailablePenalty
         }
 
         // Pre-populate tiles with all HA areas
@@ -1105,6 +1134,130 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             newTiles.push(unassignedTile)
         }
 
+        // Generic words that must NEVER merge separate lights/sensors/appliances together
+        const GENERIC_FIRST_WORDS = new Set([
+            'the', 'het', 'de', 'een', 'my', 'mijn',
+            'living', 'woonkamer', 'salon', 'keuken', 'kitchen', 'badkamer', 'bathroom',
+            'slaapkamer', 'bedroom', 'wasruimte', 'wasplaats', 'berging', 'garage', 'tuin', 'garden',
+            'hal', 'gang', 'hall', 'inkom', 'bureau', 'office', 'zolder', 'kelder', 'buiten', 'terras',
+            'lamp', 'lampen', 'light', 'lights', 'licht', 'lichten', 'spot', 'spots', 'led', 'strip',
+            'switch', 'schakelaar', 'plug', 'stekker', 'stopcontact', 'socket', 'outlet',
+            'sensor', 'temp', 'temperatuur', 'temperature', 'humidity', 'vocht', 'motion', 'beweging',
+            'door', 'deur', 'window', 'raam', 'cover', 'rolluik', 'gordijn', 'curtain', 'blind',
+            'climate', 'thermostaat', 'thermostat', 'heater', 'verwarming', 'airco', 'fan', 'ventilator',
+            'camera', 'deurbel', 'doorbell', 'lock', 'slot', 'alarm', 'button', 'knop', 'scene', 'script',
+            'samsung', 'philips', 'hue', 'shelly', 'aqara', 'sonos', 'google', 'apple', 'xiaomi',
+            'tuya', 'zigbee', 'ikea', 'tradfri', 'esphome', 'tasmota', 'home', 'smart', 'mini', 'pro'
+        ])
+
+        const consolidateDeviceGroupsInTile = (tile: DashboardTile) => {
+            if (!tile.deviceGroups || tile.deviceGroups.length <= 1) return
+
+            const isLooseGroup = (g: DeviceGroup) =>
+                g.id !== 'manual-group' && (
+                    g.entities.length === 1 ||
+                    g.id.startsWith('grp-') ||
+                    g.id.startsWith('live-') ||
+                    g.id.startsWith('ent-') ||
+                    g.id.startsWith('legacy-')
+                )
+
+            // Step 1: Merge any loose group whose name starts with an existing shorter device's name
+            // in the same room (e.g. "Patje Active map", "Patje Clean", "Patje Relocate" -> "Patje")
+            const hostCandidates = [...tile.deviceGroups]
+                .filter(g => g.id !== 'manual-group')
+                .sort((a, b) => (a.name || '').trim().length - (b.name || '').trim().length)
+
+            const absorbedIds = new Set<string>()
+
+            hostCandidates.forEach(host => {
+                if (absorbedIds.has(host.id)) return
+                const hName = (host.name || '').trim().toLowerCase()
+                if (hName.length < 3 || GENERIC_FIRST_WORDS.has(hName)) return
+                const isHostEligible =
+                    host.entities.length > 1 ||
+                    ['vacuum', 'lawn_mower', 'climate', 'water_heater', 'media'].includes(host.primaryEntity?.type || '') ||
+                    !hName.includes(' ')
+                if (!isHostEligible) return
+
+                tile.deviceGroups.forEach(g => {
+                    if (g.id === host.id || absorbedIds.has(g.id) || !isLooseGroup(g)) return
+                    const gLower = (g.name || '').trim().toLowerCase()
+                    if (gLower.startsWith(`${hName} `) || gLower.startsWith(`${hName}-`) || gLower.startsWith(`${hName}_`)) {
+                        host.entities.push(...g.entities)
+                        absorbedIds.add(g.id)
+                    }
+                })
+            })
+
+            let working = tile.deviceGroups.filter(g => !absorbedIds.has(g.id))
+
+            // Step 2: Consolidate 2+ loose groups sharing the same specific non-generic first word
+            // (e.g., "Patje Active map", "Patje Advanced mode", "Patje Clean", "Patje Relocate" -> "Patje"!)
+            const roomTokens = new Set(
+                (tile.roomName || '').toLowerCase().split(/[\s_-]+/).filter(Boolean)
+            )
+            const looseGroups = working.filter(isLooseGroup)
+            const buckets = new Map<string, DeviceGroup[]>()
+
+            looseGroups.forEach(g => {
+                const words = (g.name || '').trim().split(/\s+/).filter(Boolean)
+                if (words.length < 2) return
+                const firstClean = words[0].toLowerCase().replace(/[^a-z0-9]/g, '')
+                if (firstClean.length < 3 || GENERIC_FIRST_WORDS.has(firstClean) || roomTokens.has(firstClean)) return
+                if (!buckets.has(firstClean)) buckets.set(firstClean, [])
+                buckets.get(firstClean)!.push(g)
+            })
+
+            const mergedIds = new Set<string>()
+            const newConsolidated: DeviceGroup[] = []
+
+            buckets.forEach((groupList, firstKey) => {
+                if (groupList.length < 2) return
+                // Safety check: don't merge 2-3 separate simple lights like "Tafel links" & "Tafel rechts"
+                const allLights = groupList.every(g => g.entities.every(e => e.type === 'light'))
+                if (allLights && groupList.length < 4) return
+
+                const allEntities: RoomDevice[] = []
+                groupList.forEach(g => {
+                    mergedIds.add(g.id)
+                    allEntities.push(...g.entities)
+                })
+                allEntities.sort((a, b) => scorePrimaryEntity(b) - scorePrimaryEntity(a))
+
+                // Use the nicely cased first word as clean device title (e.g. "Patje")
+                const firstWordDisplay = (groupList[0].name || '').trim().split(/\s+/)[0] || firstKey
+                const platform = groupList.find(g => g.platform)?.platform
+
+                newConsolidated.push({
+                    id: `consolidated-${tile.id}-${firstKey}`,
+                    name: firstWordDisplay,
+                    platform,
+                    areaId: tile.roomId,
+                    primaryEntity: allEntities[0],
+                    entities: allEntities
+                })
+            })
+
+            if (mergedIds.size > 0 || absorbedIds.size > 0) {
+                working = [
+                    ...working.filter(g => !mergedIds.has(g.id)),
+                    ...newConsolidated
+                ]
+            }
+
+            // Re-score primaryEntity on every group so live available entities always lead!
+            working.forEach(g => {
+                g.entities.sort((a, b) => scorePrimaryEntity(b) - scorePrimaryEntity(a))
+                g.primaryEntity = g.entities[0]
+            })
+
+            tile.deviceGroups = working
+        }
+
+        newTiles.forEach(consolidateDeviceGroupsInTile)
+        devicesAddedCount = newTiles.reduce((sum, t) => sum + t.deviceGroups.length, 0)
+
         newTiles.sort((a, b) => {
             if (a.id === 'unassigned') return 1
             if (b.id === 'unassigned') return -1
@@ -1137,7 +1290,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     // Automatic smart sync & self-healing:
     // 1. Waits cleanly for HA Device/Entity Registries (WS or Wi-Fi REST /api/template) so REST states never create flat 1-entity soup.
-    // 2. Automatically self-heals any previously ungrouped/poisoned caches (`live-*`, `grp-*`, `legacy-*`, `not_found` icons, or missing devices).
+    // 2. Automatically self-heals any previously ungrouped/fragmented caches (`live-*`, `grp-*`, `legacy-*`, repeated device prefixes like `Patje ...`).
     useEffect(() => {
         if (!activeConnection?.id) return
         if (loadedConnectionIdRef.current !== activeConnection.id) return
@@ -1146,7 +1299,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const stateCount = Object.keys(entityStates || {}).length
         if (!hasRegistryData && stateCount === 0) return
 
-        const sig = `${activeConnection.id}:v32:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
+        const sig = `${activeConnection.id}:v33:reg=${haEntitiesRegistry?.length || 0}:dev=${haDevices?.length || 0}:area=${haAreas?.length || 0}:st=${stateCount}`
         if (lastSyncedSigRef.current === sig) return
 
         const interactiveTypes = new Set([
@@ -1159,14 +1312,24 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         let hasAnyPlatformMeta = false
         let hasMisclassifiedInteractiveDiag = false
         let hasUngroupedFallbackGroups = false
+        let hasRepeatedPrefixFragmentation = false
         let totalDevicesInTiles = 0
         tiles.forEach(t => {
             if (t.roomIcon === 'not_found') hasUngroupedFallbackGroups = true
+            const firstWordCounts = new Map<string, number>()
             ;(t.deviceGroups || []).forEach(g => {
                 totalDevicesInTiles++
                 if (g.platform) hasAnyPlatformMeta = true
                 if (g.id.startsWith('live-') || g.id.startsWith('grp-') || g.id.startsWith('legacy-')) {
                     hasUngroupedFallbackGroups = true
+                }
+                if (g.entities.length === 1) {
+                    const fw = (g.name || '').trim().split(/\s+/)[0]?.toLowerCase() || ''
+                    if (fw.length >= 3 && (g.name || '').trim().includes(' ')) {
+                        const c = (firstWordCounts.get(fw) || 0) + 1
+                        firstWordCounts.set(fw, c)
+                        if (c >= 3) hasRepeatedPrefixFragmentation = true
+                    }
                 }
                 ;(g.entities || []).forEach(e => {
                     if (e.entityId) existingEntityIds.add(e.entityId)
@@ -1184,17 +1347,17 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         })
 
         // If registries haven't arrived yet:
-        // - If we already have tiles cached, keep them untouched until registries arrive!
-        // - If we have 0 devices, give WS / REST rich topology a 3.5s grace window before falling back to clustered PATH B!
+        // - If we already have tiles cached and not fragmented, keep them untouched until registries arrive!
+        // - If we have 0 devices, give WS / REST rich topology a 3.5s grace window before falling back to consolidated PATH B!
         if (!hasRegistryData) {
-            if (totalDevicesInTiles > 0) return
+            if (totalDevicesInTiles > 0 && !hasRepeatedPrefixFragmentation) return
             const fallbackTimer = setTimeout(() => {
                 const { newTiles, devicesAddedCount } = buildTilesFromHA([], [], [], entityStates)
                 if (devicesAddedCount > 0) {
-                    setTiles(prev => (prev.some(t => (t.deviceGroups?.length || 0) > 0) ? prev : mergeWithManualGroups(newTiles, prev)))
-                    logger.info(`ℹ️ [Dashboard] Built clustered REST fallback layout (${newTiles.length} rooms, ${devicesAddedCount} devices) while awaiting HA registries`)
+                    setTiles(prev => mergeWithManualGroups(newTiles, prev))
+                    logger.info(`ℹ️ [Dashboard] Built consolidated REST fallback layout (${newTiles.length} rooms, ${devicesAddedCount} devices)`)
                 }
-            }, 3500)
+            }, totalDevicesInTiles > 0 ? 400 : 3500)
             return () => clearTimeout(fallbackTimer)
         }
 
@@ -1208,6 +1371,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         if (
             totalDevicesInTiles === 0 ||
             hasUngroupedFallbackGroups ||
+            hasRepeatedPrefixFragmentation ||
             looksOverFragmented ||
             hasNewRegistryEntities ||
             needsPlatformUpgrade ||
@@ -1217,79 +1381,51 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             if (devicesAddedCount > 0) {
                 lastSyncedSigRef.current = sig
                 setTiles(prev => mergeWithManualGroups(newTiles, prev))
-                logger.info(`✅ [Dashboard] Auto-synced & grouped ${newTiles.length} rooms & ${devicesAddedCount} devices from Home Assistant`)
+                logger.info(`✅ [Dashboard] Auto-synced & consolidated ${newTiles.length} rooms & ${devicesAddedCount} devices from Home Assistant`)
             }
         } else {
             lastSyncedSigRef.current = sig
         }
     }, [activeConnection?.id, haAreas, haDevices, haEntitiesRegistry, entityStates, tiles.length])
 
-    // Manual HA Registry Import (with rich REST /api/template fallback if WS registries are empty!)
+    // Manual HA Live Refresh & Layout Sync (ALWAYS fetches fresh live states + registries from HA!)
     const importLayoutFromHA = async () => {
-        if (tiles.length > 0 && !window.confirm("Dit vernieuwt je dashboard met de actuele ruimtes en apparaten uit Home Assistant. Doorgaan?")) {
-            return
-        }
-
+        if (isSyncingLayout) return
         setIsSyncingLayout(true)
+        setToastMsg('🔄 Live synchroniseren met Home Assistant...')
         try {
-            let statesToUse = entityStates
-            let areasToUse = haAreas || []
-            let devicesToUse = haDevices || []
-            let entitiesRegToUse = haEntitiesRegistry || []
-
-            // If WebSocket registries aren't available yet, fetch rich topology (areas + devices + integrations) via REST!
-            if (entitiesRegToUse.length === 0 && activeConnection?.api_url && activeConnection?.api_token) {
-                try {
-                    const { fetchRichHATopology } = await import('../utils/ha-api')
-                    const rich = await fetchRichHATopology(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
-                    if (rich.areas.length > 0) areasToUse = rich.areas
-                    if (rich.devices.length > 0) devicesToUse = rich.devices
-                    if (rich.entities.length > 0) entitiesRegToUse = rich.entities
-                } catch {
-                    try {
-                        const { fetchSmartHASync } = await import('../utils/ha-api')
-                        await fetchSmartHASync(activeConnection.api_url, activeConnection.api_token, activeConnection.id)
-                    } catch { }
-                }
-            }
-
-            if (Object.keys(statesToUse || {}).length === 0 && activeConnection?.api_url && activeConnection?.api_token) {
-                try {
-                    const { buildHAUrl, sanitizeHAToken, fetchWithTimeout } = await import('../utils/home-assistant')
-                    const res = await fetchWithTimeout(buildHAUrl('/api/states', activeConnection.api_url), {
-                        headers: { Authorization: `Bearer ${sanitizeHAToken(activeConnection.api_token)}` }
-                    }, 18000)
-                    if (res.ok) {
-                        const arr = await res.json()
-                        if (Array.isArray(arr)) {
-                            const map: Record<string, any> = {}
-                            arr.forEach((s: any) => { if (s?.entity_id) map[s.entity_id] = s })
-                            statesToUse = map
-                        }
-                    }
-                } catch { }
-            }
+            const fresh = await refreshHAFromServer()
+            const statesToUse = fresh.states || entityStates || {}
+            const areasToUse = fresh.areas || haAreas || []
+            const devicesToUse = fresh.devices || haDevices || []
+            const entitiesRegToUse = fresh.entities || haEntitiesRegistry || []
 
             const { newTiles, areasCreatedCount, devicesAddedCount } = buildTilesFromHA(
                 areasToUse,
                 devicesToUse,
                 entitiesRegToUse,
-                statesToUse || {}
+                statesToUse
             )
 
             if (newTiles.length > 0 || devicesAddedCount > 0) {
-                lastSyncedSigRef.current = `${activeConnection?.id || ''}:reg=${entitiesRegToUse.length}:dev=${devicesToUse.length}:area=${areasToUse.length}:st=${Object.keys(statesToUse || {}).length}`
+                lastSyncedSigRef.current = `${activeConnection?.id || ''}:v33:reg=${entitiesRegToUse.length}:dev=${devicesToUse.length}:area=${areasToUse.length}:st=${Object.keys(statesToUse).length}`
                 setTiles(prev => mergeWithManualGroups(newTiles, prev))
 
-                if (activeConnection) {
-                    performToolSync(activeConnection, statesToUse)
+                if (fresh.error) {
+                    setToastMsg(`⚠️ Home Assistant niet bereikbaar (${fresh.error}) — opgeslagen gegevens gegroepeerd.`)
+                    setTimeout(() => setToastMsg(null), 5000)
+                } else {
+                    const modeLabel = fresh.source === 'websocket' ? 'WS' : 'REST'
+                    setToastMsg(`✅ Live vernieuwd (${modeLabel}): ${devicesAddedCount} apparaten in ${areasCreatedCount} kamers!`)
+                    setTimeout(() => setToastMsg(null), 3500)
                 }
-
-                setToastMsg(`✅ ${devicesAddedCount} apparaten in ${areasCreatedCount} ruimtes gesynchroniseerd!`)
-                setTimeout(() => setToastMsg(null), 4000)
             } else {
-                alert("Geen apparaten of ruimtes gevonden in je Home Assistant configuratie. Controleer je URL en token.")
+                setToastMsg(`❌ ${fresh.error || 'Geen apparaten gevonden in Home Assistant. Controleer je URL/Wi-Fi.'}`)
+                setTimeout(() => setToastMsg(null), 5000)
             }
+        } catch (err: any) {
+            setToastMsg(`❌ Sync fout: ${err?.message || 'Kon niet verbinden met Home Assistant'}`)
+            setTimeout(() => setToastMsg(null), 5000)
         } finally {
             setIsSyncingLayout(false)
         }
@@ -1307,11 +1443,23 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
     const getDevicePriority = (type: string) => {
         // High priority: Controls that do things
-        if (['light', 'switch', 'lock', 'cover', 'climate', 'media', 'input_boolean', 'automation', 'select', 'button'].includes(type)) return 0
+        if (['light', 'switch', 'lock', 'cover', 'climate', 'water_heater', 'media', 'vacuum', 'lawn_mower', 'fan', 'humidifier', 'input_boolean', 'automation', 'select', 'button'].includes(type)) return 0
         // Medium: Binary Sensors (often security/occupancy)
         if (type === 'binary_sensor') return 1
         // Low: Read-only sensors
         return 2
+    }
+
+    const resolveGroupIcon = (group: DeviceGroup, fallbackIcon?: string) => {
+        const primary = group.primaryEntity || group.entities[0]
+        const name = (group.entities.length > 1 && group.name && group.name !== 'Unknown Device')
+            ? group.name
+            : (primary?.name || group.name || '')
+        const baseFallback = fallbackIcon || primary?.icon || '📦'
+        if (group.entities.some(e => e.type === 'vacuum')) {
+            return getApplianceIcon(name, '🤖')
+        }
+        return getApplianceIcon(name, baseFallback)
     }
 
     // Level 1: Home Room Card (1 clean summary row per physical device)
@@ -1348,25 +1496,24 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
         const humVal = hum?.ha?.state
         const humUnit = hum?.ha?.attributes?.unit_of_measurement || ''
 
-        const sortedVisibleGroups = [...tile.deviceGroups]
-            .filter(g => Boolean(g.primaryEntity || g.entities[0]))
-            .sort((a, b) => {
-                const allDiagA = a.entities.every(e => e.isDiagnostic) ? 1 : 0
-                const allDiagB = b.entities.every(e => e.isDiagnostic) ? 1 : 0
-                if (allDiagA !== allDiagB) return allDiagA - allDiagB
-                const typeA = a.primaryEntity?.type || 'sensor'
-                const typeB = b.primaryEntity?.type || 'sensor'
-                const priA = getDevicePriority(typeA)
-                const priB = getDevicePriority(typeB)
-                if (priA !== priB) return priA - priB
-                // Multi-entity appliances (washer, dryer, dishwasher, printer, etc.) appear before lone sensors
-                const multiA = a.entities.length > 1 ? 0 : 1
-                const multiB = b.entities.length > 1 ? 0 : 1
-                if (multiA !== multiB) return multiA - multiB
-                return a.name.localeCompare(b.name)
-            })
+        const validGroups = [...tile.deviceGroups].filter(g => Boolean(g.primaryEntity || g.entities[0]))
+        const nonDiagOnlyGroups = validGroups.filter(g => !g.entities.every(e => e.isDiagnostic))
+        const displayableGroups = nonDiagOnlyGroups.length > 0 ? nonDiagOnlyGroups : validGroups
 
-        const MAX_PREVIEW_ROWS = 6
+        const sortedVisibleGroups = displayableGroups.sort((a, b) => {
+            const typeA = a.primaryEntity?.type || 'sensor'
+            const typeB = b.primaryEntity?.type || 'sensor'
+            const priA = getDevicePriority(typeA)
+            const priB = getDevicePriority(typeB)
+            if (priA !== priB) return priA - priB
+            // Multi-entity appliances (washer, dryer, dishwasher, vacuum, printer, etc.) appear before lone sensors
+            const multiA = a.entities.length > 1 ? 0 : 1
+            const multiB = b.entities.length > 1 ? 0 : 1
+            if (multiA !== multiB) return multiA - multiB
+            return a.name.localeCompare(b.name)
+        })
+
+        const MAX_PREVIEW_ROWS = 5
         const previewGroups = sortedVisibleGroups.slice(0, MAX_PREVIEW_ROWS)
         const hiddenOverflowCount = Math.max(0, sortedVisibleGroups.length - MAX_PREVIEW_ROWS)
 
@@ -1446,7 +1593,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                 >
                                     <div className="entity-main">
                                         <div className={`entity-icon ${summary.isActive ? 'active' : ''} ${isWarm ? 'warm' : ''}`}>
-                                            {getApplianceIcon(displayName, config.icon)}
+                                            {resolveGroupIcon(group, config.icon)}
                                         </div>
                                         <div className="entity-name">{displayName}</div>
                                     </div>
@@ -1603,7 +1750,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
             if (!primary) return null
             const ha = primary.entityId ? entityStates[primary.entityId] : undefined
             const summary = getDeviceGroupSummary(group)
-            const icon = getApplianceIcon(group.name, primary.icon)
+            const icon = resolveGroupIcon(group, primary.icon)
 
             const isSimpleToggle =
                 group.entities.length === 1 &&
@@ -1722,7 +1869,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
 
         const summary = getDeviceGroupSummary(group)
         const primary = group.primaryEntity || group.entities[0]
-        const heroIcon = getApplianceIcon(group.name, primary?.icon || '📦')
+        const heroIcon = resolveGroupIcon(group, primary?.icon || '📦')
 
         const nonDiag = group.entities.filter(e => !e.isDiagnostic)
         const diagEntities = group.entities.filter(e => e.isDiagnostic)
@@ -2004,6 +2151,81 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                                     <button type="button" className="control-pill-btn" onClick={() => handleMediaAction(ent.entityId!, 'volume_down')}>🔉</button>
                                                     <button type="button" className="control-pill-btn" onClick={() => handleMediaAction(ent.entityId!, 'volume_up')}>🔊</button>
                                                 </div>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Robot Vacuum (Patje, Roomba, Roborock, Deebot, etc.)
+                                    if (ent.type === 'vacuum') {
+                                        const vacState = String(ha.state || '').toLowerCase()
+                                        const battery = ha.attributes?.battery_level
+                                        const fanSpeeds: string[] = Array.isArray(ha.attributes?.fan_speed_list) ? ha.attributes.fan_speed_list : []
+                                        const curFanSpeed = ha.attributes?.fan_speed
+                                        return (
+                                            <div key={ent.id} className="control-block">
+                                                <div className="control-block-row">
+                                                    <div className="control-block-label">
+                                                        <span>🤖</span>
+                                                        <div>
+                                                            <div>{label}</div>
+                                                            <div className="control-block-value">
+                                                                {formatHAStateLabel(ha.state, ha.attributes, ent.entityId)}
+                                                                {battery !== undefined ? ` • 🔋 ${battery}%` : ''}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="control-pill-grid">
+                                                    <button
+                                                        type="button"
+                                                        className={`control-pill-btn ${vacState === 'cleaning' ? 'active' : ''}`}
+                                                        style={{ flex: 1 }}
+                                                        onClick={() => handleVacuumAction(ent.entityId!, 'start')}
+                                                    >
+                                                        ▶ Start
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className={`control-pill-btn ${vacState === 'paused' ? 'active' : ''}`}
+                                                        style={{ flex: 1 }}
+                                                        onClick={() => handleVacuumAction(ent.entityId!, 'pause')}
+                                                    >
+                                                        ⏸ Pauze
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className={`control-pill-btn ${vacState === 'returning' || vacState === 'docked' ? 'active' : ''}`}
+                                                        style={{ flex: 1 }}
+                                                        onClick={() => handleVacuumAction(ent.entityId!, 'return_to_base')}
+                                                    >
+                                                        🏠 Basis
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="control-pill-btn"
+                                                        onClick={() => handleVacuumAction(ent.entityId!, 'locate')}
+                                                        title="Zoek robotstofzuiger"
+                                                    >
+                                                        📍
+                                                    </button>
+                                                </div>
+                                                {fanSpeeds.length > 0 && (
+                                                    <div style={{ marginTop: '6px' }}>
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>💨 Zuigkracht</div>
+                                                        <div className="control-pill-grid">
+                                                            {fanSpeeds.map(speed => (
+                                                                <button
+                                                                    key={speed}
+                                                                    type="button"
+                                                                    className={`control-pill-btn ${curFanSpeed === speed ? 'active' : ''}`}
+                                                                    onClick={() => handleVacuumAction(ent.entityId!, 'set_fan_speed', { fan_speed: speed })}
+                                                                >
+                                                                    {formatHAStateLabel(speed)}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         )
                                     }
@@ -2344,7 +2566,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                     <div className="connection-status">
                         <span className={`status-dot ${activeConnection ? 'connected' : ''}`}></span>
                         {activeConnection
-                            ? `${activeConnection.name} • ${availableEntities.length} entiteiten${haSyncSource === 'websocket' ? ' • WS' : haSyncSource === 'rest' ? ' • Wi-Fi REST' : ''}`
+                            ? `${activeConnection.name} • ${availableEntities.length} entiteiten${isSyncingLayout ? ' • Synchroniseren...' : haSyncSource === 'websocket' ? ' • WS' : haSyncSource === 'rest' ? ' • Wi-Fi REST' : ''}`
                             : 'Disconnected'}
                     </div>
                 </div>
@@ -2354,7 +2576,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="🔍 Zoek apparaat of integratie (bv. droogkast, localthings)..."
+                            placeholder="🔍 Zoek apparaat of integratie (bv. droogkast, patje)..."
                             style={{
                                 width: '100%',
                                 padding: '8px 12px',
@@ -2375,25 +2597,6 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                 ✕
                             </button>
                         )}
-                        <button
-                            type="button"
-                            disabled={isSyncingLayout}
-                            onClick={() => importLayoutFromHA()}
-                            title="Ververs ruimtes & apparaten vanuit Home Assistant"
-                            style={{
-                                padding: '8px 11px',
-                                borderRadius: '10px',
-                                border: '1px solid var(--border, rgba(255,255,255,0.12))',
-                                background: 'rgba(255,255,255,0.05)',
-                                color: 'var(--text-primary, #ffffff)',
-                                fontSize: '0.85rem',
-                                fontWeight: 600,
-                                cursor: isSyncingLayout ? 'wait' : 'pointer',
-                                flexShrink: 0
-                            }}
-                        >
-                            {isSyncingLayout ? '⏳' : '↻'}
-                        </button>
                     </div>
                 )}
             </div>
@@ -2414,7 +2617,7 @@ export const Dashboard = forwardRef<DashboardRef>((_props, ref) => {
                                 const primary = group.primaryEntity || group.entities[0]
                                 if (!primary) return null
                                 const summary = getDeviceGroupSummary(group)
-                                const icon = getApplianceIcon(group.name, primary.icon)
+                                const icon = resolveGroupIcon(group, primary.icon)
                                 return (
                                     <div
                                         key={`${tileId || 's'}-${group.id}`}

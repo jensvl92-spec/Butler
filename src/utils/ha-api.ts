@@ -205,12 +205,58 @@ export async function fetchRichHATopology(url: string, token: string, connection
     } | to_json }}
     `;
 
-    const response = await fetchWithTimeout(getUrl('/api/template', url), {
-        method: 'POST',
-        headers: getHeaders(token),
-        body: JSON.stringify({ template: coreTemplate })
-    }, 25000);
+    const platTemplate = `
+    {% set dp = namespace(items={}) %}
+    {% set ep = namespace(items={}) %}
+    {% set has_ce = (config_entry_id is defined and config_entry_attr is defined) %}
+    {% for s in states %}
+      {% set eid = s.entity_id %}
+      {% set did = device_id(eid) %}
+      {% set plat = '' %}
+      {% if has_ce %}
+        {% set cid = config_entry_id(eid) %}
+        {% if cid is string %}
+          {% set plat = config_entry_attr(cid, 'domain') or '' %}
+        {% endif %}
+      {% endif %}
+      {% if not plat and did %}
+        {% set idents = device_attr(did, 'identifiers') %}
+        {% if idents %}
+          {% for pair in idents %}
+            {% if not plat and pair is iterable and pair is not string %}
+              {% set pair_list = pair | list %}
+              {% if pair_list | length > 0 %}
+                {% set plat = pair_list[0] | string %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+      {% endif %}
+      {% if plat %}
+        {% if did %}{% set dp.items = dict(dp.items, **{did: plat}) %}{% endif %}
+        {% set ep.items = dict(ep.items, **{eid: plat}) %}
+      {% endif %}
+    {% endfor %}
+    {{ {"dp": dp.items, "ep": ep.items} | to_json }}
+    `;
 
+    const [coreSettled, platSettled] = await Promise.allSettled([
+        fetchWithTimeout(getUrl('/api/template', url), {
+            method: 'POST',
+            headers: getHeaders(token),
+            body: JSON.stringify({ template: coreTemplate })
+        }, 18000),
+        fetchWithTimeout(getUrl('/api/template', url), {
+            method: 'POST',
+            headers: getHeaders(token),
+            body: JSON.stringify({ template: platTemplate })
+        }, 8000)
+    ]);
+
+    if (coreSettled.status !== 'fulfilled') {
+        throw new Error(`Failed to fetch rich topology: ${coreSettled.reason?.message || coreSettled.reason}`);
+    }
+    const response = coreSettled.value;
     if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         logger.error(`fetchRichHATopology: Core template failed ${response.status}`, errorText);
@@ -220,51 +266,11 @@ export async function fetchRichHATopology(url: string, token: string, connection
     const text = await response.text();
     const parsed = JSON.parse(text);
 
-    // Stage 2: Best-effort platform/integration enrichment (never allowed to break Stage 1 device grouping!)
     const platformByDevice = new Map<string, string>();
     const platformByEntity = new Map<string, string>();
-    try {
-        const platTemplate = `
-        {% set dp = namespace(items={}) %}
-        {% set ep = namespace(items={}) %}
-        {% set has_ce = (config_entry_id is defined and config_entry_attr is defined) %}
-        {% for s in states %}
-          {% set eid = s.entity_id %}
-          {% set did = device_id(eid) %}
-          {% set plat = '' %}
-          {% if has_ce %}
-            {% set cid = config_entry_id(eid) %}
-            {% if cid is string %}
-              {% set plat = config_entry_attr(cid, 'domain') or '' %}
-            {% endif %}
-          {% endif %}
-          {% if not plat and did %}
-            {% set idents = device_attr(did, 'identifiers') %}
-            {% if idents %}
-              {% for pair in idents %}
-                {% if not plat and pair is iterable and pair is not string %}
-                  {% set pair_list = pair | list %}
-                  {% if pair_list | length > 0 %}
-                    {% set plat = pair_list[0] | string %}
-                  {% endif %}
-                {% endif %}
-              {% endfor %}
-            {% endif %}
-          {% endif %}
-          {% if plat %}
-            {% if did %}{% set dp.items = dict(dp.items, **{did: plat}) %}{% endif %}
-            {% set ep.items = dict(ep.items, **{eid: plat}) %}
-          {% endif %}
-        {% endfor %}
-        {{ {"dp": dp.items, "ep": ep.items} | to_json }}
-        `;
-        const platRes = await fetchWithTimeout(getUrl('/api/template', url), {
-            method: 'POST',
-            headers: getHeaders(token),
-            body: JSON.stringify({ template: platTemplate })
-        }, 15000);
-        if (platRes.ok) {
-            const platData = JSON.parse(await platRes.text());
+    if (platSettled.status === 'fulfilled' && platSettled.value.ok) {
+        try {
+            const platData = JSON.parse(await platSettled.value.text());
             if (platData?.dp && typeof platData.dp === 'object') {
                 Object.entries(platData.dp).forEach(([k, v]) => {
                     if (v) platformByDevice.set(k, String(v));
@@ -275,9 +281,9 @@ export async function fetchRichHATopology(url: string, token: string, connection
                     if (v) platformByEntity.set(k, String(v));
                 });
             }
+        } catch (platErr: any) {
+            logger.warn('fetchRichHATopology: Optional platform enrichment parse skipped:', platErr?.message || platErr);
         }
-    } catch (platErr: any) {
-        logger.warn('fetchRichHATopology: Optional platform enrichment skipped:', platErr?.message || platErr);
     }
 
     const areasList: HAArea[] = Array.isArray(parsed.areas)
